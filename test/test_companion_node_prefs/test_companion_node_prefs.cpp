@@ -88,6 +88,11 @@ TEST(CompanionNodePrefs, RadioCliReadsAndWritesTheNodeFields) {
   expectRadioCliDrivesNodeFields(prefs);
 }
 
+TEST(CompanionNodePrefs, RadioCliEdgeCases) {
+  NodePrefs prefs;
+  expectRadioCliEdgeCases(prefs);
+}
+
 TEST(CompanionNodePrefs, CustomStoreReachesTheFemGains) {
   NodePrefs prefs;
   expectCustomStoreReachesFemGains(prefs);
