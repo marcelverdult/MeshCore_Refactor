@@ -129,32 +129,13 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   int handleRequest(ClientInfo* sender, uint32_t sender_timestamp, uint8_t* payload, size_t payload_len);
 
 protected:
-  float getAirtimeBudgetFactor() const override {
-    return _prefs.airtime_factor;
-  }
-
   void logRxRaw(float snr, float rssi, const uint8_t raw[], int len) override;
   void logRx(mesh::Packet* pkt, int len, float score) override;
   void logTx(mesh::Packet* pkt, int len) override;
   void logTxFail(mesh::Packet* pkt, int len) override;
 
-  int calcRxDelay(float score, uint32_t air_time) const override;
   const char* getLogDateTime() override;
-  uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
-  uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
 
-  int getInterferenceThreshold() const override {
-    return _prefs.interference_threshold;
-  }
-  bool getCADEnabled() const override {
-    return _prefs.cad_enabled;
-  }
-  int getAGCResetInterval() const override {
-    return ((int)_prefs.agc_reset_interval) * 4000;   // milliseconds
-  }
-  uint8_t getExtraAckTransmitCount() const override {
-    return _prefs.multi_acks;
-  }
 
   mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
 

@@ -45,8 +45,9 @@ or where a value cannot reach the code that needs it.
 - The role callbacks `setTxPower()` and `setRxBoostedGain()` declared in
   `CommonCLICallbacks` have no caller anywhere in `src/`, `examples/` or `variants/`.
 
-Addressed by step 1 (shared radio and GPS settings); the remaining points are
-candidates for the next steps.
+Step 1 shares the radio and GPS settings between both classes; step 2 lets the
+core read its tuning values from them instead of a getter per role. The
+remaining points are candidates for the next steps.
 
 ### F2. Server roles carry the same code three times
 

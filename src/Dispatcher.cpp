@@ -32,7 +32,7 @@ void Dispatcher::begin() {
 }
 
 float Dispatcher::getAirtimeBudgetFactor() const {
-  return 1.0;
+  return _radio_prefs ? _radio_prefs->airtime_factor : 1.0;
 }
 
 void Dispatcher::updateTxBudget() {
@@ -53,7 +53,11 @@ void Dispatcher::updateTxBudget() {
 }
 
 int Dispatcher::calcRxDelay(float score, uint32_t air_time) const {
-  return (int) ((pow(10, 0.85f - score) - 1.0) * air_time);
+  if (_radio_prefs == NULL) {
+    return (int) ((pow(10, 0.85f - score) - 1.0) * air_time);
+  }
+  if (_radio_prefs->rx_delay_base <= 0.0f) return 0;   // RX delay disabled
+  return (int)((pow(_radio_prefs->rx_delay_base, 0.85f - score) - 1.0) * air_time);
 }
 
 uint32_t Dispatcher::getCADFailRetryDelay() const {

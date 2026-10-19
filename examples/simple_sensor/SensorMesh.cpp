@@ -312,19 +312,10 @@ void SensorMesh::alertIf(bool condition, Trigger& t, AlertPriority pri, const ch
   }
 }
 
-float SensorMesh::getAirtimeBudgetFactor() const {
-  return _prefs.airtime_factor;
-}
-
 bool SensorMesh::allowPacketForward(const mesh::Packet* packet) {
   if (_prefs.disable_fwd) return false;
   if (packet->isRouteFlood() && packet->getPathHashCount() >= _prefs.flood_max) return false;
   return true;
-}
-
-int SensorMesh::calcRxDelay(float score, uint32_t air_time) const {
-  if (_prefs.rx_delay_base <= 0.0f) return 0;
-  return (int) ((pow(_prefs.rx_delay_base, 0.85f - score) - 1.0) * air_time);
 }
 
 uint32_t SensorMesh::getRetransmitDelay(const mesh::Packet* packet) {
@@ -335,14 +326,8 @@ uint32_t SensorMesh::getDirectRetransmitDelay(const mesh::Packet* packet) {
   uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.direct_tx_delay_factor);
   return getRNG()->nextInt(0, 6)*t;
 }
-int SensorMesh::getInterferenceThreshold() const {
-  return _prefs.interference_threshold;
-}
-bool SensorMesh::getCADEnabled() const {
-  return _prefs.cad_enabled;
-}
-int SensorMesh::getAGCResetInterval() const {
-  return ((int)_prefs.agc_reset_interval) * 4000;   // milliseconds
+uint8_t SensorMesh::getExtraAckTransmitCount() const {
+  return 0;   // the sensor has never sent extra ACKs, whatever multi.acks says
 }
 
 void SensorMesh::startRegionsLoad() {
@@ -787,6 +772,7 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this),
       telemetry(MAX_PACKET_PAYLOAD - 4)
 {
+  useRadioPrefs(&_prefs);   // the core reads its tuning (delays, duty cycle, CAD, AGC, extra ACKs) from these settings
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   last_read_time = 0;

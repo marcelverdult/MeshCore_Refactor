@@ -15,15 +15,23 @@ bool Mesh::allowPacketForward(const mesh::Packet* packet) {
   return false;  // by default, Transport NOT enabled
 }
 uint32_t Mesh::getRetransmitDelay(const mesh::Packet* packet) { 
+  if (_radio_prefs) {   // random delay of up to 5 x the scaled airtime of the packet
+    uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _radio_prefs->tx_delay_factor);
+    return _rng->nextInt(0, 5*t + 1);
+  }
   uint32_t t = (_radio->getEstAirtimeFor(packet->getRawLength()) * 52 / 50) / 2;
 
   return _rng->nextInt(0, 5)*t;
 }
 uint32_t Mesh::getDirectRetransmitDelay(const Packet* packet) {
+  if (_radio_prefs) {   // as getRetransmitDelay(), with the direct delay factor
+    uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _radio_prefs->direct_tx_delay_factor);
+    return _rng->nextInt(0, 5*t + 1);
+  }
   return 0;  // by default, no delay
 }
 uint8_t Mesh::getExtraAckTransmitCount() const {
-  return 0;
+  return _radio_prefs ? _radio_prefs->multi_acks : 0;
 }
 
 uint32_t Mesh::getCADFailRetryDelay() const {
