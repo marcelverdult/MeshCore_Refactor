@@ -238,6 +238,15 @@ added code. Separating them with the section sizes, on the Heltec v3 family:
   is code and the rest is layout, and for every non-role environment all of it is
   layout.
 
+### Which commit the numbers belong to
+
+The matrix built `e37ef13e`. The branch tips carry one further source change that it
+did not build: an explicit `#include <helpers/ClientACL.h>` in `ServerMesh.h`, plus
+comment rewrites. Rather than assume that is size neutral, `Heltec_v3_repeater` was
+rebuilt on the current tip and its sections compared with the recorded ones:
+`.flash.text` 802931, `.flash.rodata` 274096, `.dram0.bss` 39064, byte for byte the
+same in both. So the numbers below apply to the tips as they stand.
+
 ### The RAM figures
 
 `+32` on each of the four sensor environments, `+0` everywhere else but one. The
