@@ -61,19 +61,13 @@ public:
   const char* getNodeName() { return _prefs.node_name; }
   NodePrefs* getNodePrefs() { return &_prefs; }
   void savePrefs() override { _cli.savePrefs(_fs); }
-  bool formatFileSystem() override;
   void setLoggingOn(bool enable) override {  }
   void eraseLogFile() override { }
   void dumpLogFile() override { }
-  void setTxPower(int8_t power_dbm) override;
   void formatNeighborsReply(char *reply) override {
     strcpy(reply, "not supported");
   }
-  void formatStatsReply(char *reply) override;
-  void formatRadioStatsReply(char *reply) override;
-  void formatPacketStatsReply(char *reply) override;
   mesh::LocalIdentity& getSelfId() override { return self_id; }
-  void saveIdentity(const mesh::LocalIdentity& new_id) override;
   void clearStats() override { }
 
   float getTelemValue(uint8_t channel, uint8_t type);

@@ -156,7 +156,6 @@ public:
   }
 
   // CommonCLICallbacks
-  bool formatFileSystem() override;
 
   void setLoggingOn(bool enable) override { _logging = enable; }
 
@@ -165,22 +164,16 @@ public:
   }
 
   void dumpLogFile() override;
-  void setTxPower(int8_t power_dbm) override;
   bool setRxBoostedGain(bool enable) override;
 
   void formatNeighborsReply(char *reply) override {
     strcpy(reply, "not supported");
   }
-  void formatStatsReply(char *reply) override;
-  void formatRadioStatsReply(char *reply) override;
-  void formatPacketStatsReply(char *reply) override;
 
   mesh::LocalIdentity& getSelfId() override { return self_id; }
 
   static bool saveFilter(ClientInfo* client);
 
-  void saveIdentity(const mesh::LocalIdentity& new_id) override;
-  void clearStats() override;
   void handleCommand(uint32_t sender_timestamp, char* command, char* reply);
   void loop();
 };

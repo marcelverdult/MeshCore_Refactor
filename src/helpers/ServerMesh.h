@@ -99,6 +99,13 @@ public:
   // because CommonCLI reaches them through its CommonCLICallbacks pointer. They
   // were public in all three roles before they moved here.
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
+  void setTxPower(int8_t power_dbm) override;
+  bool formatFileSystem() override;
+  void saveIdentity(const mesh::LocalIdentity& new_id) override;
+  void clearStats() override;
+  void formatStatsReply(char* reply) override;
+  void formatRadioStatsReply(char* reply) override;
+  void formatPacketStatsReply(char* reply) override;
   void sendSelfAdvertisement(int delay_millis, bool flood) override;
   void updateAdvertTimer() override;
   void updateFloodAdvertTimer() override;

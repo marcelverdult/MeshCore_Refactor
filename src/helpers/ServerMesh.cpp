@@ -2,6 +2,17 @@
 
 #include "target.h"   // the variant's radio_driver, as helpers/CommonRadioPrefs.cpp reaches it
 
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+#include <InternalFileSystem.h>
+#elif defined(RP2040_PLATFORM)
+#include <LittleFS.h>
+#elif defined(ESP32)
+#include <SPIFFS.h>
+#endif
+
+#include "SimpleMeshTables.h"
+#include "StatsFormatHelper.h"
+
 // The bodies below moved here unchanged from the three roles, where they were
 // identical. Verified by extracting each one from all three role implementations and
 // comparing after normalising only the class name and the pointer star spacing.
@@ -124,4 +135,53 @@ void ServerMesh::checkPendingRadioParams() {
     radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
     MESH_DEBUG_PRINTLN("Radio params restored");
   }
+}
+
+void ServerMesh::setTxPower(int8_t power_dbm) {
+  radio_driver.setTxPower(power_dbm);
+}
+
+bool ServerMesh::formatFileSystem() {
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  return InternalFS.format();
+#elif defined(RP2040_PLATFORM)
+  return LittleFS.format();
+#elif defined(ESP32)
+  return SPIFFS.format();
+#else
+#error "need to implement file system erase"
+  return false;
+#endif
+}
+
+void ServerMesh::saveIdentity(const mesh::LocalIdentity& new_id) {
+#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+  IdentityStore store(*_fs, "");
+#elif defined(ESP32)
+  IdentityStore store(*_fs, "/identity");
+#elif defined(RP2040_PLATFORM)
+  IdentityStore store(*_fs, "/identity");
+#else
+#error "need to define saveIdentity()"
+#endif
+  store.save("_main", new_id);
+}
+
+void ServerMesh::clearStats() {
+  radio_driver.resetStats();
+  resetStats();
+  ((SimpleMeshTables *)getTables())->resetStats();
+}
+
+void ServerMesh::formatStatsReply(char* reply) {
+  StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
+}
+
+void ServerMesh::formatRadioStatsReply(char* reply) {
+  StatsFormatHelper::formatRadioStats(reply, _radio, radio_driver, getTotalAirTime(), getReceiveAirTime());
+}
+
+void ServerMesh::formatPacketStatsReply(char* reply) {
+  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(),
+                                       getNumRecvFlood(), getNumRecvDirect());
 }

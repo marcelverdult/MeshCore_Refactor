@@ -704,19 +704,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
 #endif
 }
 
-bool MyMesh::formatFileSystem() {
-#if defined(NRF52_PLATFORM)
-  return InternalFS.format();
-#elif defined(RP2040_PLATFORM)
-  return LittleFS.format();
-#elif defined(ESP32)
-  return SPIFFS.format();
-#else
-#error "need to implement file system erase"
-  return false;
-#endif
-}
-
 void MyMesh::dumpLogFile() {
 #if defined(RP2040_PLATFORM)
   File f = _fs->open(PACKET_LOG_FILE, "r");
@@ -733,44 +720,8 @@ void MyMesh::dumpLogFile() {
   }
 }
 
-void MyMesh::setTxPower(int8_t power_dbm) {
-  radio_driver.setTxPower(power_dbm);
-}
-
 bool MyMesh::setRxBoostedGain(bool enable) {
   return radio_driver.setRxBoostedGainMode(enable);
-}
-
-void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-  IdentityStore store(*_fs, "");
-#elif defined(ESP32)
-  IdentityStore store(*_fs, "/identity");
-#elif defined(RP2040_PLATFORM)
-  IdentityStore store(*_fs, "/identity");
-#else
-#error "need to define saveIdentity()"
-#endif
-  store.save("_main", new_id);
-}
-
-void MyMesh::clearStats() {
-  radio_driver.resetStats();
-  resetStats();
-  ((SimpleMeshTables *)getTables())->resetStats();
-}
-
-void MyMesh::formatStatsReply(char *reply) {
-  StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
-}
-
-void MyMesh::formatRadioStatsReply(char *reply) {
-  StatsFormatHelper::formatRadioStats(reply, _radio, radio_driver, getTotalAirTime(), getReceiveAirTime());
-}
-
-void MyMesh::formatPacketStatsReply(char *reply) {
-  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(), 
-                                       getNumRecvFlood(), getNumRecvDirect());
 }
 
 void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {

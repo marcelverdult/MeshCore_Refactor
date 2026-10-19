@@ -816,49 +816,6 @@ void SensorMesh::begin(FILESYSTEM* fs) {
 #endif
 }
 
-bool SensorMesh::formatFileSystem() {
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-    return InternalFS.format();
-#elif defined(RP2040_PLATFORM)
-    return LittleFS.format();
-#elif defined(ESP32)
-    return SPIFFS.format();
-#else
-    #error "need to implement file system erase"
-    return false;
-#endif
-}
-
-void SensorMesh::saveIdentity(const mesh::LocalIdentity& new_id) {
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-  IdentityStore store(*_fs, "");
-#elif defined(ESP32)
-  IdentityStore store(*_fs, "/identity");
-#elif defined(RP2040_PLATFORM)
-  IdentityStore store(*_fs, "/identity");
-#else
-  #error "need to define saveIdentity()"
-#endif
-  store.save("_main", new_id);
-}
-
-void SensorMesh::setTxPower(int8_t power_dbm) {
-  radio_driver.setTxPower(power_dbm);
-}
-
-void SensorMesh::formatStatsReply(char *reply) {
-  StatsFormatHelper::formatCoreStats(reply, board, *_ms, _err_flags, _mgr);
-}
-
-void SensorMesh::formatRadioStatsReply(char *reply) {
-  StatsFormatHelper::formatRadioStats(reply, _radio, radio_driver, getTotalAirTime(), getReceiveAirTime());
-}
-
-void SensorMesh::formatPacketStatsReply(char *reply) {
-  StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(), 
-                                       getNumRecvFlood(), getNumRecvDirect());
-}
-
 float SensorMesh::getTelemValue(uint8_t channel, uint8_t type) {
   return findTelemValue(telemetry.getBuffer(), telemetry.getSize(), channel, type, 0.0f);
 }

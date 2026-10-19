@@ -506,6 +506,23 @@ TEST_F(HousekeepingTest, TheStatsRepliesAreFilledIn) {
   EXPECT_GT(strlen(reply), 0u) << "packet stats";
 }
 
+TEST_F(HousekeepingTest, ClearingTheStatsResetsTheCoreCountersToo) {
+  // Make the core count a transmission of its own, so the reset has something to
+  // clear beyond the radio's counters.
+  mesh->sendSelfAdvertisement(0, true);
+  for (int i = 0; i < 40; i++) { g_mock_millis += 250; mesh->loop(); }
+  ASSERT_GT(radio_driver.send_calls, 0) << "something has to have been sent";
+
+  char busy[256] = {0};
+  mesh->formatPacketStatsReply(busy);
+
+  mesh->clearStats();
+
+  char cleared[256] = {0};
+  mesh->formatPacketStatsReply(cleared);
+  EXPECT_STRNE(busy, cleared) << "the core's own counters have to be reset as well";
+}
+
 TEST_F(HousekeepingTest, ThePacketStatsFollowTheRadioCounters) {
   char before[256] = {0};
   mesh->formatPacketStatsReply(before);
