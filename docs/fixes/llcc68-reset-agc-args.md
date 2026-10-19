@@ -26,9 +26,13 @@ wrapper itself and in a comment in `SX126xReset.h`. No variant sets
 `WRAPPER_CLASS` to `CustomLLCC68Wrapper`, so no environment pulls the header into
 a translation unit and no compiler ever looks at it.
 
-The likely history is that the `rx_boost_gain` parameter was added to
-`sx126xResetAGC()` and the three wrappers that are built were adjusted, while the
-one that is not built was missed. Nothing reported it.
+The history is in the log rather than a guess. Commit 6f491f30 (9 August 2026,
+"RX Boosted Gain was set back to the compiled in value rather than the
+current/flash value set by the user when the ACG reset is triggered") added the
+`rx_boost_gain` parameter and updated five files with it:
+`CustomLR1110Wrapper.h`, `CustomSTM32WLxWrapper.h`, `CustomSX1262Wrapper.h`,
+`CustomSX1268Wrapper.h` and `LR11x0Reset.h`. `CustomLLCC68Wrapper.h` is not among
+them. Nothing reported it, because nothing compiles it.
 
 ## Decision
 
