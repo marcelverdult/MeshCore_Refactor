@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include "Stream.h"
 
 inline uint32_t g_mock_millis = 0;
