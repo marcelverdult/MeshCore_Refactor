@@ -23,6 +23,8 @@ void fillAll(NodePrefs& p) {
   strcpy(p.owner_info, "owner \"quoted\" info");
   p.advert_interval = 60;
   p.flood_advert_interval = 12;
+  p.discovery_mod_timestamp = 1760000000;
+  p.extra_sf[0] = 9; p.extra_sf[1] = 10; p.extra_sf[2] = 11; p.extra_sf[3] = 0;
   p.node_lat = 53.551086;
   p.node_lon = 9.993682;
   p.bridge_enabled = 1;
@@ -44,7 +46,8 @@ void fillAll(NodePrefs& p) {
 // /prefs.json as written by v1.18.0 for the values of fillAll().
 const char* kPrefsJson =
     "{name:\"Test Repeater\",pass:\"admin-pw\",guest:\"guest-pw\","
-    "owner:\"owner \\\"quoted\\\" info\",adv_int:60,f_adv_int:12,lat:53.551086,"
+    "owner:\"owner \\\"quoted\\\" info\",adv_int:60,f_adv_int:12,"
+    "disc_mod:1760000000,extra_sf:\"090A0B00\",lat:53.551086,"
     "lon:9.993682,radio:{freq:869.6180,bw:62.5000,sf:8,cr:6,cad:1,"
     "int_thr:14,rxgain:1,fem_rxgain:1,fem_txgain:2,tx:21,af:1.5000,"
     "rxdelay:3.2500,f_txdelay:0.7500,d_txdelay:0.2500,agc_int:5,hash_mode:2,"
@@ -79,6 +82,8 @@ TEST(CommonNodePrefs, ReadsEveryPersistedFieldBack) {
   EXPECT_STREQ(expected.owner_info, loaded.owner_info);
   EXPECT_EQ(expected.advert_interval, loaded.advert_interval);
   EXPECT_EQ(expected.flood_advert_interval, loaded.flood_advert_interval);
+  EXPECT_EQ(expected.discovery_mod_timestamp, loaded.discovery_mod_timestamp);
+  EXPECT_EQ(0, memcmp(expected.extra_sf, loaded.extra_sf, sizeof(expected.extra_sf)));
   EXPECT_DOUBLE_EQ(expected.node_lat, loaded.node_lat);
   EXPECT_DOUBLE_EQ(expected.node_lon, loaded.node_lon);
   EXPECT_EQ(expected.bridge_enabled, loaded.bridge_enabled);
