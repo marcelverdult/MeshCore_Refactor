@@ -47,7 +47,20 @@ struct MockRadioDriver : public mesh::Radio {
   int recvRaw(uint8_t* bytes, int sz) override { return 0; }
   uint32_t getEstAirtimeFor(int len_bytes) override { return 11 + 37 * (uint32_t)len_bytes; }
   float packetScore(float snr, int packet_len) override { return 0; }
-  bool startSendRaw(const uint8_t* bytes, int len) override { return false; }
+  // A radio that accepts the frame, so a test can see that something was actually
+  // transmitted and when. Set send_succeeds to false to model a refusing radio.
+  bool send_succeeds = true;
+  int send_calls = 0;
+  int last_send_len = 0;
+  uint8_t last_send[256] = {0};
+
+  bool startSendRaw(const uint8_t* bytes, int len) override {
+    if (!send_succeeds) return false;
+    send_calls++;
+    last_send_len = len;
+    if (len > 0 && len <= (int)sizeof(last_send)) memcpy(last_send, bytes, len);
+    return true;
+  }
   bool isSendComplete() override { return true; }
   void onSendFinished() override { }
   bool isInRecvMode() const override { return true; }
@@ -56,6 +69,7 @@ struct MockRadioDriver : public mesh::Radio {
     tx_power = 0; tx_power_calls = 0;
     rx_boosted = false; rx_boost_calls = 0; rx_boost_supported = true;
     freq = bw = 0; sf = cr = 0; set_params_calls = 0;
+    send_succeeds = true; send_calls = 0; last_send_len = 0;
     last_rssi = -90.0f; last_snr = 5.0f;
     packets_recv = packets_sent = packets_recv_errors = 0;
   }

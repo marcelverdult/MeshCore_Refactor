@@ -150,6 +150,14 @@ small:
 - RX boosted gain: initialise the pref under the same guards as the other roles and
   apply it in `begin()`, mirroring upstream's own room server fix.
 
+## Verification of the steps
+
+Marcel's decision of 19 October: the 18 environment build matrix and the flash and
+RAM comparison against `dev` run **once, at the end of the 4a to 4f series**, not per
+step. Every step is a move inside the same three roles, so one matrix at the end
+covers what six would. Each step still carries its host tests, its mutation table and
+its diff proof, and a step is not called verified until the matrix has run.
+
 ## Open points
 
 1. **The retransmit formula.** Upstream moved the repeater and the room server off

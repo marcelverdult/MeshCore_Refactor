@@ -320,6 +320,112 @@ TEST_F(RegionResolutionTest, TheRegionIsClearedBetweenPackets) {
   EXPECT_EQ(mesh->seenRegion(), nullptr);
 }
 
+
+// The advertisement schedule, which step 4b moves into the shared base. Driven
+// through the role's own public surface, so these tests read the same before and
+// after the move. They pin the interval arithmetic and which send path each kind of
+// advertisement takes, not the millisecond the transmitter happens to pick: the
+// duty cycle budget in Dispatcher decides that, and it is not what moved.
+class AdvertScheduleTest : public ::testing::Test {
+protected:
+  fs::FS fs;
+  ArduinoMillis ms;
+  StdRNG rng;
+  SimpleMeshTables tables;
+  std::unique_ptr<MyMesh> mesh;
+
+  void SetUp() override {
+    g_mock_millis = T0;
+    board.reset();
+    radio_driver.reset();
+    rtc_clock.now = 1760000000;
+    fs.reset();
+    rng.begin(1);
+
+    mesh.reset(new MyMesh(board, radio_driver, ms, rng, rtc_clock, tables));
+    mesh->begin(&fs);
+
+    // Start from "no advertisements scheduled", whatever begin() left behind.
+    mesh->getNodePrefs()->advert_interval = 0;
+    mesh->getNodePrefs()->flood_advert_interval = 0;
+    mesh->updateAdvertTimer();
+    mesh->updateFloodAdvertTimer();
+    radio_driver.send_calls = 0;
+  }
+
+  // Run the node forward, and report whether it transmitted anything.
+  bool runFor(uint32_t millis_span, uint32_t step = 250) {
+    const int before = radio_driver.send_calls;
+    for (uint32_t t = 0; t < millis_span; t += step) {
+      g_mock_millis += step;
+      mesh->loop();
+    }
+    return radio_driver.send_calls > before;
+  }
+};
+
+TEST_F(AdvertScheduleTest, NothingIsAdvertisedWhenBothIntervalsAreZero) {
+  EXPECT_FALSE(runFor(3 * 60 * 60 * 1000));   // three hours of quiet
+}
+
+TEST_F(AdvertScheduleTest, TheLocalIntervalCountsTwoMinutesPerUnit) {
+  mesh->getNodePrefs()->advert_interval = 1;   // the field is minutes / 2
+  mesh->updateAdvertTimer();
+
+  EXPECT_FALSE(runFor(2 * 60 * 1000 - 1000)) << "nothing before the two minutes";
+  EXPECT_TRUE(runFor(2000)) << "advertised once the two minutes passed";
+}
+
+TEST_F(AdvertScheduleTest, AZeroLocalIntervalStopsAScheduledAdvert) {
+  mesh->getNodePrefs()->advert_interval = 1;
+  mesh->updateAdvertTimer();
+
+  // Turning it off has to clear the pending timer, not just stop rescheduling.
+  mesh->getNodePrefs()->advert_interval = 0;
+  mesh->updateAdvertTimer();
+
+  EXPECT_FALSE(runFor(10 * 60 * 1000));
+}
+
+TEST_F(AdvertScheduleTest, TheFloodIntervalCountsOneHourPerUnit) {
+  mesh->getNodePrefs()->flood_advert_interval = 1;   // the field is hours
+  mesh->updateFloodAdvertTimer();
+
+  EXPECT_FALSE(runFor(60 * 60 * 1000 - 60 * 1000)) << "nothing before the hour";
+  EXPECT_TRUE(runFor(2 * 60 * 1000)) << "advertised once the hour passed";
+}
+
+TEST_F(AdvertScheduleTest, AZeroFloodIntervalStopsAScheduledAdvert) {
+  mesh->getNodePrefs()->flood_advert_interval = 1;
+  mesh->updateFloodAdvertTimer();
+
+  mesh->getNodePrefs()->flood_advert_interval = 0;
+  mesh->updateFloodAdvertTimer();
+
+  EXPECT_FALSE(runFor(2 * 60 * 60 * 1000));
+}
+
+TEST_F(AdvertScheduleTest, AFloodAdvertReschedulesTheLocalOneToo) {
+  // The role schedules both when a flood advert fires, so the two do not overlap.
+  // With the local interval left at zero only the flood advert can fire, and it has
+  // to keep firing on its own schedule afterwards.
+  mesh->getNodePrefs()->flood_advert_interval = 1;
+  mesh->updateFloodAdvertTimer();
+
+  ASSERT_TRUE(runFor(60 * 60 * 1000 + 60 * 1000)) << "first flood advert";
+  EXPECT_FALSE(runFor(30 * 60 * 1000)) << "not again within the next half hour";
+  EXPECT_TRUE(runFor(35 * 60 * 1000)) << "again after the next hour";
+}
+
+TEST_F(AdvertScheduleTest, AnAdvertisementAskedForDirectlyIsTransmitted) {
+  mesh->sendSelfAdvertisement(0, false);
+  EXPECT_TRUE(runFor(10 * 1000)) << "zero hop advertisement";
+
+  radio_driver.send_calls = 0;
+  mesh->sendSelfAdvertisement(0, true);
+  EXPECT_TRUE(runFor(10 * 1000)) << "flooded advertisement";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
