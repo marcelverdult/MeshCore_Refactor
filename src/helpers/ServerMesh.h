@@ -31,7 +31,12 @@ protected:
   TransportKeyStore key_store;
   RegionMap region_map, temp_map;
 
+  ClientACL acl;                  // the clients this node knows and what they may do
   NodePrefs _prefs;               // this node's persisted settings
+
+  // Filled by searchPeersByHash(), read by getPeerSharedSecret() right after. Sized
+  // for the whole ACL, which is what ClientACL can hold.
+  int matching_peer_indexes[MAX_CLIENTS];
   unsigned long next_local_advert, next_flood_advert;
 
   // A 'set radio ...' command parks its values here until the reply has gone out,
@@ -88,6 +93,8 @@ protected:
 
   // Mesh
   mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
+  int searchPeersByHash(const uint8_t* hash) override;
+  void getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) override;
 
   // CommonCLICallbacks
   void startRegionsLoad() override;

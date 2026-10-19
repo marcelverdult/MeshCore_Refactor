@@ -534,6 +534,105 @@ TEST_F(HousekeepingTest, ThePacketStatsFollowTheRadioCounters) {
   EXPECT_STRNE(before, after) << "the reply has to reflect the counters it reads";
 }
 
+
+// The ACL peer lookup, which step 4e moved into the shared base. The ACL is
+// protected on the base, so a subclass can populate it; before the move it was
+// private in each role and could not be reached from a test at all.
+class PeerLookupProbe : public MyMesh {
+public:
+  using MyMesh::MyMesh;
+
+  ClientACL& clients() { return acl; }
+  int search(const uint8_t* hash) { return searchPeersByHash(hash); }
+  void secretFor(uint8_t* dest, int peer_idx) { getPeerSharedSecret(dest, peer_idx); }
+};
+
+class PeerLookupTest : public ::testing::Test {
+protected:
+  fs::FS fs;
+  ArduinoMillis ms;
+  StdRNG rng;
+  SimpleMeshTables tables;
+  std::unique_ptr<PeerLookupProbe> mesh;
+
+  void SetUp() override {
+    g_mock_millis = T0;
+    board.reset();
+    radio_driver.reset();
+    rtc_clock.now = 1760000000;
+    fs.reset();
+    rng.begin(1);
+
+    mesh.reset(new PeerLookupProbe(board, radio_driver, ms, rng, rtc_clock, tables));
+    mesh->begin(&fs);
+  }
+
+  // The hash is the first byte of the public key (PATH_HASH_SIZE is 1), so the
+  // first byte decides who matches and the rest only keeps the keys distinct.
+  mesh::Identity identityStarting(uint8_t first, uint8_t tag) {
+    uint8_t pub[PUB_KEY_SIZE];
+    memset(pub, tag, sizeof(pub));
+    pub[0] = first;
+    return mesh::Identity(pub);
+  }
+
+  ClientInfo* addClient(uint8_t first, uint8_t tag) {
+    ClientInfo* c = mesh->clients().putClient(identityStarting(first, tag), 0);
+    if (c) memset(c->shared_secret, tag, PUB_KEY_SIZE);
+    return c;
+  }
+};
+
+TEST_F(PeerLookupTest, AnEmptyAclMatchesNobody) {
+  const uint8_t hash[1] = { 0xAA };
+  EXPECT_EQ(mesh->search(hash), 0);
+}
+
+TEST_F(PeerLookupTest, OnlyTheClientsWhoseHashMatchesAreReturned) {
+  addClient(0xAA, 1);
+  addClient(0xBB, 2);
+  addClient(0xAA, 3);
+
+  const uint8_t hash[1] = { 0xAA };
+  EXPECT_EQ(mesh->search(hash), 2);
+
+  const uint8_t other[1] = { 0xBB };
+  EXPECT_EQ(mesh->search(other), 1);
+
+  const uint8_t missing[1] = { 0xCC };
+  EXPECT_EQ(mesh->search(missing), 0);
+}
+
+TEST_F(PeerLookupTest, TheSharedSecretBelongsToTheMatchedClient) {
+  addClient(0xBB, 2);      // not a match, so the index must not be mistaken for it
+  addClient(0xAA, 7);
+
+  const uint8_t hash[1] = { 0xAA };
+  ASSERT_EQ(mesh->search(hash), 1);
+
+  uint8_t secret[PUB_KEY_SIZE];
+  memset(secret, 0, sizeof(secret));
+  mesh->secretFor(secret, 0);
+
+  uint8_t expected[PUB_KEY_SIZE];
+  memset(expected, 7, sizeof(expected));
+  EXPECT_EQ(memcmp(secret, expected, PUB_KEY_SIZE), 0);
+}
+
+TEST_F(PeerLookupTest, MoreThanTwentyFourMatchesAreAllReported) {
+  // The sensor used to stop at 24, because its index array was sized that way
+  // while the other two roles sized theirs for the whole ACL. One array in the
+  // base ends the truncation, which is a deliberate change of behaviour for the
+  // sensor and is recorded in docs/refactoring/0004-shared-server-base.md.
+  const int wanted = 30;   // more than 24, still inside MAX_CLIENTS
+  for (int i = 0; i < wanted; i++) {
+    ASSERT_NE(addClient(0xAA, (uint8_t)(i + 1)), nullptr) << "client " << i;
+  }
+
+  const uint8_t hash[1] = { 0xAA };
+  EXPECT_EQ(mesh->search(hash), wanted);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {

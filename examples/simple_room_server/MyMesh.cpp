@@ -381,26 +381,6 @@ void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const m
   }
 }
 
-int MyMesh::searchPeersByHash(const uint8_t *hash) {
-  int n = 0;
-  for (int i = 0; i < acl.getNumClients(); i++) {
-    if (acl.getClientByIdx(i)->id.isHashMatch(hash)) {
-      matching_peer_indexes[n++] = i; // store the INDEXES of matching contacts (for subsequent 'peer' methods)
-    }
-  }
-  return n;
-}
-
-void MyMesh::getPeerSharedSecret(uint8_t *dest_secret, int peer_idx) {
-  int i = matching_peer_indexes[peer_idx];
-  if (i >= 0 && i < acl.getNumClients()) {
-    // lookup pre-calculated shared_secret
-    memcpy(dest_secret, acl.getClientByIdx(i)->shared_secret, PUB_KEY_SIZE);
-  } else {
-    MESH_DEBUG_PRINTLN("getPeerSharedSecret: Invalid peer idx: %d", i);
-  }
-}
-
 void MyMesh::onPeerDataRecv(mesh::Packet *packet, uint8_t type, int sender_idx, const uint8_t *secret,
                             uint8_t *data, size_t len) {
   int i = matching_peer_indexes[sender_idx];

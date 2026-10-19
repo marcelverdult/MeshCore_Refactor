@@ -185,3 +185,25 @@ void ServerMesh::formatPacketStatsReply(char* reply) {
   StatsFormatHelper::formatPacketStats(reply, radio_driver, getNumSentFlood(), getNumSentDirect(),
                                        getNumRecvFlood(), getNumRecvDirect());
 }
+
+int ServerMesh::searchPeersByHash(const uint8_t* hash) {
+  int n = 0;
+  // ClientACL caps its own count at MAX_CLIENTS, so the bound can never bite; it is
+  // here so the array's size and the loop that fills it are stated in one place.
+  for (int i = 0; i < acl.getNumClients() && n < MAX_CLIENTS; i++) {
+    if (acl.getClientByIdx(i)->id.isHashMatch(hash)) {
+      matching_peer_indexes[n++] = i;  // store the INDEXES of matching contacts (for subsequent 'peer' methods)
+    }
+  }
+  return n;
+}
+
+void ServerMesh::getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) {
+  int i = matching_peer_indexes[peer_idx];
+  if (i >= 0 && i < acl.getNumClients()) {
+    // lookup pre-calculated shared_secret
+    memcpy(dest_secret, acl.getClientByIdx(i)->shared_secret, PUB_KEY_SIZE);
+  } else {
+    MESH_DEBUG_PRINTLN("getPeerSharedSecret: Invalid peer idx: %d", i);
+  }
+}

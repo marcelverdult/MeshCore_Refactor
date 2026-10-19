@@ -94,7 +94,6 @@ class MyMesh : public ServerMesh {
   uint32_t last_millis;
   uint64_t uptime_millis;
   bool _logging;
-  ClientACL acl;
   CommonCLI _cli;
   unsigned long dirty_contacts_expiry;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
@@ -104,7 +103,6 @@ class MyMesh : public ServerMesh {
   int next_post_idx;
   PostInfo posts[MAX_UNSYNCED_POSTS];   // cyclic queue
   CayenneLPP telemetry;
-  int  matching_peer_indexes[MAX_CLIENTS];
 
   void addPost(ClientInfo* client, const char* postData);
   void storePost(const mesh::Identity& author, const char* postData);
@@ -125,8 +123,6 @@ protected:
 
   bool allowPacketForward(const mesh::Packet* packet) override;
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
-  int searchPeersByHash(const uint8_t* hash) override ;
-  void getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) override;
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data, size_t len) override;
   bool onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
   void onAckRecv(mesh::Packet* packet, uint32_t ack_crc) override;
