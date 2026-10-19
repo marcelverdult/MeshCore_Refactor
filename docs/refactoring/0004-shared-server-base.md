@@ -167,9 +167,15 @@ instead of three times. The host suite grew from 82 to 115 test cases.
 
 What is still shared between all three roles, and why it stayed:
 
-- `begin()` is step 4f, which waits on the sensor's RX boosted gain gap being
-  closed first, so the three boot paths can become one.
-- `allowPacketForward()` is part of the sensor alignment, not of a move.
+- `begin()` is step 4f. Its precondition is met since the sensor alignment closed
+  the RX boosted gain gap: measured after that change, the room server's and the
+  sensor's `begin()` are now **identical**, 44 lines each, and the repeater differs
+  only by its `WITH_BRIDGE` block and one debug print. So 4f is a move with one
+  hook, and the measurement is in place for whoever picks it up.
+- `allowPacketForward()` is now **identical** in the room server and the sensor, 8
+  lines each, after the alignment. The repeater adds a Region check and loop
+  detection on top of the same two leading checks. A later step could share the
+  common part behind a hook; it was not part of this cut.
 - `createSelfAdvert()` is a role hook by design now: only the advert type differs.
 - `handleCommand()`, `handleRequest()`, `onAnonDataRecv()`, `onPeerDataRecv()` and
   `loop()` differ by role and are out of scope, as stated above.
