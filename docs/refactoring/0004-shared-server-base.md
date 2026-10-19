@@ -186,11 +186,18 @@ its diff proof, and a step is not called verified until the matrix has run.
 
 ## Open points
 
-1. **The retransmit formula.** Upstream moved the repeater and the room server off
-   the six slot scheme in a commit that calls itself experimental, and never
-   revisited it. Aligning the sensor adopts that experiment. The alternative is to
-   keep the slot scheme for the sensor as the one role parameter of the shared base.
-   Marcel decides before 4f.
+1. **The retransmit formula: decided, the sensor keeps its own.** Marcel's decision
+   of 19 October, after the upstream history was checked: the sensor stays on the six
+   slot scheme, and the retransmit delay becomes the one role parameter of the shared
+   base. The reason is that upstream moved the repeater and the room server off that
+   scheme in `8cbcd227`, whose subject calls itself experimental, and never
+   revisited or confirmed it in the eleven and a half months since. Adopting it for
+   the sensor would change radio timing on battery nodes on an experimental basis,
+   which is exactly the case the decision reserved for a role profile.
+
+   So the sensor alignment covers `multi.acks`, the flood limits and the RX boosted
+   gain, and leaves `getRetransmitDelay()` and `getDirectRetransmitDelay()` as
+   documented role overrides.
 2. **How deep the characterization goes: settled by measuring it.** The question was
    whether the real role classes can be driven on the host at all, or whether the
    steps have to lean on the diff alone. Probing the compiler rather than estimating
