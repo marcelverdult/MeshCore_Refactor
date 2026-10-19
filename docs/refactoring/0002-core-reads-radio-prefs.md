@@ -139,8 +139,6 @@ the built-in default, as before.
 
 ### Hardware
 
-### Hardware
-
 The hooks only change values inside the running core, which no command shows.
 For the hardware run, one identical diagnostic patch (a `diag tuning` CLI command
 that prints what the running core returns for the duty cycle budget, the RX delay

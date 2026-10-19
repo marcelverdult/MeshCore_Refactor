@@ -136,8 +136,6 @@ firmware is 8 to 96 bytes smaller than with 0002; RAM is unchanged.
 
 ### Hardware
 
-### Hardware
-
 Two LilyGo T-Echo boards (nRF52840, SX1262), room server and USB companion, each
 running the 0002 image and the image of this step in turn (marked builds, see
 0001). A script of 58 radio commands (edge cases that are safe on air: no
