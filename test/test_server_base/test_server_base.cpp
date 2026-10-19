@@ -417,13 +417,19 @@ TEST_F(AdvertScheduleTest, AFloodAdvertReschedulesTheLocalOneToo) {
   EXPECT_TRUE(runFor(35 * 60 * 1000)) << "again after the next hour";
 }
 
-TEST_F(AdvertScheduleTest, AnAdvertisementAskedForDirectlyIsTransmitted) {
+TEST_F(AdvertScheduleTest, AnAdvertisementGoesOutOnTheRouteItWasAskedFor) {
+  // The route type is in the first byte of the frame, so the two send paths are
+  // told apart by what actually left the radio, not just by something leaving it.
   mesh->sendSelfAdvertisement(0, false);
-  EXPECT_TRUE(runFor(10 * 1000)) << "zero hop advertisement";
+  ASSERT_TRUE(runFor(10 * 1000)) << "zero hop advertisement";
+  EXPECT_EQ(radio_driver.last_send[0] & PH_ROUTE_MASK, ROUTE_TYPE_DIRECT);
 
   radio_driver.send_calls = 0;
   mesh->sendSelfAdvertisement(0, true);
-  EXPECT_TRUE(runFor(10 * 1000)) << "flooded advertisement";
+  ASSERT_TRUE(runFor(10 * 1000)) << "flooded advertisement";
+  // No default scope is configured here, so the scoped send falls back to a plain
+  // flood rather than a transport flood.
+  EXPECT_EQ(radio_driver.last_send[0] & PH_ROUTE_MASK, ROUTE_TYPE_FLOOD);
 }
 
 }  // namespace
