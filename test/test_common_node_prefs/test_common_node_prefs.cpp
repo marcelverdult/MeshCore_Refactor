@@ -102,6 +102,11 @@ TEST(CommonNodePrefs, RadioCliReadsAndWritesTheNodeFields) {
   expectRadioCliDrivesNodeFields(prefs);
 }
 
+TEST(CommonNodePrefs, RadioCliEdgeCases) {
+  NodePrefs prefs;
+  expectRadioCliEdgeCases(prefs);
+}
+
 TEST(CommonNodePrefs, CustomStoreReachesTheFemGains) {
   NodePrefs prefs;
   expectCustomStoreReachesFemGains(prefs);

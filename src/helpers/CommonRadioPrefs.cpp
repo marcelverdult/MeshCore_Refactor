@@ -2,33 +2,123 @@
 #include "TxtDataHelpers.h"
 #include "Utils.h"
 #include "target.h"
+#include <stddef.h>
+
+namespace {
+
+enum FieldType : uint8_t { FIELD_F32, FIELD_U8, FIELD_I8 };
+
+// How the generic code handles a setting on the CLI.
+enum CliKind : uint8_t {
+  CLI_NONE,       // no generic command (none at all, or a special one in handleCommand())
+  CLI_GET_ONLY,   // "get <name>" only
+  CLI_FLOAT,      // "set <name> <value>": atof(), accepted if 0 <= value <= max (NaN and infinity rejected)
+  CLI_UINT8,      // "set <name> <value>": atoi() into uint8_t, accepted if value <= max (max < 0: no limit)
+  CLI_ON_OFF,     // "set <name> <value>": on if the value starts with "on", off otherwise
+};
+
+struct RadioSetting {
+  const char* json_key;      // key in the "radio" object of /prefs.json (persisted format, never rename)
+  uint8_t offset;            // the field in RadioPrefsFields
+  FieldType type;
+  const char* cli_name;      // command name, or NULL
+  CliKind cli;
+  float max;                 // upper limit, see CliKind
+  const char* range_error;   // reply when a value is out of range
+  bool key_value;            // readable and writable through the key/value store (used by boards)
+};
+
+#define FIELD(f)  offsetof(RadioPrefsFields, f)
+
+/**
+ * One row per radio setting. The order of the rows is the order of the keys in the
+ * "radio" object of /prefs.json. A new setting needs a field in RadioPrefsFields and a
+ * row here; settings whose CLI does not fit a CliKind get CLI_NONE and a branch in
+ * handleCommand().
+ */
+const RadioSetting SETTINGS[] = {
+  // json key      field                                type        CLI name           CLI kind      max   range error
+  { "freq",       FIELD(freq),                       FIELD_F32, "freq",           CLI_GET_ONLY,  -1,  NULL, false },
+  { "bw",         FIELD(bw),                         FIELD_F32, NULL,             CLI_NONE,      -1,  NULL, false },  // "radio"
+  { "sf",         FIELD(sf),                         FIELD_U8,  NULL,             CLI_NONE,      -1,  NULL, false },  // "radio"
+  { "cr",         FIELD(cr),                         FIELD_U8,  NULL,             CLI_NONE,      -1,  NULL, false },  // "radio"
+  { "cad",        FIELD(cad_enabled),                FIELD_U8,  "cad",            CLI_ON_OFF,    -1,  NULL, false },
+  { "int_thr",    FIELD(interference_threshold),     FIELD_U8,  "int.thresh",     CLI_UINT8,     -1,  NULL, false },
+  { "rxgain",     FIELD(rx_boosted_gain),            FIELD_U8,  NULL,             CLI_NONE,      -1,  NULL, false },  // "radio.rxgain"
+  { "fem_rxgain", FIELD(radio_fem_rxgain),           FIELD_U8,  NULL,             CLI_NONE,      -1,  NULL, true },   // board CLI
+  { "fem_txgain", FIELD(radio_fem_txgain),           FIELD_U8,  NULL,             CLI_NONE,      -1,  NULL, true },   // board CLI
+  { "tx",         FIELD(tx_power_dbm),               FIELD_I8,  NULL,             CLI_NONE,      -1,  NULL, false },  // "tx"
+  { "af",         FIELD(airtime_factor),             FIELD_F32, NULL,             CLI_NONE,      -1,  NULL, false },  // "af", "dutycycle"
+  { "rxdelay",    FIELD(rx_delay_base),              FIELD_F32, "rxdelay",        CLI_FLOAT,     20,  "Error, must be 0-20", false },
+  { "f_txdelay",  FIELD(tx_delay_factor),            FIELD_F32, "txdelay",        CLI_FLOAT,      2,  "Error, must be 0-2", false },
+  { "d_txdelay",  FIELD(direct_tx_delay_factor),     FIELD_F32, "direct.txdelay", CLI_FLOAT,      2,  "Error, must be 0-2", false },
+  { "agc_int",    FIELD(agc_reset_interval),         FIELD_U8,  NULL,             CLI_NONE,      -1,  NULL, false },  // "agc.reset.interval"
+  { "hash_mode",  FIELD(path_hash_mode),             FIELD_U8,  "path.hash.mode", CLI_UINT8,      2,  "Error, must be 0,1, or 2", false },
+  { "multi_ack",  FIELD(multi_acks),                 FIELD_U8,  "multi.acks",     CLI_UINT8,     -1,  NULL, false },
+};
+
+const int NUM_SETTINGS = sizeof(SETTINGS) / sizeof(SETTINGS[0]);
+
+// True if v is a number in [0, max]. NaN and infinity are recognised by their bits:
+// nRF52 builds use -Ofast, and its -ffast-math lets float comparisons assume that
+// NaN and infinity never occur, so a comparison alone may let them through.
+bool inRange(float v, float max) {
+  uint32_t bits;
+  memcpy(&bits, &v, sizeof(bits));
+  if ((bits & 0x7F800000) == 0x7F800000) return false;
+  return v >= 0 && v <= max;
+}
+
+// "get <name>"
+bool isGet(const char* command, const char* name) {
+  return memcmp(command, "get ", 4) == 0 && strcmp(&command[4], name) == 0;
+}
+
+// "set <name> <value>": returns the value, or NULL if the command is something else
+const char* setValue(const char* command, const char* name) {
+  size_t len = strlen(name);
+  if (memcmp(command, "set ", 4) != 0 || memcmp(&command[4], name, len) != 0 || command[4 + len] != ' ') return NULL;
+  return &command[5 + len];
+}
+
+}  // namespace
+
+void CommonRadioPrefs::structure() {
+  for (int i = 0; i < NUM_SETTINGS; i++) {
+    const RadioSetting& s = SETTINGS[i];
+    uint8_t* field = (uint8_t *) _f + s.offset;
+    switch (s.type) {
+      case FIELD_F32: def(s.json_key, *(float *) field); break;
+      case FIELD_U8:  def(s.json_key, *(uint8_t *) field); break;
+      case FIELD_I8:  def(s.json_key, *(int8_t *) field); break;
+    }
+  }
+}
 
 bool CommonRadioPrefs::getByKey(const char* key, char* value, size_t max_len) {
-  if (strcmp(key, "fem_rxgain") == 0) {
-    snprintf(value, max_len, "%d", (uint32_t)getFEMRxGain());
-    return true;
-  }
-  if (strcmp(key, "fem_txgain") == 0) {
-    snprintf(value, max_len, "%d", (uint32_t)getFEMTxGain());
-    return true;
+  for (int i = 0; i < NUM_SETTINGS; i++) {
+    const RadioSetting& s = SETTINGS[i];
+    if (s.key_value && s.type == FIELD_U8 && strcmp(key, s.json_key) == 0) {
+      snprintf(value, max_len, "%d", (uint32_t) *((uint8_t *) _f + s.offset));
+      return true;
+    }
   }
   return false;
 }
 bool CommonRadioPrefs::setByKey(const char* key, const char* value) {
-  if (strcmp(key, "fem_rxgain") == 0) {
-    setFEMRxGain(atoi(value));
-    markDirty();
-    return true;
-  }
-  if (strcmp(key, "fem_txgain") == 0) {
-    setFEMTxGain(atoi(value));
-    markDirty();
-    return true;
+  for (int i = 0; i < NUM_SETTINGS; i++) {
+    const RadioSetting& s = SETTINGS[i];
+    if (s.key_value && s.type == FIELD_U8 && strcmp(key, s.json_key) == 0) {
+      *((uint8_t *) _f + s.offset) = atoi(value);
+      markDirty();
+      return true;
+    }
   }
   return false;
 }
 
 bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timestamp, char* reply) {
+  // Settings whose CLI does not fit a CliKind.
   if (strcmp(command, "get radio") == 0) {
     char freq[16], bw[16];
     strcpy(freq, StrHelper::ftoa(getFreq()));
@@ -54,11 +144,6 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
     } else {
       strcpy(reply, "Error, invalid radio params");
     }
-    return true;
-  }
-
-  if (strcmp(command, "get freq") == 0) {
-    sprintf(reply, "> %s", StrHelper::ftoa(getFreq()));
     return true;
   }
 
@@ -99,26 +184,6 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
     return true;
   }
 
-  if (strcmp(command, "get int.thresh") == 0) {
-    sprintf(reply, "> %d", (uint32_t) getIntThresh());
-    return true;
-  }
-  if (memcmp(command, "set int.thresh ", 15) == 0) {
-    setIntThresh(atoi(&command[15]));
-    strcpy(reply, "OK");
-    return true;
-  }
-
-  if (strcmp(command, "get cad") == 0) {
-    sprintf(reply, "> %s", isCadEnabled() ? "on" : "off");
-    return true;
-  }
-  if (memcmp(command, "set cad ", 8) == 0) {
-    setCadEnabled(memcmp(&command[8], "on", 2) == 0);
-    strcpy(reply, "OK");
-    return true;
-  }
-
   if (strcmp(command, "get radio.rxgain") == 0) {
     sprintf(reply, "> %s", getRxGain() != 0 ? "on" : "off");
     return true;
@@ -145,21 +210,6 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
     return true;
   }
 
-  if (strcmp(command, "get rxdelay") == 0) {
-    sprintf(reply, "> %s", StrHelper::ftoa(getRxDelay()));
-    return true;
-  }
-  if (memcmp(command, "set rxdelay ", 12) == 0) {
-    float db = atof(&command[12]);
-    if (db >= 0 && db <= 20.0f) {
-      setRxDelay(db);
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Error, must be 0-20");
-    }
-    return true;
-  }
-
   if (strcmp(command, "get agc.reset.interval") == 0) {
     sprintf(reply, "> %d", (uint32_t) getAgcResetInt());
     return true;
@@ -172,59 +222,45 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
     return true;
   }
 
-  if (strcmp(command, "get path.hash.mode") == 0) {
-    sprintf(reply, "> %d", (uint32_t)getHashMode());
-    return true;
-  }
-  if (memcmp(command, "set path.hash.mode ", 19) == 0) {
-    const char* config = command + 19;
-    uint8_t mode = atoi(config);
-    if (mode < 3) {
-      setHashMode(mode);
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Error, must be 0,1, or 2");
-    }
-    return true;
-  }
+  // Every other setting, driven by SETTINGS.
+  for (int i = 0; i < NUM_SETTINGS; i++) {
+    const RadioSetting& s = SETTINGS[i];
+    if (s.cli == CLI_NONE) continue;
+    uint8_t* field = (uint8_t *) _f + s.offset;
 
-  if (strcmp(command, "get multi.acks") == 0) {
-    sprintf(reply, "> %d", (uint32_t) getMultiAcks());
-    return true;
-  }
-  if (memcmp(command, "set multi.acks ", 15) == 0) {
-    setMultiAcks(atoi(&command[15]));
+    if (isGet(command, s.cli_name)) {
+      if (s.cli == CLI_ON_OFF) {
+        sprintf(reply, "> %s", *field ? "on" : "off");
+      } else if (s.type == FIELD_F32) {
+        sprintf(reply, "> %s", StrHelper::ftoa(*(float *) field));
+      } else {
+        sprintf(reply, "> %d", (uint32_t) *field);
+      }
+      return true;
+    }
+    if (s.cli == CLI_GET_ONLY) continue;
+
+    const char* value = setValue(command, s.cli_name);
+    if (value == NULL) continue;
+    if (s.cli == CLI_FLOAT) {
+      float v = atof(value);
+      if (!inRange(v, s.max)) {
+        strcpy(reply, s.range_error);
+        return true;
+      }
+      *(float *) field = v;
+    } else if (s.cli == CLI_UINT8) {
+      uint8_t v = atoi(value);
+      if (s.max >= 0 && v > s.max) {
+        strcpy(reply, s.range_error);
+        return true;
+      }
+      *field = v;
+    } else {  // CLI_ON_OFF
+      *field = memcmp(value, "on", 2) == 0;
+    }
+    markDirty();
     strcpy(reply, "OK");
-    return true;
-  }
-
-  if (strcmp(command, "get txdelay") == 0) {
-    sprintf(reply, "> %s", StrHelper::ftoa(getFloodTxDelay()));
-    return true;
-  }
-  if (memcmp(command, "set txdelay ", 12) == 0) {
-    float f = atof(&command[12]);
-    if (f >= 0 && f <= 2.0f) {
-      setFloodTxDelay(f);
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Error, must be 0-2");
-    }
-    return true;
-  }
-
-  if (strcmp(command, "get direct.txdelay") == 0) {
-    sprintf(reply, "> %s", StrHelper::ftoa(getDirectTxDelay()));
-    return true;
-  }
-  if (memcmp(command, "set direct.txdelay ", 19) == 0) {
-    float f = atof(&command[19]);
-    if (f >= 0 && f <= 2.0f) {
-      setDirectTxDelay(f);
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Error, must be 0-2");
-    }
     return true;
   }
 

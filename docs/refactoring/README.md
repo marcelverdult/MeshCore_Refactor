@@ -49,10 +49,10 @@ The full analysis, with file and line references for every finding, is in
 |---|------|-------------|--------|
 | 1 | Share the radio and GPS settings between the server roles' and the companion's NodePrefs | [0001](0001-shared-radio-gps-prefs.md) | ready for review |
 | 2 | Let the core read its tuning values from the radio settings instead of a getter per role | [0002](0002-core-reads-radio-prefs.md) | ready for review |
+| 3 | Drive the radio settings (JSON, CLI, key/value store) from one table | [0003](0003-radio-settings-table.md) | ready for review |
 
 Planned next steps (each needs its own design note before code), in order of
-expected benefit: one table per setting group for the radio CLI;
-a shared base for repeater, room server and sensor; one generic variant target
+expected benefit: a shared base for repeater, room server and sensor; one generic variant target
 built from a board description; one RadioLib adapter per chip family; a
 companion frame codec with a command table. See the review for the reasoning.
 
