@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 // Mock Stream class for native testing
 // Provides minimal interface needed by Utils.h
@@ -48,6 +50,18 @@ public:
     //size_t println(void)  { return 0; }
     
     virtual void flush() { /* Empty implementation for backward compatibility */ }    
+
+    // The ESP32 and RP2040 cores add printf() to Print; helpers/RegionMap.cpp uses it.
+    size_t printf(const char* fmt, ...) {
+        char buf[512];
+        va_list ap;
+        va_start(ap, fmt);
+        int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+        va_end(ap);
+        if (n < 0) return 0;
+        if ((size_t) n >= sizeof(buf)) n = sizeof(buf) - 1;
+        return write((const uint8_t *) buf, (size_t) n);
+    }
 };
 
 class Stream: public Print

@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <cstdarg>
+#include <cstring>
+#include <string>
 #include "Stream.h"
 
 inline uint32_t g_mock_millis = 0;
@@ -38,3 +41,62 @@ inline char* ltoa(long value, char* buf, int base) {
   *p = 0;
   return buf;
 }
+
+// Arduino's random API, used by helpers/ArduinoHelpers.h. The sequence is
+// deterministic, so a test that exercises code drawing from it stays repeatable.
+inline uint32_t g_mock_random_state = 1;
+
+inline void randomSeed(long seed) {
+  g_mock_random_state = (uint32_t)(seed ? seed : 1);
+}
+
+inline long random(long howsmall, long howbig) {
+  if (howbig <= howsmall) return howsmall;
+  g_mock_random_state = g_mock_random_state * 1103515245u + 12345u;
+  uint32_t span = (uint32_t)(howbig - howsmall);
+  return howsmall + (long)((g_mock_random_state >> 16) % span);
+}
+
+inline long random(long howbig) { return random(0, howbig); }
+
+#ifndef min
+  #define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef max
+  #define max(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
+// Arduino's Serial. It keeps what the firmware printed, so a test can assert on
+// output the roles write there (the packet log dump, for example).
+class MockSerial : public Stream {
+public:
+  std::string out;
+
+  size_t write(uint8_t b) override { out.push_back((char)b); return 1; }
+
+  size_t print(const char* s) { out += s; return strlen(s); }
+  size_t print(char c) { out.push_back(c); return 1; }
+  size_t print(int v, int r = DEC) { char b[24]; snprintf(b, sizeof(b), "%d", v); out += b; return strlen(b); }
+  size_t print(unsigned int v, int r = DEC) { char b[24]; snprintf(b, sizeof(b), "%u", v); out += b; return strlen(b); }
+  size_t print(long v, int r = DEC) { char b[32]; snprintf(b, sizeof(b), "%ld", v); out += b; return strlen(b); }
+  size_t print(unsigned long v, int r = DEC) { char b[32]; snprintf(b, sizeof(b), "%lu", v); out += b; return strlen(b); }
+  size_t print(double v, int p = 2) { char b[40]; snprintf(b, sizeof(b), "%.*f", p, v); out += b; return strlen(b); }
+
+  size_t println() { out.push_back('\n'); return 1; }
+  template <typename T> size_t println(T v) { size_t n = print(v); return n + println(); }
+
+  size_t printf(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n < 0) return 0;
+    out += buf;
+    return (size_t)n;
+  }
+
+  void reset() { out.clear(); }
+};
+
+inline MockSerial Serial;

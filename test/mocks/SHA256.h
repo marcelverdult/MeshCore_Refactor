@@ -24,12 +24,24 @@ public:
     }
   }
 
-  void finalize(uint8_t* hash, size_t hashLen) {
+  void finalize(void* hash, size_t hashLen) {
+    uint8_t* out = static_cast<uint8_t*>(hash);
     for (size_t i = 0; i < hashLen; i++) {
-      hash[i] = _state[i % 32];
+      out[i] = _state[i % 32];
     }
   }
 
-  void resetHMAC(const uint8_t* key, size_t keyLen) {}
-  void finalizeHMAC(const uint8_t* key, size_t keyLen, uint8_t* hash, size_t hashLen) {}
+  // The HMAC path is what transport codes are derived from, so it has to produce
+  // deterministic output that depends on the key and the data; an empty body would
+  // leave the caller's code word uninitialised.
+  void resetHMAC(const void* key, size_t keyLen) {
+    _len = 0;
+    memset(_state, 0, sizeof(_state));
+    update(key, keyLen);
+  }
+
+  void finalizeHMAC(const void* key, size_t keyLen, void* hash, size_t hashLen) {
+    update(key, keyLen);
+    finalize(hash, hashLen);
+  }
 };
