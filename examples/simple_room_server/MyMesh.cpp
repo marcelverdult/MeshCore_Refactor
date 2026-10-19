@@ -283,7 +283,6 @@ const char *MyMesh::getLogDateTime() {
   return tmp;
 }
 
-
 bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
   if (_prefs.disable_fwd) return false;
   if (packet->isRouteFlood()
@@ -291,21 +290,6 @@ bool MyMesh::allowPacketForward(const mesh::Packet *packet) {
     return false;
   }
   return true;
-}
-
-mesh::DispatcherAction MyMesh::onRecvPacket(mesh::Packet* pkt) {
-  if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
-    recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
-  } else if (pkt->getRouteType() == ROUTE_TYPE_FLOOD) {
-    if (region_map.getWildcard().flags & REGION_DENY_FLOOD) {
-      recv_pkt_region = NULL;
-    } else {
-      recv_pkt_region =  &region_map.getWildcard();
-    }
-  } else {
-    recv_pkt_region = NULL;
-  }
-  return Mesh::onRecvPacket(pkt);
 }
 
 void MyMesh::onAnonDataRecv(mesh::Packet *packet, const uint8_t *secret, const mesh::Identity &sender,
@@ -616,8 +600,7 @@ void MyMesh::onAckRecv(mesh::Packet *packet, uint32_t ack_crc) {
 
 MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondClock &ms, mesh::RNG &rng,
                mesh::RTCClock &rtc, mesh::MeshTables &tables)
-    : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
-      region_map(key_store), temp_map(key_store),
+    : ServerMesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this),
       telemetry(MAX_PACKET_PAYLOAD - 4)
 {
@@ -627,9 +610,7 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   _logging = false;
-  region_load_active = false;
   set_radio_at = revert_radio_at = 0;
-  recv_pkt_region = NULL;
 
   // defaults
   _prefs.airtime_factor = 1.0;
@@ -678,7 +659,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   memset(posts, 0, sizeof(posts));
   _num_posted = _num_post_pushes = 0;
 
-  memset(default_scope.key, 0, sizeof(default_scope.key));
 }
 
 void MyMesh::begin(FILESYSTEM *fs) {
@@ -724,38 +704,6 @@ void MyMesh::begin(FILESYSTEM *fs) {
 #if ENV_INCLUDE_GPS == 1
   applyGpsPrefs();
 #endif
-}
-
-void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size) {
-  if (scope.isNull()) {
-    sendFlood(pkt, delay_millis, path_hash_size);
-  } else {
-    uint16_t codes[2];
-    codes[0] = scope.calcTransportCode(pkt);
-    codes[1] = 0;  // REVISIT: set to 'home' Region, for sender/return region?
-    sendFlood(pkt, codes, delay_millis, path_hash_size);
-  }
-}
-
-void MyMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size) {
-  TransportKey req_scope;
-  bool is_wildcard = recv_pkt_region != NULL && recv_pkt_region->isWildcard();
-  bool req_scope_known = recv_pkt_region != NULL && !is_wildcard
-                      && region_map.getTransportKeysFor(*recv_pkt_region, &req_scope, 1) > 0;
-
-  switch (mesh::chooseReplyScope(req_scope_known, is_wildcard, !default_scope.isNull())) {
-    case mesh::REPLY_SCOPE_REQUEST:
-      sendFloodScoped(req_scope, packet, delay_millis, path_hash_size);   // reply with same scope as request
-      break;
-    case mesh::REPLY_SCOPE_DEFAULT:
-      // requester's scope is unknown: DIRECT request (no transport codes), or code matched no Region.
-      // un-scoped would be dropped at hop 0 by repeaters running flood.max.unscoped=0
-      sendFloodScoped(default_scope, packet, delay_millis, path_hash_size);
-      break;
-    case mesh::REPLY_SCOPE_NONE:
-      sendFlood(packet, delay_millis, path_hash_size);   // send un-scoped
-      break;
-  }
 }
 
 void MyMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) {
@@ -844,25 +792,6 @@ void MyMesh::saveIdentity(const mesh::LocalIdentity &new_id) {
 #error "need to define saveIdentity()"
 #endif
   store.save("_main", new_id);
-}
-
-void MyMesh::startRegionsLoad() {
-  temp_map.resetFrom(region_map);   // rebuild regions in a temp instance
-  memset(load_stack, 0, sizeof(load_stack));
-  load_stack[0] = &temp_map.getWildcard();
-  region_load_active = true;
-}
-
-bool MyMesh::saveRegions() {
-  return region_map.save(_fs);
-}
-
-void MyMesh::onDefaultRegionChanged(const RegionEntry* r) {
-  if (r) {
-    region_map.getTransportKeysFor(*r, &default_scope, 1);
-  } else {
-    memset(default_scope.key, 0, sizeof(default_scope.key));
-  }
 }
 
 void MyMesh::clearStats() {

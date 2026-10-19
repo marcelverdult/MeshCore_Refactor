@@ -21,6 +21,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/ClientACL.h>
 #include <helpers/RegionMap.h>
+#include <helpers/ServerMesh.h>
 #include <helpers/RoutingPolicy.h>
 #include <RTClib.h>
 #include <target.h>
@@ -89,16 +90,12 @@ struct PostInfo {
   char text[MAX_POST_TEXT_LEN+1];
 };
 
-class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
-  FILESYSTEM* _fs;
+class MyMesh : public ServerMesh {
   uint32_t last_millis;
   uint64_t uptime_millis;
   unsigned long next_local_advert, next_flood_advert;
   bool _logging;
-  bool region_load_active;
   NodePrefs _prefs;
-  TransportKeyStore key_store;
-  RegionMap region_map, temp_map;
   ClientACL acl;
   CommonCLI _cli;
   unsigned long dirty_contacts_expiry;
@@ -109,9 +106,6 @@ class MyMesh : public mesh::Mesh, public CommonCLICallbacks {
   int next_post_idx;
   PostInfo posts[MAX_UNSYNCED_POSTS];   // cyclic queue
   CayenneLPP telemetry;
-  RegionEntry* load_stack[8];
-  RegionEntry* recv_pkt_region;
-  TransportKey default_scope;
   unsigned long set_radio_at, revert_radio_at;
   float pending_freq;
   float pending_bw;
@@ -136,9 +130,6 @@ protected:
 
   const char* getLogDateTime() override;
 
-
-  mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
-
   bool allowPacketForward(const mesh::Packet* packet) override;
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
   int searchPeersByHash(const uint8_t* hash) override ;
@@ -152,8 +143,6 @@ protected:
     sensors.setSettingValue("gps", _prefs.gps_enabled?"1":"0");
   }
 #endif
-
-  void sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size);
 
 public:
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
@@ -172,8 +161,6 @@ public:
   void savePrefs() override {
     _cli.savePrefs(_fs);
   }
-
-  void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
 
   // CommonCLICallbacks
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
@@ -198,9 +185,6 @@ public:
   void formatStatsReply(char *reply) override;
   void formatRadioStatsReply(char *reply) override;
   void formatPacketStatsReply(char *reply) override;
-  void startRegionsLoad() override;
-  bool saveRegions() override;
-  void onDefaultRegionChanged(const RegionEntry* r) override;
 
   mesh::LocalIdentity& getSelfId() override { return self_id; }
 

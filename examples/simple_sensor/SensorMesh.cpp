@@ -330,25 +330,6 @@ uint8_t SensorMesh::getExtraAckTransmitCount() const {
   return 0;   // the sensor has never sent extra ACKs, whatever multi.acks says
 }
 
-void SensorMesh::startRegionsLoad() {
-  temp_map.resetFrom(region_map);   // rebuild regions in a temp instance
-  memset(load_stack, 0, sizeof(load_stack));
-  load_stack[0] = &temp_map.getWildcard();
-  region_load_active = true;
-}
-
-bool SensorMesh::saveRegions() {
-  return region_map.save(_fs);
-}
-
-void SensorMesh::onDefaultRegionChanged(const RegionEntry* r) {
-  if (r) {
-    region_map.getTransportKeysFor(*r, &default_scope, 1);
-  } else {
-    memset(default_scope.key, 0, sizeof(default_scope.key));
-  }
-}
-
 uint8_t SensorMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood) {
   ClientInfo* client;
   if (data[0] == 0) {   // blank password, just check if sender is in ACL
@@ -503,21 +484,6 @@ void SensorMesh::handleCommand(ClientInfo* from, uint32_t sender_timestamp, char
   } else{
     _cli.handleCommand(sender_timestamp, command, reply);  // common CLI commands
   }
-}
-
-mesh::DispatcherAction SensorMesh::onRecvPacket(mesh::Packet* pkt) {
-  if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
-    recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
-  } else if (pkt->getRouteType() == ROUTE_TYPE_FLOOD) {
-    if (region_map.getWildcard().flags & REGION_DENY_FLOOD) {
-      recv_pkt_region = NULL;
-    } else {
-      recv_pkt_region =  &region_map.getWildcard();
-    }
-  } else {
-    recv_pkt_region = NULL;
-  }
-  return Mesh::onRecvPacket(pkt);
 }
 
 void SensorMesh::onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) {
@@ -767,8 +733,7 @@ void SensorMesh::onAckRecv(mesh::Packet* packet, uint32_t ack_crc) {
 }
 
 SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables)
-     : mesh::Mesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
-      region_map(key_store), temp_map(key_store),
+     : ServerMesh(radio, ms, rng, rtc, *new StaticPoolPacketManager(32), tables),
       _cli(board, rtc, sensors, region_map, acl, &_prefs, this),
       telemetry(MAX_PACKET_PAYLOAD - 4)
 {
@@ -778,8 +743,6 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   last_read_time = 0;
   num_alert_tasks = 0;
   set_radio_at = revert_radio_at = 0;
-  recv_pkt_region = NULL;
-  region_load_active = false;
 
   // defaults
   _prefs.airtime_factor = 1.0;
@@ -809,7 +772,6 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.radio_fem_rxgain = 1;
   _prefs.radio_fem_txgain = 0;
 
-  memset(default_scope.key, 0, sizeof(default_scope.key));
 }
 
 void SensorMesh::begin(FILESYSTEM* fs) {
@@ -890,38 +852,6 @@ void SensorMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t 
   pending_cr = cr;
 
   revert_radio_at = futureMillis(2000 + timeout_mins*60*1000);   // schedule when to revert radio params
-}
-
-void SensorMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size) {
-  if (scope.isNull()) {
-    sendFlood(pkt, delay_millis, path_hash_size);
-  } else {
-    uint16_t codes[2];
-    codes[0] = scope.calcTransportCode(pkt);
-    codes[1] = 0;  // REVISIT: set to 'home' Region, for sender/return region?
-    sendFlood(pkt, codes, delay_millis, path_hash_size);
-  }
-}
-
-void SensorMesh::sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size) {
-  TransportKey req_scope;
-  bool is_wildcard = recv_pkt_region != NULL && recv_pkt_region->isWildcard();
-  bool req_scope_known = recv_pkt_region != NULL && !is_wildcard
-                      && region_map.getTransportKeysFor(*recv_pkt_region, &req_scope, 1) > 0;
-
-  switch (mesh::chooseReplyScope(req_scope_known, is_wildcard, !default_scope.isNull())) {
-    case mesh::REPLY_SCOPE_REQUEST:
-      sendFloodScoped(req_scope, packet, delay_millis, path_hash_size);   // reply with same scope as request
-      break;
-    case mesh::REPLY_SCOPE_DEFAULT:
-      // requester's scope is unknown: DIRECT request (no transport codes), or code matched no Region.
-      // un-scoped would be dropped at hop 0 by repeaters running flood.max.unscoped=0
-      sendFloodScoped(default_scope, packet, delay_millis, path_hash_size);
-      break;
-    case mesh::REPLY_SCOPE_NONE:
-      sendFlood(packet, delay_millis, path_hash_size);   // send un-scoped
-      break;
-  }
 }
 
 void SensorMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
