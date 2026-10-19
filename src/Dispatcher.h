@@ -3,6 +3,7 @@
 #include <MeshCore.h>
 #include <Identity.h>
 #include <Packet.h>
+#include <RadioPrefsFields.h>
 #include <Utils.h>
 #include <string.h>
 
@@ -137,9 +138,10 @@ protected:
   Radio* _radio;
   MillisecondClock* _ms;
   uint16_t _err_flags;
+  const RadioPrefsFields* _radio_prefs;   // see useRadioPrefs(); NULL = built-in tuning defaults
 
   Dispatcher(Radio& radio, MillisecondClock& ms, PacketManager& mgr)
-    : _radio(&radio), _ms(&ms), _mgr(&mgr)
+    : _radio(&radio), _ms(&ms), _mgr(&mgr), _radio_prefs(NULL)
   {
     outbound = NULL;
     total_air_time = rx_air_time = 0;
@@ -163,18 +165,36 @@ protected:
   virtual void logTxFail(Packet* packet, int len) { }
   virtual const char* getLogDateTime() { return ""; }
 
-  virtual float getAirtimeBudgetFactor() const;
-  virtual int calcRxDelay(float score, uint32_t air_time) const;
+  // Tuning hooks. Once settings are attached with useRadioPrefs(), the implementations
+  // below read them; without settings they return the built-in defaults noted here.
+  // Subclasses can still override any of them.
+  virtual float getAirtimeBudgetFactor() const;    // default: 1.0
+  virtual int calcRxDelay(float score, uint32_t air_time) const;    // default: base 10
   virtual uint32_t getCADFailRetryDelay() const;
   virtual uint32_t getCADFailMaxDuration() const;
-  virtual int getInterferenceThreshold() const { return 0; }    // disabled by default
-  virtual bool getCADEnabled() const { return false; }    // hardware CAD disabled by default
-  virtual int getAGCResetInterval() const { return 0; }    // disabled by default
+  virtual int getInterferenceThreshold() const {    // default: disabled
+    return _radio_prefs ? _radio_prefs->interference_threshold : 0;
+  }
+  virtual bool getCADEnabled() const {    // default: hardware CAD disabled
+    return _radio_prefs ? _radio_prefs->cad_enabled : false;
+  }
+  virtual int getAGCResetInterval() const {    // milliseconds, default: disabled
+    return _radio_prefs ? ((int)_radio_prefs->agc_reset_interval) * 4000 : 0;
+  }
   virtual unsigned long getDutyCycleWindowMs() const { return 3600000; }
 
 public:
   void begin();
   void loop();
+
+  /**
+   * \brief  Attaches the node's radio settings. From then on the tuning hooks
+   *         (duty cycle budget, RX delay, interference threshold, CAD, AGC reset, and in
+   *         Mesh the retransmit delays and extra ACKs) read their values from `prefs` at
+   *         the time of each call, so changes made through the CLI apply right away.
+   *         `prefs` must outlive this object. Without it the built-in defaults apply.
+   */
+  void useRadioPrefs(const RadioPrefsFields* prefs) { _radio_prefs = prefs; }
 
   Packet* obtainNewPacket();
   void releasePacket(Packet* packet);

@@ -1,6 +1,7 @@
-// Characterization tests for the tuning hooks of mesh::Dispatcher and mesh::Mesh:
-// the values the core uses for duty cycle, RX delay, retransmit delays, extra ACKs,
-// interference threshold, CAD and AGC reset when no role overrides them. They run
+// Tests for the tuning hooks of mesh::Dispatcher and mesh::Mesh: the values the
+// core uses for duty cycle, RX delay, retransmit delays, extra ACKs, interference
+// threshold, CAD and AGC reset when no role overrides them, without and with radio
+// settings attached through useRadioPrefs(). They run
 // the real Dispatcher.cpp and Mesh.cpp against fakes for the radio, clock, RNG,
 // packet manager and tables.
 
@@ -156,6 +157,112 @@ TEST(CoreTuningDefaults, RetransmitDelaysUseRawLength) {
     }
     EXPECT_EQ(0u, h.mesh.getDirectRetransmitDelay(&pkt));
   }
+}
+
+// With settings attached, the core returns what the role overrides of the repeater,
+// room server and companion returned in v1.18.0 (all three were identical), e.g.
+// examples/simple_repeater/MyMesh.h:131-158 and MyMesh.cpp:542-554.
+namespace {
+
+RadioPrefsFields makePrefs(float af, float rx_base, float tx_f, float direct_f,
+                           uint8_t thr, uint8_t agc, uint8_t cad, uint8_t acks) {
+  RadioPrefsFields p;
+  p.airtime_factor = af;
+  p.rx_delay_base = rx_base;
+  p.tx_delay_factor = tx_f;
+  p.direct_tx_delay_factor = direct_f;
+  p.interference_threshold = thr;
+  p.agc_reset_interval = agc;
+  p.cad_enabled = cad;
+  p.multi_acks = acks;
+  return p;
+}
+
+// v1.18.0 role override: calcRxDelay()
+int roleRxDelay(const RadioPrefsFields& prefs, float score, uint32_t air_time) {
+  if (prefs.rx_delay_base <= 0.0f) return 0;
+  return (int)((pow(prefs.rx_delay_base, 0.85f - score) - 1.0) * air_time);
+}
+
+// v1.18.0 role override: getRetransmitDelay() / getDirectRetransmitDelay()
+uint32_t roleRetransmitDelay(mesh::Radio& radio, mesh::RNG& rng, const mesh::Packet& pkt, float factor) {
+  uint32_t t = (radio.getEstAirtimeFor(pkt.getPathByteLen() + pkt.payload_len + 2) * factor);
+  return rng.nextInt(0, 5*t + 1);
+}
+
+const RadioPrefsFields kPrefsSets[] = {
+  makePrefs(1.0f, 0.0f, 0.5f, 0.2f, 0, 0, 0, 0),     // typical repeater defaults
+  makePrefs(2.0f, 3.25f, 0.75f, 0.3f, 14, 5, 1, 1),
+  makePrefs(9.0f, 20.0f, 2.0f, 2.0f, 255, 255, 1, 2),
+  makePrefs(0.0f, -1.0f, 0.0f, 0.0f, 1, 1, 0, 0),
+};
+
+}  // namespace
+
+TEST(CoreTuningWithPrefs, DutyCycleInterferenceCadAgcAndAcks) {
+  for (const RadioPrefsFields& prefs : kPrefsSets) {
+    Harness h;
+    h.mesh.useRadioPrefs(&prefs);
+    EXPECT_FLOAT_EQ(prefs.airtime_factor, h.mesh.getAirtimeBudgetFactor());
+    EXPECT_EQ((int)prefs.interference_threshold, h.mesh.getInterferenceThreshold());
+    EXPECT_EQ((bool)prefs.cad_enabled, h.mesh.getCADEnabled());
+    EXPECT_EQ(((int)prefs.agc_reset_interval) * 4000, h.mesh.getAGCResetInterval());
+    EXPECT_EQ(prefs.multi_acks, h.mesh.getExtraAckTransmitCount());
+  }
+}
+
+TEST(CoreTuningWithPrefs, RxDelayMatchesTheRoleFormula) {
+  for (const RadioPrefsFields& prefs : kPrefsSets) {
+    Harness h;
+    h.mesh.useRadioPrefs(&prefs);
+    for (float score : {0.0f, 0.3f, 0.85f, 1.0f}) {
+      for (uint32_t air : {0u, 100u, 1234u, 60000u}) {
+        EXPECT_EQ(roleRxDelay(prefs, score, air), h.mesh.calcRxDelay(score, air))
+            << "rx_delay_base " << prefs.rx_delay_base << " score " << score << " air " << air;
+      }
+    }
+  }
+}
+
+TEST(CoreTuningWithPrefs, RetransmitDelaysMatchTheRoleFormula) {
+  for (mesh::Packet pkt : makePackets()) {
+    for (const RadioPrefsFields& prefs : kPrefsSets) {
+      Harness h;
+      h.mesh.useRadioPrefs(&prefs);
+      SequenceRNG expected_rng(kRandom);
+      for (size_t i = 0; i < kRandom.size(); i++) {
+        EXPECT_EQ(roleRetransmitDelay(h.radio, expected_rng, pkt, prefs.tx_delay_factor), h.mesh.getRetransmitDelay(&pkt));
+        EXPECT_EQ(roleRetransmitDelay(h.radio, expected_rng, pkt, prefs.direct_tx_delay_factor), h.mesh.getDirectRetransmitDelay(&pkt));
+      }
+    }
+  }
+}
+
+// The roles read their prefs on every call, so a CLI change applied immediately.
+// The core keeps that: it holds a pointer, not a copy.
+TEST(CoreTuningWithPrefs, ChangesApplyImmediately) {
+  RadioPrefsFields prefs = kPrefsSets[0];
+  Harness h;
+  h.mesh.useRadioPrefs(&prefs);
+  EXPECT_FALSE(h.mesh.getCADEnabled());
+  prefs.cad_enabled = 1;
+  prefs.airtime_factor = 4.0f;
+  prefs.multi_acks = 1;
+  EXPECT_TRUE(h.mesh.getCADEnabled());
+  EXPECT_FLOAT_EQ(4.0f, h.mesh.getAirtimeBudgetFactor());
+  EXPECT_EQ(1, h.mesh.getExtraAckTransmitCount());
+}
+
+// Detaching the settings returns to the built-in defaults.
+TEST(CoreTuningWithPrefs, DetachingRestoresTheDefaults) {
+  RadioPrefsFields prefs = kPrefsSets[1];
+  Harness h;
+  h.mesh.useRadioPrefs(&prefs);
+  h.mesh.useRadioPrefs(NULL);
+  EXPECT_FLOAT_EQ(1.0f, h.mesh.getAirtimeBudgetFactor());
+  EXPECT_EQ(6079, h.mesh.calcRxDelay(0.0f, 1000));
+  EXPECT_FALSE(h.mesh.getCADEnabled());
+  EXPECT_EQ(0, h.mesh.getExtraAckTransmitCount());
 }
 
 int main(int argc, char** argv) {

@@ -120,14 +120,12 @@ protected:
   virtual bool handleCustomCommand(uint32_t sender_timestamp, char* command, char* reply) { return false; }
 
   // Mesh overrides
-  float getAirtimeBudgetFactor() const override;
   bool allowPacketForward(const mesh::Packet* packet) override;
-  int calcRxDelay(float score, uint32_t air_time) const override;
+  // The sensor keeps its own retransmit delays and sends no extra ACKs, unlike the
+  // other roles; aligning it would change its behaviour (see docs/refactoring).
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
-  int getInterferenceThreshold() const override;
-  bool getCADEnabled() const override;
-  int getAGCResetInterval() const override;
+  uint8_t getExtraAckTransmitCount() const override;
   mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
   int searchPeersByHash(const uint8_t* hash) override;

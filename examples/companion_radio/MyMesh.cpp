@@ -259,34 +259,6 @@ int MyMesh::getFromOfflineQueue(uint8_t frame[]) {
   return 0; // queue is empty
 }
 
-float MyMesh::getAirtimeBudgetFactor() const {
-  return _prefs.airtime_factor;
-}
-
-int MyMesh::getInterferenceThreshold() const {
-  return _prefs.interference_threshold;
-}
-bool MyMesh::getCADEnabled() const {
-  return _prefs.cad_enabled;
-}
-
-int MyMesh::calcRxDelay(float score, uint32_t air_time) const {
-  if (_prefs.rx_delay_base <= 0.0f) return 0;
-  return (int)((pow(_prefs.rx_delay_base, 0.85f - score) - 1.0) * air_time);
-}
-
-uint32_t MyMesh::getRetransmitDelay(const mesh::Packet *packet) {
-  uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.tx_delay_factor);
-  return getRNG()->nextInt(0, 5*t + 1);
-}
-uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
-  uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.direct_tx_delay_factor);
-  return getRNG()->nextInt(0, 5*t + 1);
-}
-
-uint8_t MyMesh::getExtraAckTransmitCount() const {
-  return _prefs.multi_acks;
-}
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
@@ -900,6 +872,7 @@ void MyMesh::onSendTimeout() {}
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _listener(NULL), _iter(0) {
+  useRadioPrefs(&_prefs);   // the core reads its tuning (delays, duty cycle, CAD, AGC, extra ACKs) from these settings
   _iter_started = false;
   _cli_rescue = false;
   cli_command[0] = 0;
