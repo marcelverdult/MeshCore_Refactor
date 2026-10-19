@@ -826,7 +826,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
   useRadioPrefs(&_prefs);   // the core reads its tuning (delays, duty cycle, CAD, AGC, extra ACKs) from these settings
   last_millis = 0;
   uptime_millis = 0;
-  next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   set_radio_at = revert_radio_at = 0;
   _logging = false;
@@ -964,35 +963,6 @@ bool MyMesh::formatFileSystem() {
 #error "need to implement file system erase"
   return false;
 #endif
-}
-
-void MyMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
-  mesh::Packet *pkt = createSelfAdvert();
-  if (pkt) {
-    if (flood) {
-      sendFloodScoped(default_scope, pkt, delay_millis, _prefs.path_hash_mode + 1);
-    } else {
-      sendZeroHop(pkt, delay_millis);
-    }
-  } else {
-    MESH_DEBUG_PRINTLN("ERROR: unable to create advertisement packet!");
-  }
-}
-
-void MyMesh::updateAdvertTimer() {
-  if (_prefs.advert_interval > 0) { // schedule local advert timer
-    next_local_advert = futureMillis(((uint32_t)_prefs.advert_interval) * 2 * 60 * 1000);
-  } else {
-    next_local_advert = 0; // stop the timer
-  }
-}
-
-void MyMesh::updateFloodAdvertTimer() {
-  if (_prefs.flood_advert_interval > 0) { // schedule flood advert timer
-    next_flood_advert = futureMillis(((uint32_t)_prefs.flood_advert_interval) * 60 * 60 * 1000);
-  } else {
-    next_flood_advert = 0; // stop the timer
-  }
 }
 
 void MyMesh::dumpLogFile() {

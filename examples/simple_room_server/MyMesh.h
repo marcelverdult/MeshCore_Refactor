@@ -93,9 +93,7 @@ struct PostInfo {
 class MyMesh : public ServerMesh {
   uint32_t last_millis;
   uint64_t uptime_millis;
-  unsigned long next_local_advert, next_flood_advert;
   bool _logging;
-  NodePrefs _prefs;
   ClientACL acl;
   CommonCLI _cli;
   unsigned long dirty_contacts_expiry;
@@ -118,7 +116,7 @@ class MyMesh : public ServerMesh {
   void pushPostToClient(ClientInfo* client, PostInfo& post);
   uint8_t getUnsyncedCount(ClientInfo* client);
   bool processAck(const uint8_t *data);
-  mesh::Packet* createSelfAdvert();
+  mesh::Packet* createSelfAdvert() override;
   File openAppend(const char* fname);
   int handleRequest(ClientInfo* sender, uint32_t sender_timestamp, uint8_t* payload, size_t payload_len);
 
@@ -165,9 +163,6 @@ public:
   // CommonCLICallbacks
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
   bool formatFileSystem() override;
-  void sendSelfAdvertisement(int delay_millis, bool flood) override;
-  void updateAdvertTimer() override;
-  void updateFloodAdvertTimer() override;
 
   void setLoggingOn(bool enable) override { _logging = enable; }
 

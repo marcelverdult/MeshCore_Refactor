@@ -82,9 +82,7 @@ struct NeighbourInfo {
 class MyMesh : public ServerMesh {
   uint32_t last_millis;
   uint64_t uptime_millis;
-  unsigned long next_local_advert, next_flood_advert;
   bool _logging;
-  NodePrefs _prefs;
   ClientACL  acl;
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
@@ -116,7 +114,7 @@ class MyMesh : public ServerMesh {
   uint8_t handleAnonOwnerReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data);
   uint8_t handleAnonClockReq(const mesh::Identity& sender, uint32_t sender_timestamp, const uint8_t* data);
   int handleRequest(ClientInfo* sender, uint32_t sender_timestamp, uint8_t* payload, size_t payload_len);
-  mesh::Packet* createSelfAdvert();
+  mesh::Packet* createSelfAdvert() override;
 
   File openAppend(const char* fname);
   bool isLooped(const mesh::Packet* packet, const uint8_t max_counters[]);
@@ -167,9 +165,6 @@ public:
   // CommonCLICallbacks
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
   bool formatFileSystem() override;
-  void sendSelfAdvertisement(int delay_millis, bool flood) override;
-  void updateAdvertTimer() override;
-  void updateFloodAdvertTimer() override;
 
   void setLoggingOn(bool enable) override { _logging = enable; }
 

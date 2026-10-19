@@ -62,9 +62,6 @@ public:
   NodePrefs* getNodePrefs() { return &_prefs; }
   void savePrefs() override { _cli.savePrefs(_fs); }
   bool formatFileSystem() override;
-  void sendSelfAdvertisement(int delay_millis, bool flood) override;
-  void updateAdvertTimer() override;
-  void updateFloodAdvertTimer() override;
   void setLoggingOn(bool enable) override {  }
   void eraseLogFile() override { }
   void dumpLogFile() override { }
@@ -132,8 +129,6 @@ protected:
   virtual bool handleIncomingMsg(ClientInfo& from, uint32_t timestamp, uint8_t* data, uint8_t flags, size_t len);
   void sendAckTo(const ClientInfo& dest, uint32_t ack_hash, uint8_t path_hash_size=1);
 private:
-  unsigned long next_local_advert, next_flood_advert;
-  NodePrefs _prefs;
   ClientACL  acl;
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
@@ -152,7 +147,7 @@ private:
   bool telemHasChanged(ClientInfo* c);
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood);
   uint8_t handleRequest(ClientInfo* from, uint32_t sender_timestamp, uint8_t req_type, uint8_t* payload, size_t payload_len);
-  mesh::Packet* createSelfAdvert();
+  mesh::Packet* createSelfAdvert() override;
 
   void sendAlert(const ClientInfo* c, Trigger* t);
 

@@ -738,7 +738,6 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
       telemetry(MAX_PACKET_PAYLOAD - 4)
 {
   useRadioPrefs(&_prefs);   // the core reads its tuning (delays, duty cycle, CAD, AGC, extra ACKs) from these settings
-  next_local_advert = next_flood_advert = 0;
   dirty_contacts_expiry = 0;
   last_read_time = 0;
   num_alert_tasks = 0;
@@ -852,34 +851,6 @@ void SensorMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t 
   pending_cr = cr;
 
   revert_radio_at = futureMillis(2000 + timeout_mins*60*1000);   // schedule when to revert radio params
-}
-
-void SensorMesh::sendSelfAdvertisement(int delay_millis, bool flood) {
-  mesh::Packet* pkt = createSelfAdvert();
-  if (pkt) {
-    if (flood) {
-      sendFloodScoped(default_scope, pkt, delay_millis, _prefs.path_hash_mode + 1);
-    } else {
-      sendZeroHop(pkt, delay_millis);
-    }
-  } else {
-    MESH_DEBUG_PRINTLN("ERROR: unable to create advertisement packet!");
-  }
-}
-
-void SensorMesh::updateAdvertTimer() {
-  if (_prefs.advert_interval > 0) {  // schedule local advert timer
-    next_local_advert = futureMillis( ((uint32_t)_prefs.advert_interval) * 2 * 60 * 1000);
-  } else {
-    next_local_advert = 0;  // stop the timer
-  }
-}
-void SensorMesh::updateFloodAdvertTimer() {
-  if (_prefs.flood_advert_interval > 0) {  // schedule flood advert timer
-    next_flood_advert = futureMillis( ((uint32_t)_prefs.flood_advert_interval) * 60 * 60 * 1000);
-  } else {
-    next_flood_advert = 0;  // stop the timer
-  }
 }
 
 void SensorMesh::setTxPower(int8_t power_dbm) {
