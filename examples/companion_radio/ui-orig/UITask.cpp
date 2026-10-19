@@ -52,7 +52,10 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   // strip off dash and commit hash by changing dash to null terminator
   // e.g: v1.2.3-abcdef -> v1.2.3
-  char *version = strdup(FIRMWARE_VERSION);
+  // A local copy, because this runs once at boot and the strdup it replaces was
+  // never freed; the buffer only has to outlive the sprintf below.
+  char version[sizeof(_version_info)];
+  StrHelper::strzcpy(version, FIRMWARE_VERSION, sizeof(version));
   char *dash = strchr(version, '-');
   if (dash) {
     *dash = 0;

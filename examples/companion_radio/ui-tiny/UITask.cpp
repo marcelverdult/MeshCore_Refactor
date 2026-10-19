@@ -446,8 +446,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
   if (_display != NULL) {
     _display->turnOn();
+    _statusBar.begin(_display->width());   // only ever drawn through *_display, see loop()
   }
-  _statusBar.begin(_display->width());
 
 
 #ifdef PIN_BUZZER
