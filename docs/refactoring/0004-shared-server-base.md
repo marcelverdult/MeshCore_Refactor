@@ -182,6 +182,72 @@ What is still shared between all three roles, and why it stayed:
 - `onPeerPathRecv()` is 90 percent shared between the repeater and the room server
   but only about 30 percent with the sensor, so it was never part of this cut.
 
+## The build matrix
+
+Run on 20 October, all 18 environments in two worktrees on the exact commits, same
+toolchain, sequentially. **36 of 36 builds succeeded, none failed.** Measured against
+the series base `98ffa5c1`, so the numbers isolate steps 4a to 4e; the state measured
+also carried both parts of the sensor alignment, which is the content of
+`refactor/sensor-flood-limits`.
+
+| environment | RAM | delta | Flash | delta |
+|---|---|---|---|---|
+| `Heltec_v3_repeater` | 62512 | +0 | 1173301 | +552 |
+| `Heltec_v3_room_server` | 66200 | +0 | 1168625 | +528 |
+| `Heltec_v3_companion_radio_ble` | 194844 | +0 | 1665389 | +616 |
+| `Heltec_v3_companion_radio_wifi` | 172384 | +0 | 1101561 | +616 |
+| `Heltec_v3_sensor` | 60568 | +32 | 1179737 | +664 |
+| `RAK_4631_repeater` | 37240 | +0 | 440520 | +336 |
+| `RAK_4631_room_server` | 40928 | +0 | 433704 | +336 |
+| `RAK_4631_companion_radio_ble` | 149768 | +0 | 462196 | +0 |
+| `RAK_4631_sensor` | 35296 | +32 | 437416 | +256 |
+| `PicoW_repeater` | 85368 | +0 | 491244 | +912 |
+| `wio-e5-mini_repeater` | 17172 | +0 | 202944 | +664 |
+| `wio-e5-mini_sensor` | 15244 | +32 | 202424 | +688 |
+| `RAK_3112_repeater_bridge_espnow` | 64080 | -8 | 1174609 | +516 |
+| `waveshare_rp2040_lora_repeater_bridge_rs232` | 26704 | +0 | 239648 | +920 |
+| `ProMicro_repeater` | 33892 | +0 | 345008 | +304 |
+| `ProMicro_room_server` | 37588 | +0 | 338072 | +352 |
+| `ProMicro_companion_radio_usb` | 99468 | +0 | 356964 | +0 |
+| `ProMicro_sensor` | 31956 | +32 | 341772 | +240 |
+
+### What those numbers mean, and what they do not
+
+The flash column mixes two things, so it is an upper bound rather than a measure of
+added code. Separating them with the section sizes, on the Heltec v3 family:
+
+| environment | `.flash.text` | `.flash.rodata` | `.dram0.bss` |
+|---|---|---|---|
+| `Heltec_v3_repeater` | +316 | +236 | 0 |
+| `Heltec_v3_room_server` | +292 | +236 | 0 |
+| `Heltec_v3_sensor` | +372 | +292 | +32 |
+| `Heltec_v3_companion_radio_ble` | **0** | +616 | 0 |
+
+- **The three server roles gained real code**, about 300 to 370 bytes of text each.
+  That is the price of the refactoring: calls that went straight into the role now
+  go through the base, and some of them virtually.
+- **The companion gained no code at all.** Its `.flash.text` is byte for byte
+  identical, which is what it should be: a companion build compiles
+  `examples/companion_radio/`, and nothing it compiles changed. Its `.flash.rodata`
+  still moved by 616 bytes, more than any role's did, and the only semantic
+  difference between the two binaries is the build timestamp. That is linker layout,
+  caused by one more object file in the link; `ServerMesh` itself is absent from the
+  companion image (checked with `nm`: 37 symbols in the repeater, 0 in the
+  companion). Two of the four companion environments report +0 flash, which fits.
+- So of the flash deltas in the first table, roughly 240 to 370 bytes per server role
+  is code and the rest is layout, and for every non-role environment all of it is
+  layout.
+
+### The RAM figures
+
+`+32` on each of the four sensor environments, `+0` everywhere else but one. The
+sensor's is exact and expected: step 4e replaced its 24 entry peer index array with
+one sized `MAX_CLIENTS`, which is 32, so 8 more ints at 4 bytes each. That is the
+cost of the sensor no longer truncating its peer search at 24 matches.
+
+`RAK_3112_repeater_bridge_espnow` reports **-8** bytes of RAM. Not explained;
+most likely padding after the fields moved into the base. Noted rather than claimed.
+
 ## Verification of the steps
 
 Marcel's decision of 19 October: the 18 environment build matrix and the flash and
