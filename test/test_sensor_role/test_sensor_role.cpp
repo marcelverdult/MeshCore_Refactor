@@ -8,6 +8,9 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+#include <vector>
+
 #include <Arduino.h>
 #include <target.h>
 #include <helpers/ArduinoHelpers.h>
@@ -86,12 +89,16 @@ static mesh::Packet floodPacketWithHops(uint8_t route_type, uint8_t hops) {
   return pkt;
 }
 
-TEST_F(SensorRoleTest, MultiAcksHasNoEffectToday) {
-  // The CLI accepts and stores the setting, and SensorMesh::sendAckTo() even has a
-  // branch guarded by it, but the role never reports a count, so the branch is dead.
+TEST_F(SensorRoleTest, MultiAcksTakesEffect) {
+  // Was: the role reported no count whatever the setting said, so the branch in
+  // SensorMesh::sendAckTo() was dead and 'set multi.acks on' did nothing. The
+  // override is gone, so the core reports the stored setting as it does for the
+  // other two roles.
   mesh->prefs()->multi_acks = 1;
+  EXPECT_EQ(mesh->extraAcks(), 1);
 
-  EXPECT_EQ(mesh->extraAcks(), 0) << "today the sensor sends no extra ACKs";
+  mesh->prefs()->multi_acks = 0;
+  EXPECT_EQ(mesh->extraAcks(), 0) << "and off still means off";
 }
 
 TEST_F(SensorRoleTest, OnlyFloodMaxIsAppliedToday) {
@@ -125,12 +132,32 @@ TEST_F(SensorRoleTest, ForwardingCanBeTurnedOffEntirely) {
   EXPECT_FALSE(mesh->forwards(&pkt));
 }
 
-TEST_F(SensorRoleTest, TheBoostedGainPrefIsNotAppliedAtBootToday) {
-  // begin() has already run in SetUp(). The other two roles push the stored value
-  // to the radio there; the sensor does not, so a value set over the CLI is applied
-  // at once but is gone after a reboot.
-  EXPECT_EQ(radio_driver.rx_boost_calls, 0) << "today the sensor applies nothing";
-  EXPECT_EQ(mesh->prefs()->rx_boosted_gain, 0) << "and leaves the pref at zero";
+TEST_F(SensorRoleTest, TheBoostedGainPrefIsAppliedAtBoot) {
+  // Was: the sensor pushed nothing to the radio in begin(), so a value set over the
+  // CLI applied at once and was gone after a reboot. begin() has already run in
+  // SetUp(), so the call must have happened by now.
+  EXPECT_EQ(radio_driver.rx_boost_calls, 1);
+
+  // The pref itself is only defaulted on SX1262 and SX1268 builds, which this host
+  // environment is not, so it stays at zero here and the applied value is zero.
+  EXPECT_EQ(mesh->prefs()->rx_boosted_gain, 0);
+  EXPECT_FALSE(radio_driver.rx_boosted);
+}
+
+TEST_F(SensorRoleTest, AStoredBoostedGainSurvivesAReboot) {
+  // The point of applying it in begin(): the value has to reach the radio again
+  // after a restart, not only when the command is given.
+  const char* stored = "{radio:{rxgain:1}}";
+  const std::string text(stored);
+  fs.files["/prefs.json"] = std::vector<uint8_t>(text.begin(), text.end());
+
+  radio_driver.reset();
+  TestSensor rebooted(board, radio_driver, ms, rng, rtc_clock, tables);
+  rebooted.begin(&fs);
+
+  EXPECT_EQ(rebooted.prefs()->rx_boosted_gain, 1);
+  EXPECT_EQ(radio_driver.rx_boost_calls, 1);
+  EXPECT_TRUE(radio_driver.rx_boosted) << "the stored setting reached the radio";
 }
 
 TEST_F(SensorRoleTest, TheRetransmitDelayDrawsFromSixDiscreteSlots) {
