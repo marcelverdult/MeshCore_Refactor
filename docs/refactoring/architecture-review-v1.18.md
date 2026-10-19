@@ -65,6 +65,32 @@ The copies have drifted (found by reading the code, not reproduced on hardware):
 - The sensor does not override `getExtraAckTransmitCount()`, whose base returns 0
   (`src/Mesh.cpp:25`), so `set multi.acks` is accepted but has no effect there.
 
+Since step 2 the sensor states this explicitly (`getExtraAckTransmitCount()`
+returning 0 with a comment), so the gap is documented rather than accidental, and
+`SensorMesh::sendAckTo()` still carries a branch that the base's 0 makes
+unreachable.
+
+#### Why the sensor drifted
+
+Checked with `git log -S` and the commit history of `upstream/dev` 428a95c6 before
+deciding whether to align the sensor. No deviation has a role specific reason such
+as battery life. Each one is a change that reached the repeater and the room server
+and skipped the sensor. The history below is from the commits; the run time effects
+are read from the source and not reproduced on a board:
+
+| deviation | history |
+|---|---|
+| Retransmit delay `nextInt(0, 6)*t` | The sensor sketch copied it verbatim from the repeater at its birth (`7fb7b69b`, 7 July 2025, where the repeater had the same line). The repeater and the room server left the six slot scheme in `8cbcd227` (29 October 2025), whose subject calls itself experimental, and got the divide by zero fix `96e786fa` a day later. The sensor keeps the old shared behaviour. The lines were touched once more, in `3e76161e` (19 February 2026, `path_len` to `getPathByteLen()`), in all three roles including the sensor, so only the formula itself was never revisited. |
+| Flood limits only `flood_max` | `fad11c90` (3 August 2026) moved the repeater and the room server to `mesh::isFloodHopLimitExceeded()`, with the shared helper in `src/helpers/RoutingPolicy.h` and `test/test_routing_policy`. The sensor was not touched. |
+| `multi.acks` without effect | `6bc8dd28` and `5881b04a` (16 July 2025) added the setting and the companion's use of it. `136f733d` (27 August 2025) added a consumer to `SensorMesh::sendAckTo()`, but no role side provider, so the base's 0 keeps that branch dead. |
+| RX boosted gain not applied at boot | The room server had the same gap until `a71cc238` (21 July 2026) fixed it by mirroring the repeater. The sensor still initialises no default and applies nothing in `begin()`, so a value set through the CLI applies at once but is lost on the next boot. |
+
+`nextInt(_min, _max)` returns `(num % (_max - _min)) + _min` (`src/Utils.cpp:18`), so
+the upper bound is exclusive: the sensor draws from the six multiples 0 to 5 times
+`t`, the other roles uniformly from 0 to `5*t`. Both have the same maximum. The
+`+ 1` of `96e786fa` exists because `t == 0` made the bound 0 and `num % 0` crashed,
+which the sensor's form could not do.
+
 ### F3. Board variants are near copies
 
 89 `variants/*/target.cpp` files; `radio_new_identity()` is identical (ignoring
