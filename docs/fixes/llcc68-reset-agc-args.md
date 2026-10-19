@@ -58,9 +58,18 @@ which is the point: the four members of one chip family should not differ here.
 
 ## Compatibility
 
-None affected. The file is in no build, so every binary is unchanged. See the
-build matrix under Verification: all 18 environments report the same flash and
-RAM as `dev`, to the byte.
+None affected, and the claim rests on the include graph rather than on binary
+sizes. Nothing includes `CustomLLCC68Wrapper.h`, so no translation unit contains
+it: on `integration` the name appears only in the header itself, in the
+architecture review that records this defect, in this note and in the diagnostic
+patch. The artefact side agrees: an `xtensa-esp32-elf-nm` of a built
+`Heltec_v3_companion_radio_ble` image finds zero LLCC68 symbols, and nothing
+under that environment's build directory references the wrapper.
+
+Identical flash and RAM across the build matrix is listed below as corroboration,
+not as the proof. Unchanged size does not by itself mean a file is not compiled:
+a file can be compiled while the linker drops its unused code, which is exactly
+what happens to `ESPNOWRadio.cpp` in the ESP32 companion environments.
 
 ## Verification
 
@@ -108,9 +117,12 @@ suites `native_core` and `native_ofast` do not exist on this base.
 ### Builds
 
 The 18 environment matrix on this commit against a `dev` worktree with the same
-toolchain. Flash and RAM are expected to be identical in every environment,
-because no environment compiles the changed file, and that is what makes this a
-useful check rather than a formality.
+toolchain: all 18 built, and flash and RAM are identical to `dev` in every one of
+them, to the byte.
+
+That result is consistent with the file reaching no binary, and it rules out a
+regression, but on its own it does not establish it. The include graph and the
+symbol check under Compatibility are what establish it.
 
 ### Hardware
 
