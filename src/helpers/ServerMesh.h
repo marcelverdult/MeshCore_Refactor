@@ -2,6 +2,7 @@
 
 #include <Mesh.h>
 
+#include <helpers/ClientACL.h>
 #include <helpers/CommonCLI.h>
 #include <helpers/RegionMap.h>
 #include <helpers/RoutingPolicy.h>
@@ -12,10 +13,18 @@
  *         and the sensor.
  *
  * The three roles grew as separate sketches and ended up carrying the same code
- * three times. What lives here is the part that was byte for byte identical in all
- * three: resolving the Region a packet arrived on, choosing the scope of a flooded
- * reply, and loading, saving and applying the Region table. A role keeps whatever is
- * genuinely its own.
+ * three times. What lives here was identical in all three, or identical apart from
+ * formatting:
+ *
+ *   - the Region a packet arrived on, and the scope a flooded reply goes out with
+ *   - loading, saving and applying the Region table
+ *   - the advertisement schedule, with the advert itself left to the role
+ *   - the temporary radio parameters a 'set radio ...' command installs
+ *   - the identity file, the file system erase, the TX power and the stats replies
+ *   - the client ACL and the peer lookup a packet's sender hash goes through
+ *
+ * A role keeps whatever is genuinely its own: what it announces, how it answers a
+ * request, and in the repeater's case its bridge and loop detection.
  *
  * The members are protected rather than private because the role code reaches them
  * directly, as it did when they were its own fields.
@@ -102,9 +111,10 @@ protected:
   void onDefaultRegionChanged(const RegionEntry* r) override;
 
 public:
-  // Public because each role's main.cpp advertises on its own after boot, and
-  // because CommonCLI reaches them through its CommonCLICallbacks pointer. They
-  // were public in all three roles before they moved here.
+  // These were public on all three roles and stay public, so nothing outside the
+  // roles changes. Only sendSelfAdvertisement() needs it: each role's main.cpp
+  // advertises once after boot. The rest are reached through the
+  // CommonCLICallbacks pointer, where public access comes from that interface.
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
   void setTxPower(int8_t power_dbm) override;
   bool formatFileSystem() override;
