@@ -34,6 +34,14 @@ protected:
   NodePrefs _prefs;               // this node's persisted settings
   unsigned long next_local_advert, next_flood_advert;
 
+  // A 'set radio ...' command parks its values here until the reply has gone out,
+  // and schedules the return to the node's own settings.
+  unsigned long set_radio_at, revert_radio_at;
+  float pending_freq;
+  float pending_bw;
+  uint8_t pending_sf;
+  uint8_t pending_cr;
+
   RegionEntry* load_stack[8];
   RegionEntry* recv_pkt_region;   // the Region the packet being handled arrived on
   TransportKey default_scope;     // this node's own scope, for replies it cannot scope otherwise
@@ -46,6 +54,7 @@ protected:
   {
     _fs = NULL;
     next_local_advert = next_flood_advert = 0;
+    set_radio_at = revert_radio_at = 0;
     recv_pkt_region = NULL;
     region_load_active = false;
     memset(default_scope.key, 0, sizeof(default_scope.key));
@@ -71,6 +80,12 @@ protected:
    */
   void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
 
+  /**
+   * \brief  Hand the radio any pending temporary parameters, and take them back
+   *         again once they have timed out. Call this from the role's loop().
+   */
+  void checkPendingRadioParams();
+
   // Mesh
   mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
 
@@ -83,6 +98,7 @@ public:
   // Public because each role's main.cpp advertises on its own after boot, and
   // because CommonCLI reaches them through its CommonCLICallbacks pointer. They
   // were public in all three roles before they moved here.
+  void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
   void sendSelfAdvertisement(int delay_millis, bool flood) override;
   void updateAdvertTimer() override;
   void updateFloodAdvertTimer() override;

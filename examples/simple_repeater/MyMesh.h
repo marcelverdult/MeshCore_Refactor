@@ -96,11 +96,6 @@ class MyMesh : public ServerMesh {
   NeighbourInfo neighbours[MAX_NEIGHBOURS];
 #endif
   CayenneLPP telemetry;
-  unsigned long set_radio_at, revert_radio_at;
-  float pending_freq;
-  float pending_bw;
-  uint8_t pending_sf;
-  uint8_t pending_cr;
   int  matching_peer_indexes[MAX_CLIENTS];
 #if defined(WITH_RS232_BRIDGE)
   RS232Bridge bridge;
@@ -163,7 +158,6 @@ public:
   }
 
   // CommonCLICallbacks
-  void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
   bool formatFileSystem() override;
 
   void setLoggingOn(bool enable) override { _logging = enable; }

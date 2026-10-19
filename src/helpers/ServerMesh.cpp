@@ -1,5 +1,7 @@
 #include "ServerMesh.h"
 
+#include "target.h"   // the variant's radio_driver, as helpers/CommonRadioPrefs.cpp reaches it
+
 // The bodies below moved here unchanged from the three roles, where they were
 // identical. Verified by extracting each one from all three role implementations and
 // comparing after normalising only the class name and the pointer star spacing.
@@ -97,5 +99,29 @@ void ServerMesh::updateFloodAdvertTimer() {
     next_flood_advert = futureMillis(((uint32_t)_prefs.flood_advert_interval) * 60 * 60 * 1000);
   } else {
     next_flood_advert = 0; // stop the timer
+  }
+}
+
+void ServerMesh::applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) {
+  set_radio_at = futureMillis(2000); // give CLI reply some time to be sent back, before applying temp radio params
+  pending_freq = freq;
+  pending_bw = bw;
+  pending_sf = sf;
+  pending_cr = cr;
+
+  revert_radio_at = futureMillis(2000 + timeout_mins * 60 * 1000); // schedule when to revert radio params
+}
+
+void ServerMesh::checkPendingRadioParams() {
+  if (set_radio_at && millisHasNowPassed(set_radio_at)) { // apply pending (temporary) radio params
+    set_radio_at = 0;                                     // clear timer
+    radio_driver.setParams(pending_freq, pending_bw, pending_sf, pending_cr);
+    MESH_DEBUG_PRINTLN("Temp radio params");
+  }
+
+  if (revert_radio_at && millisHasNowPassed(revert_radio_at)) { // revert radio params to orig
+    revert_radio_at = 0;                                        // clear timer
+    radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+    MESH_DEBUG_PRINTLN("Radio params restored");
   }
 }
