@@ -2,6 +2,24 @@
 #include "TxtDataHelpers.h"
 #include "Utils.h"
 #include "target.h"
+#include <string.h>   // memcpy, for the bit check below
+#include <stdint.h>
+
+namespace {
+
+// True if the value is a finite number. NaN and infinity are recognised by
+// their bits, not by a comparison: nRF52 builds compile with -Ofast, whose
+// -ffast-math lets float comparisons assume that NaN and infinity never
+// occur. A range check built only from < and > then depends on the compiler,
+// and no ordered comparison is true for a NaN in the first place, so under
+// plain IEEE rules such a check cannot reject one at all.
+bool isFinite(float v) {
+  uint32_t bits;
+  memcpy(&bits, &v, sizeof(bits));
+  return (bits & 0x7F800000u) != 0x7F800000u;
+}
+
+}  // namespace
 
 bool CommonRadioPrefs::getByKey(const char* key, char* value, size_t max_len) {
   if (strcmp(key, "fem_rxgain") == 0) {
@@ -69,7 +87,7 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
   if (memcmp(command, "set af ", 7) == 0) {
     char* end;
     float af = strtof(&command[7], &end);
-    if (end == &command[7] || af < 0 || af > 9) {
+    if (end == &command[7] || !isFinite(af) || af < 0 || af > 9) {
       strcpy(reply, "ERROR: af must be 0-9");
     } else {
       setAirtimeFactor(af);
@@ -87,7 +105,7 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
   }
   if (memcmp(command, "set dutycycle ", 14) == 0) {
     float dc = atof(&command[14]);
-    if (dc < 1 || dc > 100) {
+    if (!isFinite(dc) || dc < 1 || dc > 100) {
       strcpy(reply, "ERROR: dutycycle must be 1-100");
     } else {
       setAirtimeFactor((100.0f / dc) - 1.0f);
