@@ -154,7 +154,10 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
   if (memcmp(command, "set af ", 7) == 0) {
     char* end;
     float af = strtof(&command[7], &end);
-    if (end == &command[7] || af < 0 || af > 9) {
+    // inRange() rejects NaN and infinity by their bits. Two comparisons alone
+    // cannot: no ordered comparison is true for a NaN, so "af < 0 || af > 9"
+    // let "set af nan" through, which a T-Echo accepted and reported back as 0.
+    if (end == &command[7] || !inRange(af, 9)) {
       strcpy(reply, "ERROR: af must be 0-9");
     } else {
       setAirtimeFactor(af);
@@ -172,7 +175,7 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
   }
   if (memcmp(command, "set dutycycle ", 14) == 0) {
     float dc = atof(&command[14]);
-    if (dc < 1 || dc > 100) {
+    if (!inRange(dc, 100) || dc < 1) {
       strcpy(reply, "ERROR: dutycycle must be 1-100");
     } else {
       setAirtimeFactor((100.0f / dc) - 1.0f);

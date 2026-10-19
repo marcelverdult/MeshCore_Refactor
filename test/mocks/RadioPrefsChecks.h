@@ -235,13 +235,13 @@ void expectRadioCliEdgeCases(P& p) {
   EXPECT_FLOAT_EQ(9.0f, p.airtime_factor);
   EXPECT_EQ("OK", accepted("set af  0"));
   EXPECT_FLOAT_EQ(0.0f, p.airtime_factor);
-#ifndef __FAST_MATH__
-  // odd: NaN passes the range check of "set af". With -ffast-math (nRF52 builds use
-  // -Ofast) float comparisons may assume that NaN never occurs, so what "set af nan"
-  // does there depends on the compiler; it is only pinned for IEEE builds.
-  EXPECT_EQ("OK", accepted("set af nan"));
-  EXPECT_TRUE(isNanBits(p.airtime_factor));
-#endif
+  // "set af nan" used to be accepted, and the result depended on the compiler:
+  // no ordered comparison is true for a NaN, and -ffast-math (nRF52 builds use
+  // -Ofast) may additionally assume that NaN never occurs. inRange() reads the
+  // bits, so the answer is now the same on every build and needs no guard here.
+  EXPECT_EQ("ERROR: af must be 0-9", rejected("set af nan"));
+  EXPECT_FALSE(isNanBits(p.airtime_factor));
+  EXPECT_FLOAT_EQ(0.0f, p.airtime_factor);
 
   // dutycycle: derived from af, range 1..100
   EXPECT_EQ("ERROR: dutycycle must be 1-100", rejected("set dutycycle 0.5"));
@@ -251,6 +251,17 @@ void expectRadioCliEdgeCases(P& p) {
   EXPECT_EQ("OK - 1.0%", accepted("set dutycycle 1"));
   EXPECT_FLOAT_EQ(99.0f, p.airtime_factor);            // odd: beyond the 0..9 of "set af"
   EXPECT_EQ("OK - 33.0%", accepted("set dutycycle 33"));
+
+  // Neither command takes a value that is not a finite number. inRange()
+  // decides that on the bits, so the answer does not depend on -ffast-math and
+  // the cases need no guard. "set dutycycle" writes airtime_factor through a
+  // division and had the same hole as "set af".
+  EXPECT_EQ("ERROR: af must be 0-9", rejected("set af -nan"));
+  EXPECT_EQ("ERROR: af must be 0-9", rejected("set af inf"));
+  EXPECT_EQ("ERROR: af must be 0-9", rejected("set af 1e40"));
+  EXPECT_EQ("ERROR: dutycycle must be 1-100", rejected("set dutycycle nan"));
+  EXPECT_EQ("ERROR: dutycycle must be 1-100", rejected("set dutycycle inf"));
+  EXPECT_FALSE(isNanBits(p.airtime_factor));
 
   // int.thresh: atoi, no range, stored as uint8_t
   EXPECT_EQ("OK", accepted("set int.thresh 300"));
