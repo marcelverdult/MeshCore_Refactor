@@ -157,13 +157,20 @@ small:
    revisited it. Aligning the sensor adopts that experiment. The alternative is to
    keep the slot scheme for the sensor as the one role parameter of the shared base.
    Marcel decides before 4f.
-2. **How deep the characterization goes.** The three role classes cannot be
-   instantiated on the host today: they pull in `RTClib`, `target.h`, a file system
-   and `CommonCLI`, and `test/mocks/` covers only part of that. Two options, one
-   decision:
-   - Pin the moved behaviour forward: for 4a the move is byte identical in all
-     three roles and provable by diff, and the new host test then guards the shared
-     base from that point on. Cheap, and the diff is the proof for 4a.
-   - Build a host harness for the real role classes first (a file system mock on top
-     of the existing mocks), then pin the current behaviour of all three roles
-     before moving anything. Expensive, and every later step benefits.
+2. **How deep the characterization goes: settled by measuring it.** The question was
+   whether the real role classes can be driven on the host at all, or whether the
+   steps have to lean on the diff alone. Probing the compiler rather than estimating
+   showed the gap was small: three headers the native build lacked (a file system, an
+   RTC, the LittleFS global) and a handful of methods and globals missing from the
+   existing mocks. That is now built, and all three role implementations compile
+   natively; `native_server` runs the real room server, and the first six
+   characterization tests pin the temporary radio parameters.
+
+   What remains open is only how far to carry it:
+   - The repeater and the sensor each need an environment of their own, because the
+     repeater and the room server both define `MyMesh`.
+   - The deeper paths (`handleRequest`, `onPeerDataRecv`) need packets and a
+     populated ACL, which is more harness than the steps in this note require.
+
+   This also answers review finding F6 ("Little of this can be tested on the host")
+   for the server roles, which was not the goal of this step but is the larger gain.

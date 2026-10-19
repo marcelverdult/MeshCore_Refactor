@@ -116,6 +116,13 @@ The native test environment builds four source files (`platformio.ini`,
 `[env:native]`). None of the role code, the persistence code or the radio CLI was
 covered before step 1.
 
+Status: the radio CLI and the prefs are covered since steps 1 to 3, and the server
+roles themselves since the harness of step 4: `test/mocks` now carries an in-memory
+file system, an RTC and the globals a variant's `target.h` declares, so all three
+role implementations compile natively and `native_server` drives the real room
+server. The gap that is left is the deeper request handling, which needs packets and
+a populated ACL.
+
 ## Issues noticed while reading (not part of this series)
 
 Found by reading v1.18.0, not reproduced on hardware. Each should get its own
