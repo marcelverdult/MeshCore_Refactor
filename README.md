@@ -1,3 +1,22 @@
+> ## About this fork
+>
+> This is a fork of [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore)
+> that refactors the firmware so new features are cheaper to add, without changing
+> how it behaves on air, towards the companion apps, on the CLI or on flash.
+>
+> - **What and why:** [docs/refactoring/](docs/refactoring/README.md) explains the
+>   series, the rules every step follows (characterization tests first, no behaviour
+>   change, full build matrix, hardware upgrade and downgrade tests) and the
+>   [architecture review of v1.18.0](docs/refactoring/architecture-review-v1.18.md)
+>   the steps are based on.
+> - **Branches:** each step lives on its own `refactor/...` branch based on upstream
+>   `dev` and is prepared as a separate pull request against upstream. This branch,
+>   `integration`, combines all finished steps on top of upstream and is the base
+>   for further work in this fork.
+> - **Status:** see the table in [docs/refactoring/README.md](docs/refactoring/README.md#steps).
+>
+> Everything below this box is the unchanged upstream README.
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
