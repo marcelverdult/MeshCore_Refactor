@@ -31,6 +31,20 @@ PLATFORMIO_BUILD_FLAGS='-D FIRMWARE_BUILD_DATE=\"step1-<commit>\"' pio run -e Li
 `PLATFORMIO_BUILD_FLAGS` makes PlatformIO clean the whole build folder of the
 project, so build the marked images in a separate worktree.
 
+## Diagnostic build for step 2
+
+`diag-tuning.patch` adds a `diag tuning` command to the room server and the
+companion that prints what the running core uses for its tuning hooks (duty cycle
+budget, RX delay at score 0.3 and 1000 ms airtime, interference threshold, CAD,
+AGC reset interval, extra ACKs). Apply the same patch to `dev` and to the step,
+build both with a marker, and compare the output for the same settings:
+
+```sh
+git apply tools/refactoring/diag-tuning.patch
+```
+
+The patch is for testing only and is not part of any step.
+
 ## Restoring a board
 
 Since v1.17 every role reads `/prefs.json`. Flashing the old firmware back keeps
