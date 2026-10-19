@@ -61,6 +61,21 @@ public:
     success = success && s.write(prv_key, PRV_KEY_SIZE) == PRV_KEY_SIZE;
     return success;
   }
+
+  // Copy of the buffer serialisation in src/Identity.cpp, private key first.
+  // IdentityStore compares two identities with it, which keeps it off prv_key,
+  // private in the real class.
+  size_t writeTo(uint8_t* dest, size_t max_len) const {
+    if (max_len < PRV_KEY_SIZE) return 0;  // not big enough
+
+    if (max_len < PRV_KEY_SIZE + PUB_KEY_SIZE) {  // only room for prv_key
+      std::memcpy(dest, prv_key, PRV_KEY_SIZE);
+      return PRV_KEY_SIZE;
+    }
+    std::memcpy(dest, prv_key, PRV_KEY_SIZE);
+    std::memcpy(&dest[PRV_KEY_SIZE], pub_key, PUB_KEY_SIZE);
+    return PRV_KEY_SIZE + PUB_KEY_SIZE;
+  }
 };
 
 }
