@@ -499,6 +499,11 @@ static void bsec_save_state() {
 
 static uint8_t init_bme680_bsec(TwoWire* wire, uint8_t addr) {
   bsec_iaq.begin(addr, *wire);
+  // bsec_init() is a pure software init and reports BSEC_OK even when nothing
+  // answers on the bus. Only bme68xStatus tells us a BME68x replied, so without
+  // this check BSEC claims any Bosch sensor sharing 0x76/0x77 (BME280, BMP280)
+  // and that sensor never reaches its own driver. Issue #3634.
+  if (bsec_iaq.bme68xStatus != BME68X_OK) return 0;
   if (bsec_iaq.bsecStatus != BSEC_OK) return 0;
 
   bsec_iaq.setConfig(bsec_config_iaq);
