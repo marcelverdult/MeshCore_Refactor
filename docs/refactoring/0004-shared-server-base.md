@@ -150,6 +150,32 @@ small:
 - RX boosted gain: initialise the pref under the same guards as the other roles and
   apply it in `begin()`, mirroring upstream's own room server fix.
 
+## What the series achieved
+
+Steps 4a to 4e have landed. Measured on the role implementations, against the state
+before the series (`98ffa5c1`):
+
+| file | before | after |
+|---|---|---|
+| `examples/simple_repeater/MyMesh.cpp` | 1328 | 1137 |
+| `examples/simple_room_server/MyMesh.cpp` | 1069 | 879 |
+| `examples/simple_sensor/SensorMesh.cpp` | 1102 | 919 |
+| `src/helpers/ServerMesh.h` and `.cpp` | 0 | 328 |
+
+564 lines left the roles, 328 arrived in the base, and what remains exists once
+instead of three times. The host suite grew from 82 to 115 test cases.
+
+What is still shared between all three roles, and why it stayed:
+
+- `begin()` is step 4f, which waits on the sensor's RX boosted gain gap being
+  closed first, so the three boot paths can become one.
+- `allowPacketForward()` is part of the sensor alignment, not of a move.
+- `createSelfAdvert()` is a role hook by design now: only the advert type differs.
+- `handleCommand()`, `handleRequest()`, `onAnonDataRecv()`, `onPeerDataRecv()` and
+  `loop()` differ by role and are out of scope, as stated above.
+- `onPeerPathRecv()` is 90 percent shared between the repeater and the room server
+  but only about 30 percent with the sensor, so it was never part of this cut.
+
 ## Verification of the steps
 
 Marcel's decision of 19 October: the 18 environment build matrix and the flash and
