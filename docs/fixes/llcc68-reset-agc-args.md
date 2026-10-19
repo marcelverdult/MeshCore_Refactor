@@ -45,6 +45,26 @@ void doResetAGC() override { sx126xResetAGC((SX126x *)_radio, getRxBoostedGainMo
 The line is now character for character the same as in the other three wrappers,
 which is the point: the four members of one chip family should not differ here.
 
+## Upstream
+
+Do not propose this as its own upstream pull request. The identical change is
+already in the open PR meshcore-dev/MeshCore#3496, "KISS modem: AGC, FEM gain and
+RX boosted gain control", character for character:
+
+```
+-  void doResetAGC() override { sx126xResetAGC((SX126x *)_radio); }
++  void doResetAGC() override { sx126xResetAGC((SX126x *)_radio, getRxBoostedGainMode()); }
+```
+
+That PR is open, not merged, so `dev` still carries the defect and this fork still
+needs the fix. But #3496 changes 24 files, and a separate one line PR for a line
+it already contains would compete with it. If the fix is wanted upstream sooner,
+the useful move is a comment on #3496, not a new pull request.
+
+Found by searching the upstream repository for the function name rather than the
+file: the API text search covers only the pull request text, not the files a pull
+request changes, so a search by file name misses this.
+
 ## Alternatives considered
 
 - **Pass a literal `false`.** Shorter, but wrong: the other three re-apply the
