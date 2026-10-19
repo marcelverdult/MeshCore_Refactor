@@ -16,26 +16,7 @@ class CommonRadioPrefs : public ConfigSerializer, public KeyValueStore {
   bool _is_dirty = false;
 
 protected:
-  // JSON keys and their order are the persisted format: do not rename or reorder.
-  void structure() override {
-    def("freq", _f->freq);
-    def("bw", _f->bw);
-    def("sf", _f->sf);
-    def("cr", _f->cr);
-    def("cad", _f->cad_enabled);
-    def("int_thr", _f->interference_threshold);
-    def("rxgain", _f->rx_boosted_gain);
-    def("fem_rxgain", _f->radio_fem_rxgain);
-    def("fem_txgain", _f->radio_fem_txgain);
-    def("tx", _f->tx_power_dbm);
-    def("af", _f->airtime_factor);
-    def("rxdelay", _f->rx_delay_base);
-    def("f_txdelay", _f->tx_delay_factor);
-    def("d_txdelay", _f->direct_tx_delay_factor);
-    def("agc_int", _f->agc_reset_interval);
-    def("hash_mode", _f->path_hash_mode);
-    def("multi_ack", _f->multi_acks);
-  }
+  void structure() override;   // the "radio" object of /prefs.json, see SETTINGS in CommonRadioPrefs.cpp
 
 public:
   explicit CommonRadioPrefs(RadioPrefsFields& fields) : _f(&fields) { }
