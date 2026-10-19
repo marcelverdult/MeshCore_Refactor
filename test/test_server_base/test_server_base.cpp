@@ -432,6 +432,91 @@ TEST_F(AdvertScheduleTest, AnAdvertisementGoesOutOnTheRouteItWasAskedFor) {
   EXPECT_EQ(radio_driver.last_send[0] & PH_ROUTE_MASK, ROUTE_TYPE_FLOOD);
 }
 
+
+// Identity, file system and statistics, which step 4d moves into the shared base.
+// Driven through the role's own public surface, so these read the same before and
+// after the move.
+class HousekeepingTest : public ::testing::Test {
+protected:
+  fs::FS fs;
+  ArduinoMillis ms;
+  StdRNG rng;
+  SimpleMeshTables tables;
+  std::unique_ptr<MyMesh> mesh;
+
+  void SetUp() override {
+    g_mock_millis = T0;
+    board.reset();
+    radio_driver.reset();
+    rtc_clock.now = 1760000000;
+    fs.reset();
+    LittleFS.reset();
+    rng.begin(1);
+
+    mesh.reset(new MyMesh(board, radio_driver, ms, rng, rtc_clock, tables));
+    mesh->begin(&fs);
+  }
+};
+
+TEST_F(HousekeepingTest, SettingTheTxPowerReachesTheRadio) {
+  radio_driver.tx_power_calls = 0;
+
+  mesh->setTxPower(-7);
+
+  EXPECT_EQ(radio_driver.tx_power_calls, 1);
+  EXPECT_EQ(radio_driver.tx_power, -7);
+}
+
+TEST_F(HousekeepingTest, ClearingTheStatsResetsTheRadioCounters) {
+  radio_driver.packets_recv = 11;
+  radio_driver.packets_sent = 7;
+  radio_driver.packets_recv_errors = 3;
+
+  mesh->clearStats();
+
+  EXPECT_EQ(radio_driver.packets_recv, 0u);
+  EXPECT_EQ(radio_driver.packets_sent, 0u);
+  EXPECT_EQ(radio_driver.packets_recv_errors, 0u);
+}
+
+TEST_F(HousekeepingTest, FormattingTheFileSystemErasesIt) {
+  // On this platform the role erases through the LittleFS global, which is the same
+  // in-memory instance the test can look into.
+  LittleFS.files["/leftover"] = { 1, 2, 3 };
+  ASSERT_TRUE(LittleFS.exists("/leftover"));
+
+  EXPECT_TRUE(mesh->formatFileSystem());
+
+  EXPECT_FALSE(LittleFS.exists("/leftover"));
+}
+
+TEST_F(HousekeepingTest, TheStatsRepliesAreFilledIn) {
+  char reply[256];
+
+  memset(reply, 0, sizeof(reply));
+  mesh->formatStatsReply(reply);
+  EXPECT_GT(strlen(reply), 0u) << "core stats";
+
+  memset(reply, 0, sizeof(reply));
+  mesh->formatRadioStatsReply(reply);
+  EXPECT_GT(strlen(reply), 0u) << "radio stats";
+
+  memset(reply, 0, sizeof(reply));
+  mesh->formatPacketStatsReply(reply);
+  EXPECT_GT(strlen(reply), 0u) << "packet stats";
+}
+
+TEST_F(HousekeepingTest, ThePacketStatsFollowTheRadioCounters) {
+  char before[256] = {0};
+  mesh->formatPacketStatsReply(before);
+
+  radio_driver.packets_recv_errors = 42;
+  char after[256] = {0};
+  mesh->formatPacketStatsReply(after);
+
+  EXPECT_STRNE(before, after) << "the reply has to reflect the counters it reads";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
