@@ -105,3 +105,4 @@ issue or fix.
 | 6 | `extra_sf` and `discovery_mod_timestamp` are not part of `/prefs.json` | `src/helpers/CommonCLI.h:65`, `:74` |
 | 7 | The server roles load `/prefs.json` without range checks (only the legacy loader clamps) | `src/helpers/CommonCLI.cpp:38` |
 | 8 | Role fallback radio defaults (915 / 250 / SF10) differ from the root `platformio.ini` (869.618 / 62.5 / SF8) | `examples/simple_repeater/MyMesh.cpp:7-13`, `platformio.ini` |
+| 9 | nRF52 firmware is built with `-Ofast` (`-ffast-math`), so float comparisons may assume no NaN; whether a range check rejects `nan` then depends on how it is written. `set af nan` is accepted on the boards. (Found during step 3, measured on a T-Echo) | `src/helpers/CommonRadioPrefs.cpp` |
