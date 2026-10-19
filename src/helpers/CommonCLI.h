@@ -95,6 +95,8 @@ private:
       def("agc_int", _parent->agc_reset_interval);
       def("hash_mode", _parent->path_hash_mode);
       def("multi_ack", _parent->multi_acks);
+      // A fixed size byte array, encoded as hex like the companion's scope key.
+      def("extra_sf", (void *) _parent->extra_sf, sizeof(_parent->extra_sf));
     }
   public:
     RadioPrefs(NodePrefs* parent) : _parent(parent) { }
@@ -213,6 +215,7 @@ protected:
     def("owner", owner_info, sizeof(owner_info));
     def("adv_int", advert_interval);
     def("f_adv_int", flood_advert_interval);
+    def("disc_mod", discovery_mod_timestamp);
     def("lat", node_lat);
     def("lon", node_lon);
     def("radio", radio);
@@ -231,6 +234,7 @@ public:
     guest_password[0] = 0;
     bridge_secret[0] = 0;
     owner_info[0] = 0;
+    memset(extra_sf, 0, sizeof(extra_sf));
   }
 
   CommonRadioPrefs* getRadioPrefs() { return &radio; }
