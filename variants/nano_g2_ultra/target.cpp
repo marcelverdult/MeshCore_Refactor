@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <helpers/ArduinoHelpers.h>
+#include <helpers/MillisDeadline.h>
 #include <helpers/sensors/MicroNMEALocationProvider.h>
 
 NanoG2Ultra board;
@@ -73,7 +74,7 @@ bool NanoG2UltraSensorManager::querySensors(uint8_t requester_permissions, Cayen
 }
 
 void NanoG2UltraSensorManager::loop() {
-  static long next_gps_update = 0;
+  static uint32_t next_gps_update = 0;
 
   if (!gps_active) {
     return; // GPS is not active, skip further processing
@@ -81,7 +82,7 @@ void NanoG2UltraSensorManager::loop() {
 
   _location->loop();
 
-  if (millis() > next_gps_update) {
+  if (mesh::millisHasPassed(millis(), next_gps_update)) {
     if (_location->isValid()) {
       node_lat = ((double)_location->getLatitude()) / 1000000.;
       node_lon = ((double)_location->getLongitude()) / 1000000.;
