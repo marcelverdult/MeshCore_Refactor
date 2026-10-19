@@ -1,0 +1,15 @@
+diff --git a/variants/heltec_v3/target.cpp b/variants/heltec_v3/target.cpp
+index e6af466a..5c87138f 100644
+--- a/variants/heltec_v3/target.cpp
++++ b/variants/heltec_v3/target.cpp
+@@ -1,6 +1,10 @@
+ #include <Arduino.h>
+ #include "target.h"
+ 
++// DIAGNOSTIC ONLY: pull the otherwise unused LLCC68 wrapper into a
++// translation unit so the compiler checks it. Not part of any fix.
++#include <helpers/radiolib/CustomLLCC68Wrapper.h>
++
+ HeltecV3Board board;
+ 
+ #if defined(P_LORA_SCLK)
