@@ -85,8 +85,8 @@ weak" below).
 | A | one `radio_new_identity()` for all RadioLib variants | 87 `target.cpp`, 1 new source, 1 header | this step |
 | B | one class for the FEM gain handlers of HeltecV4, HeltecV4R8, T096, HeltecTrackerV2 | 4 board classes, 1 new helper | planned |
 | C | a shared default `radio_init()` for the largest groups (28 + 18 + 5 + 4 + 3 of 89) | about 58 `target.cpp` | planned |
-| D | the radio, wrapper and RTC globals from the board's build flags | about 87 `target.cpp` | needs a decision, see below |
-| E | sensors, display and button from the board description | the rest | needs a decision |
+| D | the radio, wrapper and RTC globals from the board's build flags | about 87 `target.cpp` | planned (description: build flags, decided) |
+| E | sensors, display and button from the board description | the rest | planned |
 
 Cut B in more detail: the four bodies are the same once the class name is replaced,
 and they all read and write the `fem_rxgain` key through `_prefs`. The open upstream
@@ -106,8 +106,12 @@ they look today: (1) the build flags and `target.h` macros the variants already 
 read by the generic target; (2) a small `constexpr` struct per board in `target.h`;
 (3) a data file per board from which the build generates `target.cpp`. Option 1
 changes the least and keeps the PlatformIO files as the one place a board is
-described; option 3 would be a new build step and is likely rejected. This is a
-product decision and is asked before cut D starts.
+described; option 3 would be a new build step.
+
+Decision (Marcel, 20.10.2026): option 1. The board description is the build flags
+and `target.h` macros a variant already has, plus the few new ones cuts D and E
+need. Options 2 and 3 are rejected: option 2 rewrites every variant, option 3 adds
+a build step.
 
 ## Cut A: one `radio_new_identity()`
 
