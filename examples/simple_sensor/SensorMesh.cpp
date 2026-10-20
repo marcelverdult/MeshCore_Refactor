@@ -312,15 +312,6 @@ void SensorMesh::alertIf(bool condition, Trigger& t, AlertPriority pri, const ch
   }
 }
 
-bool SensorMesh::allowPacketForward(const mesh::Packet* packet) {
-  if (_prefs.disable_fwd) return false;
-  if (packet->isRouteFlood()
-      && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped, _prefs.flood_max_advert)) {
-    return false;
-  }
-  return true;
-}
-
 // The hop limits the repeater and the room server start with. The constructor and
 // the prefs upgrade both need them.
 static const uint8_t DEFAULT_FLOOD_MAX_UNSCOPED = 64;

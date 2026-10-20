@@ -17,6 +17,15 @@
 // identical. Verified by extracting each one from all three role implementations and
 // comparing after normalising only the class name and the pointer star spacing.
 
+bool ServerMesh::allowPacketForward(const mesh::Packet* packet) {
+  if (_prefs.disable_fwd) return false;
+  if (packet->isRouteFlood()
+      && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped, _prefs.flood_max_advert)) {
+    return false;
+  }
+  return true;
+}
+
 mesh::DispatcherAction ServerMesh::onRecvPacket(mesh::Packet* pkt) {
   if (pkt->getRouteType() == ROUTE_TYPE_TRANSPORT_FLOOD) {
     recv_pkt_region = region_map.findMatch(pkt, REGION_DENY_FLOOD);
