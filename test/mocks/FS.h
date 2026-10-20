@@ -61,8 +61,22 @@ public:
 
   void close() { _valid = false; }
 
+  // Directory listing, reached only by the companion's rescue CLI. Directories are
+  // not modelled (see FS::mkdir), so a listing is always empty.
+  File openNextFile() { return File(); }
+  bool isDirectory() const { return false; }
+  const char* name() const { return _name.c_str(); }
+  size_t size() const;
+
   // Test helper: the position reached so far.
   size_t position() const { return _pos; }
+};
+
+// The RP2040 core's LittleFS reports its usage through this, and the companion's
+// data store reads it for CMD_GET_BATT_AND_STORAGE.
+struct FSInfo {
+  size_t totalBytes = 0;
+  size_t usedBytes = 0;
 };
 
 namespace fs {
@@ -104,6 +118,16 @@ public:
   bool remove(const char* name) { return files.erase(std::string(name)) > 0; }
   bool format() { files.clear(); return true; }
 
+  // A fixed capacity, and the bytes the files hold as the usage, so a reply that
+  // carries them is repeatable.
+  size_t total_bytes = 512 * 1024;
+  bool info(FSInfo& out) {
+    out.totalBytes = total_bytes;
+    out.usedBytes = 0;
+    for (auto& f : files) out.usedBytes += f.second.size();
+    return true;
+  }
+
   // Test helpers.
   void reset() { files.clear(); }
   size_t sizeOf(const char* name) {
@@ -118,6 +142,11 @@ inline std::vector<uint8_t>* File::data() const {
   if (!_fs || !_valid) return nullptr;
   auto it = _fs->files.find(_name);
   return it == _fs->files.end() ? nullptr : &it->second;
+}
+
+inline size_t File::size() const {
+  auto* d = data();
+  return d ? d->size() : 0;
 }
 
 inline int File::read(void* dest, size_t len) {
