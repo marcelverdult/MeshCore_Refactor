@@ -98,8 +98,30 @@ flood behaviour is untouched on this branch.
 
 - `pio test` over all six environments: 123 of 123 test cases pass. (The branch
   that also carries the flood limits has 127; the four extra cases are its own.)
-- Hardware: **not done.** `techo-b43b` is the sensor board and is not to be claimed
-  until the F1 to F4 fixes are merged. What it should cover for this change: that a
-  stored `radio.rxgain` really survives a reboot on an SX1262 board, which the host
-  environment cannot show because it defines neither `USE_SX1262` nor
-  `SX126X_RX_BOOSTED_GAIN`.
+- Hardware: done on `techo-b43b` (LilyGo T-Echo, SX1262, sensor role), with marked
+  images of the merge into `integration` (`ae0b9f22`, "new") and of its first parent
+  (`cc1e6c3b`, "base"), both built with
+  `tools/refactoring/diag-sensor-rxgain-acks.patch`. `get radio.rxgain` only reads the
+  stored pref, so the patch adds `diag sensor`, which prints the pref, the radio's RX
+  gain register (`CustomSX1262::getRxBoostedGainMode()`) and
+  `getExtraAckTransmitCount()`. The T-Echo turns boosted gain on during radio init
+  (`SX126X_RX_BOOSTED_GAIN=1`), so only a stored `off` shows the difference. Values
+  below are pref / register / extra ACKs.
+  1. Original 1.17.1 to base: all 30 settings identical, `1 / 1 / 0`.
+  2. Base, `set radio.rxgain off` and `set multi.acks 1`: `0 / 0 / 0` at once, and
+     `0 / 1 / 0` after a reboot. The stored gain is lost at boot and `multi.acks` has
+     no effect: the two defects this change removes.
+  3. Base to new: all settings identical, `0 / 0 / 1`.
+  4. New, `set radio.rxgain on` and reboot: `1 / 1`. Then `set radio.rxgain off`,
+     `set multi.acks 0` and reboot: `0 / 0 / 0`.
+  5. New to base (downgrade): all settings identical, `0 / 1 / 0`, the old boot
+     behaviour again.
+  6. Back to the original 1.17.1 with the original values: 31 of 31 lines identical to
+     the reading taken before the check.
+
+  Two findings on the way, neither caused by this change (ledger issues 13 and 14):
+  `set multi.acks 2` is accepted, but the range check after loading `/prefs.json`
+  clamps the field to 0..1, so it reads back as 1 after a reboot. And a soft reset
+  sometimes leaves this board's I2C bus with SDA held low, after which every role
+  blocks in the RTC probe before any radio or mesh code runs; the diagnostic patch
+  frees the bus before `board.begin()` so the check could run at all.

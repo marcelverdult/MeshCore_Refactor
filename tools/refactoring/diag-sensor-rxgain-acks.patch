@@ -1,0 +1,47 @@
+diff --git a/examples/simple_sensor/SensorMesh.cpp b/examples/simple_sensor/SensorMesh.cpp
+index 75fa8b74..62444ed8 100644
+--- a/examples/simple_sensor/SensorMesh.cpp
++++ b/examples/simple_sensor/SensorMesh.cpp
+@@ -376,6 +376,11 @@ uint8_t SensorMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t*
+ }
+ 
+ void SensorMesh::handleCommand(ClientInfo* from, uint32_t sender_timestamp, char* command, char* reply) {
++  if (strcmp(command, "diag sensor") == 0) {   // diagnostic build only, not part of any commit
++    sprintf(reply, "> rxgain_pref=%d rxgain_chip=%d acks=%d", (int)_prefs.rx_boosted_gain,
++      (int)radio_driver.getRxBoostedGainMode(), (int)getExtraAckTransmitCount());
++    return;
++  }
+   if (region_load_active) {
+     if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
+       region_map = temp_map;  // copy over the temp instance as new current map
+diff --git a/examples/simple_sensor/main.cpp b/examples/simple_sensor/main.cpp
+index 66991daa..06184d3d 100644
+--- a/examples/simple_sensor/main.cpp
++++ b/examples/simple_sensor/main.cpp
+@@ -55,7 +55,25 @@ static char command[160];
+ void setup() {
+   Serial.begin(115200);
+   delay(1000);
+-
++  while (!Serial && millis() < 15000) delay(10);   // diagnostic build only: boot output needs the host
++
++  {   // diagnostic build only: free an I2C bus a soft reset left with SDA held low
++    pinMode(PIN_WIRE_SDA, INPUT_PULLUP); pinMode(PIN_WIRE_SCL, INPUT_PULLUP); delay(2);
++    int sda = digitalRead(PIN_WIRE_SDA), pulses = 0;
++    if (sda == LOW) {
++      pinMode(PIN_WIRE_SCL, OUTPUT);
++      while (pulses < 9 && digitalRead(PIN_WIRE_SDA) == LOW) {
++        digitalWrite(PIN_WIRE_SCL, LOW); delayMicroseconds(10);
++        digitalWrite(PIN_WIRE_SCL, HIGH); delayMicroseconds(10);
++        pulses++;
++      }
++      pinMode(PIN_WIRE_SDA, OUTPUT); digitalWrite(PIN_WIRE_SDA, LOW); delayMicroseconds(10);
++      digitalWrite(PIN_WIRE_SCL, HIGH); delayMicroseconds(10);
++      digitalWrite(PIN_WIRE_SDA, HIGH); delayMicroseconds(10);
++      pinMode(PIN_WIRE_SDA, INPUT_PULLUP); pinMode(PIN_WIRE_SCL, INPUT_PULLUP); delay(2);
++    }
++    Serial.printf("DIAG i2c sda_at_boot=%d pulses=%d sda_after=%d\n", sda, pulses, digitalRead(PIN_WIRE_SDA));
++  }
+   board.begin();
+ 
+ #ifdef HAS_EXTERNAL_WATCHDOG

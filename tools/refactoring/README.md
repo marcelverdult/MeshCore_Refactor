@@ -45,6 +45,35 @@ git apply tools/refactoring/diag-tuning.patch
 
 The patch is for testing only and is not part of any step.
 
+## Diagnostic build for the sensor alignment
+
+`diag-sensor-rxgain-acks.patch` adds `diag sensor` to the sensor role. It prints the
+stored RX boosted gain, the gain the radio really runs with (read back from the
+SX126x register) and the extra ACK count the core uses, because `get radio.rxgain`
+only shows the stored value. It also makes two boot changes that only serve the
+check: `setup()` waits up to 15 s for the host to open the serial port, so the boot
+output is not lost, and it frees an I2C bus that a soft reset left with SDA held low
+(see ledger issue 14), since the board otherwise hangs in the RTC probe. The T-Echo
+has no sensor environment in the tree. The check used one like this, appended to
+`variants/lilygo_techo/platformio.ini`; the board's own build also sets its admin
+password and `DEFAULT_FLOOD_SCOPE_NAME`, which only take effect on a board without
+stored prefs:
+
+```ini
+[env:LilyGo_T-Echo_sensor]
+extends = LilyGo_T-Echo
+build_src_filter = ${LilyGo_T-Echo.build_src_filter}
+  +<../examples/simple_sensor>
+build_flags =
+  ${LilyGo_T-Echo.build_flags}
+  -D ADVERT_NAME='"T-Echo Sensor"'
+  -D ADVERT_LAT=0.0
+  -D ADVERT_LON=0.0
+  -D ADMIN_PASSWORD='"password"'
+```
+
+The patch is for testing only and is not part of any step.
+
 ## Restoring a board
 
 Since v1.17 every role reads `/prefs.json`. Flashing the old firmware back keeps
