@@ -22,6 +22,8 @@
  *   - the temporary radio parameters a 'set radio ...' command installs
  *   - the identity file, the file system erase, the TX power and the stats replies
  *   - the client ACL and the peer lookup a packet's sender hash goes through
+ *   - the boot sequence: begin() loads what the node stored, then gives the radio and
+ *     the board the settings it holds, always in the same order
  *
  * A role keeps whatever is genuinely its own: what it announces, how it answers a
  * request, and in the repeater's case its bridge and loop detection.
@@ -75,6 +77,32 @@ protected:
   }
 
   /**
+   * \brief  The hooks begin() calls into the role. A role owns its CommonCLI, so it
+   *         says where the prefs are loaded from; the other two are for the one role
+   *         that has more to do at those points, and do nothing by default.
+   */
+  virtual void loadPrefs() = 0;
+
+  /**
+   * \brief  Start the role's bridge, if it has one and it is enabled. Called after
+   *         everything is loaded and before the radio is configured.
+   */
+  virtual void beginBridge() { }
+
+  /**
+   * \brief  Called once the radio has been given the node's parameters, TX power
+   *         and boosted gain mode.
+   */
+  virtual void onRadioConfigured() { }
+
+#if ENV_INCLUDE_GPS == 1
+  /**
+   * \brief  Push the stored GPS on/off setting to the sensor manager.
+   */
+  void applyGpsPrefs();
+#endif
+
+  /**
    * \brief  Build this node's own advertisement.
    *
    * The only part of advertising that differs by role: each one announces its own
@@ -111,9 +139,20 @@ protected:
   void onDefaultRegionChanged(const RegionEntry* r) override;
 
 public:
+  /**
+   * \brief  Bring the node up: start the dispatcher, load the stored prefs, ACL and
+   *         Regions, establish the default scope, then configure the radio and the
+   *         board from the prefs and start the advert timers.
+   *
+   * The order is part of the behaviour and is pinned by test/mocks/BootSequenceChecks.h.
+   * In particular the dispatcher starts first, so it sizes its duty cycle budget from
+   * the constructor's airtime factor and not the stored one.
+   */
+  void begin(FILESYSTEM* fs);
+
   // These were public on all three roles and stay public, so nothing outside the
-  // roles changes. Only sendSelfAdvertisement() needs it: each role's main.cpp
-  // advertises once after boot. The rest are reached through the
+  // roles changes. begin() and sendSelfAdvertisement() need it: each role's main.cpp
+  // calls them once after boot. The rest are reached through the
   // CommonCLICallbacks pointer, where public access comes from that interface.
   void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
   void setTxPower(int8_t power_dbm) override;

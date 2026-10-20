@@ -207,3 +207,65 @@ void ServerMesh::getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) {
     MESH_DEBUG_PRINTLN("getPeerSharedSecret: Invalid peer idx: %d", i);
   }
 }
+
+// The boot sequence. The three roles each had this as their own begin(); the bodies
+// were identical except for four things, which are now hooks or shared code:
+//   - the repeater's bridge start (beginBridge)
+//   - the repeater's log line about the gain mode it applied (onRadioConfigured)
+//   - where the prefs are loaded from, because a role owns its CommonCLI (loadPrefs)
+//   - the GPS toggle, three copies of one line (applyGpsPrefs, now here)
+// The order below is the order they ran in, and the tests pin it.
+void ServerMesh::begin(FILESYSTEM* fs) {
+  mesh::Mesh::begin();
+  _fs = fs;
+  // load persisted prefs
+  loadPrefs();
+  acl.load(_fs, self_id);
+  // TODO: key_store.begin();
+  region_map.load(_fs);
+
+  // establish default-scope
+  {
+    RegionEntry* r = region_map.getDefaultRegion();
+    if (r) {
+      region_map.getTransportKeysFor(*r, &default_scope, 1);
+    } else {
+#ifdef DEFAULT_FLOOD_SCOPE_NAME
+      r = region_map.findByName(DEFAULT_FLOOD_SCOPE_NAME);
+      if (r == NULL) {
+        r = region_map.putRegion(DEFAULT_FLOOD_SCOPE_NAME, 0);  // auto-create the default scope region
+        if (r) { r->flags = 0; }   // Allow-flood
+      }
+      if (r) {
+        region_map.setDefaultRegion(r);
+        region_map.getTransportKeysFor(*r, &default_scope, 1);
+      }
+#endif
+    }
+  }
+
+  beginBridge();
+
+  radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+  radio_driver.setTxPower(_prefs.tx_power_dbm);
+
+  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
+  onRadioConfigured();
+
+  board.attachDynamicPrefs(_prefs.getCustom());
+
+  updateAdvertTimer();
+  updateFloodAdvertTimer();
+
+  board.setAdcMultiplier(_prefs.adc_multiplier);
+
+#if ENV_INCLUDE_GPS == 1
+  applyGpsPrefs();
+#endif
+}
+
+#if ENV_INCLUDE_GPS == 1
+void ServerMesh::applyGpsPrefs() {
+  sensors.setSettingValue("gps", _prefs.gps_enabled?"1":"0");
+}
+#endif
