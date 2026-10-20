@@ -2,12 +2,19 @@
 #include <Wire.h>
 
 #include "TechoBoard.h"
+#include <helpers/nrf52/I2cBusClear.h>
 
 #ifdef LILYGO_TECHO
 
 void TechoBoard::begin() {
   NRF52Board::begin();
 
+  // A soft reset can leave the RTC or sensor holding SDA low; without this the
+  // first Wire transfer (RTC autodiscovery) never returns.
+  I2cBusClearResult i2c = i2cBusClearNrf52(PIN_WIRE_SDA, PIN_WIRE_SCL);
+  if (i2c.sda_low_at_start) {
+    MESH_DEBUG_PRINTLN("I2C bus clear: %d clocks, %s", i2c.pulses, i2c.ok ? "released" : "still stuck");
+  }
   Wire.begin();
 
   pinMode(SX126X_POWER_EN, OUTPUT);
