@@ -4,11 +4,22 @@
 // touches is modelled: open, exists, remove, mkdir, and a File that is a
 // Stream.
 //
-// The write budget is the point of this mock. A real flash lets a file open
-// and then refuses the write once the medium is full or worn out, so a test
-// needs a file that is valid but whose writes come up short. Print::write()
-// loops over write(uint8_t), so a budget that runs out mid buffer returns a
-// short count, which is how the real driver reports a partial write.
+// Two failure modes are modelled, because the platforms differ in which one
+// they show.
+//
+// The write budget: a real flash lets a file open and then refuses the write
+// once the medium is full or worn out, so a test needs a file that is valid but
+// whose writes come up short. Print::write() loops over write(uint8_t), so a
+// budget that runs out mid buffer returns a short count, which is how littlefs
+// reports it on nRF52 and STM32.
+//
+// The commit budget: on ESP32 the core opens files fully buffered, so write()
+// reports success for bytes that are still in a stdio buffer, and only close()
+// hands them over. File::close() is void there and drops the error, which
+// leaves a short file behind that no return value ever mentioned. A commit
+// budget below the number of bytes written reproduces exactly that, and
+// corrupt_on_commit covers the worn cell that keeps the length but changes a
+// byte.
 
 #include <cstddef>
 #include <cstdint>
@@ -27,22 +38,38 @@ namespace Adafruit_LittleFS_Namespace {
 struct FileData {
   std::vector<uint8_t> bytes;
   size_t write_budget = std::numeric_limits<size_t>::max();
+  size_t commit_budget = std::numeric_limits<size_t>::max();      // what close() keeps
+  size_t corrupt_on_commit = std::numeric_limits<size_t>::max();  // index close() flips
 };
 
 class File : public Stream {
   FileData* _data;
   size_t _read_pos;
   bool _open;
+  bool _writing;
 
 public:
-  File() : _data(nullptr), _read_pos(0), _open(false) { }
-  explicit File(FileData* data) : _data(data), _read_pos(0), _open(data != nullptr) { }
+  File() : _data(nullptr), _read_pos(0), _open(false), _writing(false) { }
+  explicit File(FileData* data, bool writing = false)
+    : _data(data), _read_pos(0), _open(data != nullptr), _writing(writing) { }
 
   // The driver signals "could not open" through the bool conversion, not an
   // exception or a null return.
   operator bool() const { return _open; }
 
-  void close() { _open = false; }
+  // Only a file that was opened for writing commits on close. A read never
+  // changes what is on the medium.
+  void close() {
+    if (_open && _writing && _data != nullptr) {
+      if (_data->bytes.size() > _data->commit_budget) {
+        _data->bytes.resize(_data->commit_budget);
+      }
+      if (_data->corrupt_on_commit < _data->bytes.size()) {
+        _data->bytes[_data->corrupt_on_commit] ^= 0xFF;
+      }
+    }
+    _open = false;
+  }
 
   // Overriding the single byte write would otherwise hide the buffer overloads
   // of Print, which is what the callers use.
@@ -87,6 +114,8 @@ class Adafruit_LittleFS {
 public:
   // Test knobs.
   size_t write_budget = std::numeric_limits<size_t>::max();
+  size_t commit_budget = std::numeric_limits<size_t>::max();
+  size_t corrupt_on_commit = std::numeric_limits<size_t>::max();
   bool fail_open = false;
 
   bool exists(const char* path) { return _files.count(path) > 0; }
@@ -101,7 +130,9 @@ public:
       Adafruit_LittleFS_Namespace::FileData& data = _files[path];
       data.bytes.clear();
       data.write_budget = write_budget;
-      return Adafruit_LittleFS_Namespace::File(&data);
+      data.commit_budget = commit_budget;
+      data.corrupt_on_commit = corrupt_on_commit;
+      return Adafruit_LittleFS_Namespace::File(&data, true);
     }
     auto found = _files.find(path);
     if (found == _files.end()) return Adafruit_LittleFS_Namespace::File();

@@ -81,7 +81,7 @@ void LocalIdentity::printTo(Stream& s) const {
   ADD_FAILURE() << "LocalIdentity::printTo must not be called by the repeater role tests";
 }
 
-size_t LocalIdentity::writeTo(uint8_t* dest, size_t max_len) {
+size_t LocalIdentity::writeTo(uint8_t* dest, size_t max_len) const {
   ADD_FAILURE() << "LocalIdentity::writeTo must not be called by the repeater role tests";
   return 0;
 }
