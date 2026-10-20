@@ -362,10 +362,36 @@ room server and the sensor did not gain a log line.
 - **Variants other than those built.** Argued from the variant directories, built for
   the 22 + 9 environments above, not for all 626.
 
-## Board test (not done, for whoever runs it)
+## Board test
 
-`techo-b43b` is reserved for the sensor alignment test and was not touched. A board
-test of this step is a before and after on one board with the same stored settings:
+### Done, sensor role only
+
+Run on `techo-b43b` (LilyGo T-Echo, SX1262, sensor role) after the merge into
+`integration`, with marked images of the merge commit (`4cf3161b`, "4f") and of its
+first parent (`3e685785`, "before"), both built with
+`tools/refactoring/diag-sensor-rxgain-acks.patch` for `diag sensor` (stored RX gain,
+the radio's RX gain register, extra ACK count) and for freeing a stuck I2C bus at boot
+(ledger issue 14). Each step read all 30 server settings plus `region default` and
+`diag sensor`:
+
+1. Original 1.17.1 to "before": all settings identical.
+2. "Before", `set radio.rxgain off`, `set multi.acks 1`, reboot: the register reads
+   off and one extra ACK is used, as the sensor alignment intends.
+3. "Before" to "4f": every reading identical, the register still off.
+4. Reboot on "4f": identical to step 3, so the moved boot path reproduces itself.
+5. "4f" to "before" (downgrade): identical.
+6. Back to the original 1.17.1 with the original values: 31 of 31 lines identical to
+   the reading taken before.
+
+So the moved `begin()` loads the same prefs and pushes the stored RX gain to the radio
+on real hardware. The I2C bus was found stuck at two of these boots and freed by the
+diagnostic patch; that is ledger issue 14 and independent of this step.
+
+### Not covered yet
+
+The repeater and the room server were not run on a board, and the sensor run used
+default values for everything but the RX gain and `multi.acks`. The rest of the plan
+below is still open:
 
 - **Images.** Two per role, same toolchain, marked with
   `PLATFORMIO_BUILD_FLAGS='-D FIRMWARE_BUILD_DATE=\"<tag>\"'` so `ver` shows which
