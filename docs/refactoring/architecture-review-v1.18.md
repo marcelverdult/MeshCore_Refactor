@@ -91,6 +91,14 @@ the upper bound is exclusive: the sensor draws from the six multiples 0 to 5 tim
 `+ 1` of `96e786fa` exists because `t == 0` made the bound 0 and `num % 0` crashed,
 which the sensor's form could not do.
 
+Status: the shared plumbing is in `ServerMesh` since the steps 4a to 4f, the last of
+which moved the boot sequence ([0007](0007-boot-sequence.md)). Two candidates are left
+that were not part of the cut: the `CommonCLI _cli` member, constructed with
+identical arguments in all three roles, and `allowPacketForward()`, whose `disable_fwd`
+check is the same in all three and whose whole body is identical in the room server
+and the sensor only once the parked flood limit alignment
+(`refactor/sensor-flood-limits`) lands; today the sensor still checks `flood_max` alone.
+
 ### F3. Board variants are near copies
 
 89 `variants/*/target.cpp` files; `radio_new_identity()` is identical (ignoring
@@ -121,7 +129,9 @@ roles themselves since the harness of step 4: `test/mocks` now carries an in-mem
 file system, an RTC and the globals a variant's `target.h` declares, so all three
 role implementations compile natively and `native_server` drives the real room
 server. The gap that is left is the deeper request handling, which needs packets and
-a populated ACL.
+a populated ACL. Step 4f added `native_repeater`, so all three server roles now run on
+the host, and `native_repeater_full`, which compiles in the bridge, GPS and
+configured-scope blocks of `begin()` as well.
 
 ## Issues noticed while reading (not part of this series)
 
@@ -142,3 +152,4 @@ issue or fix.
 | 10 | The two flood route types disagree about a denied Region. `onRecvPacket()` checks `REGION_DENY_FLOOD` itself for an un-scoped flood, while a scoped flood goes through `RegionMap::findMatch()`, whose transport-code-0 shortcut returns the wildcard before the mask is applied. So denying flood on the wildcard stops an un-scoped flood but not a scoped one carrying no code. (Found during step 4a, pinned in test_server_base) | `src/helpers/ServerMesh.cpp`, `src/helpers/RegionMap.cpp:findMatch()` |
 | 11 | `setRxBoostedGain()` is a virtual nobody calls: a default in `helpers/CommonCLI.h`, an override in the repeater and in the room server, and no caller anywhere. The only `radio.rxgain` handler reaches the radio driver directly, and the settings table lists the field as `CLI_NONE`, which the generic loop skips. Two dead overrides. (Found during the sensor alignment) | `src/helpers/CommonCLI.h`, `examples/simple_repeater/MyMesh.cpp`, `examples/simple_room_server/MyMesh.cpp` |
 | 12 | A hop limit of zero is written to `prefs.json` as an explicit `0` and applied verbatim on load, so `set flood.max.unscoped 0` persists and the constructor default cannot protect against it. Since the limits are compared with `>=`, zero means "never forward", which is what upstream's own comment describes repeaters as running. Combined with issue 7 (no range checking on `/prefs.json`) this is how a node can boot into a state that silently forwards nothing. Measured in `test_sensor_role` | `src/helpers/ConfigSerializer.cpp`, `src/helpers/RoutingPolicy.h` |
+| 13 | `Dispatcher::begin()` runs before the prefs are loaded, so the transmit budget starts at the size the constructor's airtime factor gives (1.0, half of the one hour window), not the stored one. Every budget decision calls `updateTxBudget()` first, which caps it at the stored factor's maximum or refills it at the stored rate, so this is a start-up level and probably harmless. Read from the code, not measured on a board. (Found while pinning the boot sequence in step 4f; pinned in `BootSequenceChecks.h`) | `src/Dispatcher.cpp:19-31`, `src/helpers/ServerMesh.cpp` |
