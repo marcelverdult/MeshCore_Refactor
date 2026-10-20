@@ -326,10 +326,6 @@ uint32_t SensorMesh::getDirectRetransmitDelay(const mesh::Packet* packet) {
   uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.direct_tx_delay_factor);
   return getRNG()->nextInt(0, 6)*t;
 }
-uint8_t SensorMesh::getExtraAckTransmitCount() const {
-  return 0;   // the sensor has never sent extra ACKs, whatever multi.acks says
-}
-
 uint8_t SensorMesh::handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood) {
   ClientInfo* client;
   if (data[0] == 0) {   // blank password, just check if sender is in ACL
@@ -747,6 +743,14 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.gps_enabled = 0;
   _prefs.gps_interval = 0;
   _prefs.advert_loc_policy = ADVERT_LOC_PREFS;
+
+#if defined(USE_SX1262) || defined(USE_SX1268)
+#ifdef SX126X_RX_BOOSTED_GAIN
+  _prefs.rx_boosted_gain = SX126X_RX_BOOSTED_GAIN;
+#else
+  _prefs.rx_boosted_gain = 1; // enabled by default;
+#endif
+#endif
   _prefs.radio_fem_rxgain = 1;
   _prefs.radio_fem_txgain = 0;
 
@@ -783,6 +787,7 @@ void SensorMesh::begin(FILESYSTEM* fs) {
 
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
+  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
 
   board.attachDynamicPrefs(_prefs.getCustom());
 

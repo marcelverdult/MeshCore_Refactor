@@ -105,11 +105,11 @@ protected:
 
   // Mesh overrides
   bool allowPacketForward(const mesh::Packet* packet) override;
-  // The sensor keeps its own retransmit delays and sends no extra ACKs, unlike the
-  // other roles; aligning it would change its behaviour (see docs/refactoring).
+  // The sensor keeps its own retransmit delays: it draws from six discrete steps
+  // while the other roles draw from a continuous range, and upstream still calls
+  // that change experimental (see docs/refactoring/0005-sensor-alignment.md).
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
-  uint8_t getExtraAckTransmitCount() const override;
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data, size_t len) override;
   bool onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
