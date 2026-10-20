@@ -31,6 +31,20 @@ PLATFORMIO_BUILD_FLAGS='-D FIRMWARE_BUILD_DATE=\"step1-<commit>\"' pio run -e Li
 `PLATFORMIO_BUILD_FLAGS` makes PlatformIO clean the whole build folder of the
 project, so build the marked images in a separate worktree.
 
+## Companion frame sweep (step 10)
+
+`companion_sweep.py` sends the frames of the host frame sweep
+(`test/test_companion_frames/frame_sweep.golden`, the all zero pass) to a USB
+companion and checks that the board answers as the host harness does: every
+frame the host refuses, every length of the commands that only report, and four
+lengths of every code that is not a command. Commands that would store, transmit,
+restart or format are never sent at an accepted length; the docstring lists them.
+About 6,800 frames, 12 minutes on a T-Echo.
+
+```sh
+python3 companion_sweep.py <usb-serial>
+```
+
 ## Diagnostic build for step 2
 
 `diag-tuning.patch` adds a `diag tuning` command to the room server and the
