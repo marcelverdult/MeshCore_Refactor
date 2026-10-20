@@ -167,15 +167,14 @@ instead of three times. The host suite grew from 82 to 115 test cases.
 
 What is still shared between all three roles, and why it stayed:
 
-- `begin()` is step 4f. Its precondition is met since the sensor alignment closed
-  the RX boosted gain gap: measured after that change, the room server's and the
-  sensor's `begin()` are now **identical**, 44 lines each, and the repeater differs
-  only by its `WITH_BRIDGE` block and one debug print. So 4f is a move with one
-  hook, and the measurement is in place for whoever picks it up.
-- `allowPacketForward()` is now **identical** in the room server and the sensor, 8
-  lines each, after the alignment. The repeater adds a Region check and loop
-  detection on top of the same two leading checks. A later step could share the
-  common part behind a hook; it was not part of this cut.
+- `begin()` was step 4f and has landed, see [0007](0007-boot-sequence.md): one body in
+  `ServerMesh` with three hooks, the order unchanged.
+- `allowPacketForward()` is a candidate. The room server's and the sensor's bodies
+  are identical only on the branch that also carries the flood limit alignment
+  (`refactor/sensor-flood-limits`, 8 lines each there); on the branch without it the
+  sensor still checks `flood_max` alone (5 lines). The repeater adds a Region check
+  and loop detection on top of the same two leading checks. A later step could share
+  the common part behind a hook; it was not part of this cut.
 - `createSelfAdvert()` is a role hook by design now: only the advert type differs.
 - `handleCommand()`, `handleRequest()`, `onAnonDataRecv()`, `onPeerDataRecv()` and
   `loop()` differ by role and are out of scope, as stated above.

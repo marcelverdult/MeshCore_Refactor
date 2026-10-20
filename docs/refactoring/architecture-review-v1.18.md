@@ -91,6 +91,14 @@ the upper bound is exclusive: the sensor draws from the six multiples 0 to 5 tim
 `+ 1` of `96e786fa` exists because `t == 0` made the bound 0 and `num % 0` crashed,
 which the sensor's form could not do.
 
+Status: the shared plumbing is in `ServerMesh` since the steps 4a to 4f, the last of
+which moved the boot sequence ([0007](0007-boot-sequence.md)). Two candidates are left
+that were not part of the cut: the `CommonCLI _cli` member, constructed with
+identical arguments in all three roles, and `allowPacketForward()`, whose `disable_fwd`
+check is the same in all three and whose whole body is identical in the room server
+and the sensor only once the parked flood limit alignment
+(`refactor/sensor-flood-limits`) lands; today the sensor still checks `flood_max` alone.
+
 ### F3. Board variants are near copies
 
 89 `variants/*/target.cpp` files; `radio_new_identity()` is identical (ignoring
@@ -121,7 +129,9 @@ roles themselves since the harness of step 4: `test/mocks` now carries an in-mem
 file system, an RTC and the globals a variant's `target.h` declares, so all three
 role implementations compile natively and `native_server` drives the real room
 server. The gap that is left is the deeper request handling, which needs packets and
-a populated ACL.
+a populated ACL. Step 4f added `native_repeater`, so all three server roles now run on
+the host, and `native_repeater_full`, which compiles in the bridge, GPS and
+configured-scope blocks of `begin()` as well.
 
 ## Issues noticed while reading (not part of this series)
 
@@ -144,3 +154,4 @@ issue or fix.
 | 12 | A hop limit of zero is written to `prefs.json` as an explicit `0` and applied verbatim on load, so `set flood.max.unscoped 0` persists and the constructor default cannot protect against it. Since the limits are compared with `>=`, zero means "never forward", which is what upstream's own comment describes repeaters as running. Combined with issue 7 (no range checking on `/prefs.json`) this is how a node can boot into a state that silently forwards nothing. Measured in `test_sensor_role` | `src/helpers/ConfigSerializer.cpp`, `src/helpers/RoutingPolicy.h` |
 | 13 | `set multi.acks` accepts any byte (the settings table gives it no maximum), but the range check after loading `/prefs.json` clamps the field to 0..1. A stored `2` therefore reads back as `1` after a reboot, and the CLI never says so. The CLI and the loader should agree on one range. (Found in the hardware check of the sensor alignment) | `src/helpers/CommonRadioPrefs.cpp` (`multi_ack` row), `src/helpers/CommonCLI.cpp` (`sanitisePrefs()`) |
 | 14 | After a soft reset (serial DFU, `reboot`) the I2C bus is sometimes left with SDA held low by a device that was interrupted mid transfer, and the next boot blocks for good in the RTC probe, before any radio or mesh code runs. Measured on a T-Echo: without freeing the bus 4 of 4 boots stopped there; with nine clock pulses before `Wire.begin()` SDA was low in 2 of 3 boots, one pulse released it and all 3 boots completed. Since the blocked probe is itself mid transfer, the next soft reset tends to leave the bus stuck again, so only a power cycle breaks the loop. (Found in the hardware check of the sensor alignment) | `src/helpers/AutoDiscoverRTCClock.cpp` (`i2c_probe()`), the variants' `Wire.begin()` |
+| 15 | `Dispatcher::begin()` runs before the prefs are loaded, so the transmit budget starts at the size the constructor's airtime factor gives (1.0, half of the one hour window), not the stored one. Every budget decision calls `updateTxBudget()` first, which caps it at the stored factor's maximum or refills it at the stored rate, so this is a start-up level and probably harmless. Read from the code, not measured on a board. (Found while pinning the boot sequence in step 4f; pinned in `BootSequenceChecks.h`) | `src/Dispatcher.cpp:19-31`, `src/helpers/ServerMesh.cpp` |

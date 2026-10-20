@@ -49,7 +49,6 @@
 class SensorMesh : public ServerMesh {
 public:
   SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
-  void begin(FILESYSTEM* fs);
   void loop();
   void handleCommand(ClientInfo* from, uint32_t sender_timestamp, char* command, char* reply);
 
@@ -134,9 +133,6 @@ private:
 
   void sendAlert(const ClientInfo* c, Trigger* t);
 
-  #if ENV_INCLUDE_GPS == 1
-  void applyGpsPrefs() {
-    sensors.setSettingValue("gps", _prefs.gps_enabled?"1":"0");
-  }
-#endif
+  // ServerMesh hook for begin()
+  void loadPrefs() override { _cli.loadPrefs(_fs); }
 };

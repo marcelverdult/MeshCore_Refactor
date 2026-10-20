@@ -867,60 +867,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 
 }
 
-void MyMesh::begin(FILESYSTEM *fs) {
-  mesh::Mesh::begin();
-  _fs = fs;
-  // load persisted prefs
-  _cli.loadPrefs(_fs);
-  acl.load(_fs, self_id);
-  // TODO: key_store.begin();
-  region_map.load(_fs);
-
-  // establish default-scope
-  {
-    RegionEntry* r = region_map.getDefaultRegion();
-    if (r) {
-      region_map.getTransportKeysFor(*r, &default_scope, 1);
-    } else {
-#ifdef DEFAULT_FLOOD_SCOPE_NAME
-      r = region_map.findByName(DEFAULT_FLOOD_SCOPE_NAME);
-      if (r == NULL) {
-        r = region_map.putRegion(DEFAULT_FLOOD_SCOPE_NAME, 0);  // auto-create the default scope region
-        if (r) { r->flags = 0; }   // Allow-flood
-      }
-      if (r) {
-        region_map.setDefaultRegion(r);
-        region_map.getTransportKeysFor(*r, &default_scope, 1);
-      }
-#endif
-    }
-  }
-
-#if defined(WITH_BRIDGE)
-  if (_prefs.bridge_enabled) {
-    bridge.begin();
-  }
-#endif
-
-  radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
-  radio_driver.setTxPower(_prefs.tx_power_dbm);
-
-  radio_driver.setRxBoostedGainMode(_prefs.rx_boosted_gain);
-  MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
-                     radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
-
-  board.attachDynamicPrefs(_prefs.getCustom());
-
-  updateAdvertTimer();
-  updateFloodAdvertTimer();
-
-  board.setAdcMultiplier(_prefs.adc_multiplier);
-
-#if ENV_INCLUDE_GPS == 1
-  applyGpsPrefs();
-#endif
-}
-
 void MyMesh::dumpLogFile() {
 #if defined(RP2040_PLATFORM)
   File f = _fs->open(PACKET_LOG_FILE, "r");

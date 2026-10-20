@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "EventLog.h"
 #include "Stream.h"
 
 #ifndef FILE_O_WRITE
@@ -73,6 +74,7 @@ public:
   File open(const char* name) { return open(name, "r"); }
 
   File open(const char* name, const char* mode, bool create = false) {
+    logEvent(std::string("open:") + name);
     std::string n(name);
     bool writing = (mode[0] == 'w' || mode[0] == 'a');
     if (!writing) {
@@ -95,7 +97,10 @@ public:
   // identity store, and a flat map needs no directory to hold "/dir/file".
   bool mkdir(const char* path) { return true; }
 
-  bool exists(const char* name) { return files.find(std::string(name)) != files.end(); }
+  bool exists(const char* name) {
+    logEvent(std::string("exists:") + name);
+    return files.find(std::string(name)) != files.end();
+  }
   bool remove(const char* name) { return files.erase(std::string(name)) > 0; }
   bool format() { files.clear(); return true; }
 

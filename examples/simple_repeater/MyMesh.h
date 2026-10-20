@@ -121,11 +121,19 @@ protected:
   void logTx(mesh::Packet* pkt, int len) override;
   void logTxFail(mesh::Packet* pkt, int len) override;
 
-#if ENV_INCLUDE_GPS == 1
-  void applyGpsPrefs() {
-    sensors.setSettingValue("gps", _prefs.gps_enabled?"1":"0");
+  // ServerMesh hooks for begin()
+  void loadPrefs() override { _cli.loadPrefs(_fs); }
+#if defined(WITH_BRIDGE)
+  void beginBridge() override {
+    if (_prefs.bridge_enabled) {
+      bridge.begin();
+    }
   }
 #endif
+  void onRadioConfigured() override {
+    MESH_DEBUG_PRINTLN("RX Boosted Gain Mode: %s",
+                       radio_driver.getRxBoostedGainMode() ? "Enabled" : "Disabled");
+  }
 
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
   void onAdvertRecv(mesh::Packet* packet, const mesh::Identity& id, uint32_t timestamp, const uint8_t* app_data, size_t app_data_len);
@@ -136,7 +144,6 @@ protected:
 public:
   MyMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
 
-  void begin(FILESYSTEM* fs);
   void sendNodeDiscoverReq();
   const char* getFirmwareVer() override { return FIRMWARE_VERSION; }
   const char* getBuildDate() override { return FIRMWARE_BUILD_DATE; }

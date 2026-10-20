@@ -4,6 +4,8 @@
 
 #include <Mesh.h>
 
+#include "EventLog.h"
+
 // A variant's target.h brings in the platform file system; the native env gets the
 // in-memory stand-in, so FILESYSTEM and File are defined for the server helpers.
 #include "FS.h"
@@ -26,12 +28,20 @@ struct MockRadioDriver : public mesh::Radio {
   float last_rssi = -90.0f, last_snr = 5.0f;
   uint32_t packets_recv = 0, packets_sent = 0, packets_recv_errors = 0;
 
-  void setTxPower(int8_t dbm) { tx_power = dbm; tx_power_calls++; }
-  bool setRxBoostedGainMode(bool en) { rx_boosted = en; rx_boost_calls++; return rx_boost_supported; }
+  int begin_calls = 0;
+  void begin() override { begin_calls++; logEvent("radio.begin"); }
+
+  void setTxPower(int8_t dbm) { tx_power = dbm; tx_power_calls++; logEvent("radio.setTxPower"); }
+  bool setRxBoostedGainMode(bool en) {
+    rx_boosted = en; rx_boost_calls++;
+    logEvent("radio.setRxBoostedGainMode");
+    return rx_boost_supported;
+  }
   bool getRxBoostedGainMode() const { return rx_boosted; }
 
   void setParams(float f, float b, uint8_t s, uint8_t c) {
     freq = f; bw = b; sf = s; cr = c; set_params_calls++;
+    logEvent("radio.setParams");
   }
 
   float getLastRSSI() const { return last_rssi; }
@@ -69,6 +79,7 @@ struct MockRadioDriver : public mesh::Radio {
     tx_power = 0; tx_power_calls = 0;
     rx_boosted = false; rx_boost_calls = 0; rx_boost_supported = true;
     freq = bw = 0; sf = cr = 0; set_params_calls = 0;
+    begin_calls = 0;
     send_succeeds = true; send_calls = 0; last_send_len = 0;
     last_rssi = -90.0f; last_snr = 5.0f;
     packets_recv = packets_sent = packets_recv_errors = 0;
@@ -95,7 +106,11 @@ public:
 
   uint16_t getBattMilliVolts() override { return batt_milli_volts; }
   float getMCUTemperature() override { return mcu_temperature; }
-  bool setAdcMultiplier(float m) override { adc_multiplier = m; return true; }
+  bool setAdcMultiplier(float m) override {
+    adc_multiplier = m;
+    logEvent("board.setAdcMultiplier");
+    return true;
+  }
   float getAdcMultiplier() const override { return adc_multiplier; }
   const char* getManufacturerName() const override { return "Mock"; }
   void reboot() override { reboot_calls++; }
@@ -105,7 +120,7 @@ public:
 
   // Not on MainBoard: the concrete variant boards declare it, and the role code
   // calls it on the concrete type (see helpers/NRF52Board.h and its siblings).
-  void attachDynamicPrefs(KeyValueStore* prefs) { }
+  void attachDynamicPrefs(KeyValueStore* prefs) { logEvent("board.attachDynamicPrefs"); }
 
   void reset() {
     batt_milli_volts = 4100;
@@ -126,5 +141,14 @@ public:
 inline MockBoard board;
 inline MockRTCClock rtc_clock;
 
-// SensorManager is concrete, so the real class serves as the stand-in.
-inline SensorManager sensors;
+// SensorManager is concrete, so the real class serves as the stand-in; this one only
+// adds a record of the settings the role pushes to it (the GPS toggle at boot).
+class MockSensorManager : public SensorManager {
+public:
+  bool setSettingValue(const char* name, const char* value) override {
+    logEvent(std::string("sensors.setSettingValue ") + name + "=" + value);
+    return true;
+  }
+};
+
+inline MockSensorManager sensors;
