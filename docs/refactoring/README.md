@@ -50,7 +50,7 @@ The full analysis, with file and line references for every finding, is in
 | 1 | Share the radio and GPS settings between the server roles' and the companion's NodePrefs | [0001](0001-shared-radio-gps-prefs.md) | ready for review |
 | 2 | Let the core read its tuning values from the radio settings instead of a getter per role | [0002](0002-core-reads-radio-prefs.md) | ready for review |
 | 3 | Drive the radio settings (JSON, CLI, key/value store) from one table | [0003](0003-radio-settings-table.md) | ready for review |
-| 4 | Share the underpinnings of repeater, room server and sensor in one base class (steps 4a to 4f; the boot sequence is the last) | [0004](0004-shared-server-base.md), [0007](0007-boot-sequence.md) | ready for review |
+| 4 | Share the underpinnings of repeater, room server and sensor in one base class (steps 4a to 4g; the boot sequence and the forwarding checks are the last two) | [0004](0004-shared-server-base.md), [0007](0007-boot-sequence.md), [0008](0008-forward-policy.md) | ready for review |
 
 Planned next steps (each needs its own design note before code), in order of
 expected benefit: one generic variant target

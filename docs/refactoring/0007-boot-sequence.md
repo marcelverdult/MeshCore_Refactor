@@ -388,10 +388,8 @@ test of this step is a before and after on one board with the same stored settin
 
 ## Next candidates
 
-- **`allowPacketForward()`.** The leading `disable_fwd` check is the same in all three
-  roles. The room server's and the sensor's whole bodies are identical only once the
-  flood limit alignment (`refactor/sensor-flood-limits`) is on the branch; today the
-  sensor checks `flood_max` alone. Not touched here.
+- **`allowPacketForward()`.** Done in step 4g, [0008](0008-forward-policy.md), once
+  the sensor applied the flood hop limits.
 - **The `CommonCLI _cli` member.** Constructed with the same arguments in all three
   roles. Moving it into the base removes `loadPrefs()` and the three copies of
   `savePrefs()`, at the price of the board in `ServerMesh`'s constructor.
