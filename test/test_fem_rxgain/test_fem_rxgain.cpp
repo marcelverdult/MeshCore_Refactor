@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include <helpers/FemRxGain.h>
 #include <helpers/KeyValueStore.h>
 
 // The RX gain (LNA) setting of the boards whose LoRa front end module can switch
@@ -13,7 +14,9 @@
 // same attachDynamicPrefs() and handleCommand() (the board class name aside,
 // see tools/refactoring/variant_duplication.py), which read the `fem_rxgain` key
 // from the store the role attaches, answer `get/set radio.fem.rxgain` and write
-// the key back. These tests pin what the CLI replies and what lands in the store.
+// the key back. These tests pin what the CLI replies and what lands in the store,
+// for a verbatim copy of those bodies and for the shared FemRxGain the boards
+// forward to now.
 
 namespace {
 
@@ -139,6 +142,19 @@ bool VariantCopyBoard::handleCommand(const char* command, uint32_t sender_timest
   return false; // not handled
 }
 
+// A board as the four are now: the handlers forward to the shared FemRxGain,
+// which reaches the private helpers as a friend.
+class SharedBoard : public FakeBoardBase {
+  friend class FemRxGain<SharedBoard>;
+  FemRxGain<SharedBoard> fem_rxgain;
+
+public:
+  void attachDynamicPrefs(KeyValueStore* prefs) { fem_rxgain.attachPrefs(*this, prefs); }
+  bool handleCommand(const char* command, uint32_t sender_timestamp, char* reply) {
+    return fem_rxgain.handleCommand(*this, command, reply);
+  }
+};
+
 template <class BOARD>
 class FemRxGainTest : public ::testing::Test {
 protected:
@@ -163,7 +179,7 @@ protected:
   }
 };
 
-using Implementations = ::testing::Types<VariantCopyBoard>;
+using Implementations = ::testing::Types<VariantCopyBoard, SharedBoard>;
 TYPED_TEST_SUITE(FemRxGainTest, Implementations);
 
 TYPED_TEST(FemRxGainTest, AttachReadsTheKeyOnceAndSwitchesTheLnaOn) {
@@ -339,6 +355,34 @@ TYPED_TEST(FemRxGainTest, OtherCommandsAreNotHandled) {
   EXPECT_TRUE(this->board.set_calls.empty());
   EXPECT_TRUE(this->store.reads.empty());
   EXPECT_TRUE(this->store.writes.empty());
+}
+
+// Without a store the boards' copies dereference NULL on `set` (the change
+// meshcore-dev/MeshCore#3496 makes to them); the shared code stores nothing and
+// replies as with a store. No role in this tree calls handleCommand() before it
+// attaches the store, so this case is new, not changed.
+TEST(FemRxGainWithoutStore, SetSwitchesTheLnaAndStoresNothing) {
+  SharedBoard board;
+  char reply[160];
+  char on[80] = "set radio.fem.rxgain on";
+  char off[80] = "set radio.fem.rxgain off";
+  char get[80] = "get radio.fem.rxgain";
+
+  EXPECT_TRUE(board.handleCommand(on, 0, reply));
+  EXPECT_STREQ(reply, "OK - LoRa FEM RX gain on");
+  EXPECT_TRUE(board.loRaFEMControl.lna_enabled);
+  EXPECT_TRUE(board.handleCommand(get, 0, reply));
+  EXPECT_STREQ(reply, "> on");
+  EXPECT_TRUE(board.handleCommand(off, 0, reply));
+  EXPECT_STREQ(reply, "OK - LoRa FEM RX gain off");
+  EXPECT_FALSE(board.loRaFEMControl.lna_enabled);
+  EXPECT_EQ(board.set_calls, (std::vector<bool>{ true, false }));
+}
+
+// The shared object holds nothing but the store pointer, so the boards keep
+// their size and layout (the pointer replaces their own `_prefs`).
+TEST(FemRxGainWithoutStore, IsTheSizeOfAPointer) {
+  EXPECT_EQ(sizeof(FemRxGain<SharedBoard>), sizeof(KeyValueStore*));
 }
 
 }  // namespace

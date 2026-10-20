@@ -5,10 +5,12 @@
 #include <helpers/NRF52Board.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include <helpers/KeyValueStore.h>
+#include <helpers/FemRxGain.h>
 #include "LoRaFEMControl.h"
 
 class T096Board : public NRF52BoardDCDC {
-  KeyValueStore* _prefs = NULL;
+  friend class FemRxGain<T096Board>;
+  FemRxGain<T096Board> fem_rxgain;
 
 protected:
 #ifdef NRF52_POWER_MANAGEMENT

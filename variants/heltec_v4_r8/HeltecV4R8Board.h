@@ -4,6 +4,7 @@
 #include <driver/rtc_io.h>
 #include <helpers/ESP32Board.h>
 #include <helpers/RefCountedDigitalPin.h>
+#include <helpers/FemRxGain.h>
 #include "LoRaFEMControl.h"
 
 #ifndef ADC_MULTIPLIER
@@ -11,7 +12,8 @@
 #endif
 
 class HeltecV4R8Board : public ESP32Board {
-  KeyValueStore* _prefs = NULL;
+  friend class FemRxGain<HeltecV4R8Board>;
+  FemRxGain<HeltecV4R8Board> fem_rxgain;
 
   bool setLoRaFemLnaEnabled(bool enable);
   bool isLoRaFemLnaEnabled() const;
