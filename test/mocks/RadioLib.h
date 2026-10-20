@@ -27,6 +27,7 @@ public:
   int16_t scan_result = RADIOLIB_CHANNEL_FREE;
   size_t preamble_length = 0;
   int8_t output_power = 0;
+  uint8_t random_byte = 0x5A;  // what randomByte() returns; set per radio to tell two apart
 
   int16_t sleep() { return RADIOLIB_ERR_NONE; }
   int16_t standby() { return RADIOLIB_ERR_NONE; }
@@ -42,6 +43,6 @@ public:
   int16_t setOutputPower(int8_t dbm) { output_power = dbm; return RADIOLIB_ERR_NONE; }
   void setPacketReceivedAction(void (*)(void)) { }
   int16_t setPreambleLength(size_t len) { preamble_length = len; return RADIOLIB_ERR_NONE; }
-  uint8_t randomByte() { return 0x5A; }
+  uint8_t randomByte() { return random_byte; }
   int32_t random(int32_t upper) { return upper / 2; }
 };

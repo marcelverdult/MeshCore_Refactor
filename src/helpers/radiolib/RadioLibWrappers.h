@@ -12,6 +12,7 @@ struct PacketMillis {
 };
 
 class RadioLibWrapper : public mesh::Radio {
+  friend class RadioNoiseListener;  // listens on _radio, without a public accessor for it
 protected:
   PhysicalLayer* _radio;
   mesh::MainBoard* _board;
@@ -93,6 +94,9 @@ class RadioNoiseListener : public mesh::RNG {
   PhysicalLayer* _radio;
 public:
   RadioNoiseListener(PhysicalLayer& radio): _radio(&radio) { }
+  // The radio a driver wraps, for code that has only the driver (radio_driver),
+  // not the variant's global radio object.
+  explicit RadioNoiseListener(RadioLibWrapper& driver): _radio(driver._radio) { }
 
   void random(uint8_t* dest, size_t sz) override {
 #ifdef USE_CC310_HW_CRYPTO

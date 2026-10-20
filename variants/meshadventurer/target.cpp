@@ -31,11 +31,6 @@ bool radio_init() {
 #endif
 }
 
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-
 
 void MASensorManager::start_gps() {
   if(!gps_active) {
