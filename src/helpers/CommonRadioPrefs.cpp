@@ -3,6 +3,7 @@
 #include "Utils.h"
 #include "target.h"
 #include <stddef.h>
+#include <ctype.h>
 
 namespace {
 
@@ -59,14 +60,25 @@ const RadioSetting SETTINGS[] = {
 
 const int NUM_SETTINGS = sizeof(SETTINGS) / sizeof(SETTINGS[0]);
 
-// True if v is a number in [0, max]. NaN and infinity are recognised by their bits:
-// nRF52 builds use -Ofast, and its -ffast-math lets float comparisons assume that
-// NaN and infinity never occur, so a comparison alone may let them through.
-bool inRange(float v, float max) {
-  uint32_t bits;
-  memcpy(&bits, &v, sizeof(bits));
-  if ((bits & 0x7F800000) == 0x7F800000) return false;
-  return v >= 0 && v <= max;
+// strtof() and atof() also read "nan" and "inf" (any case, also "infinity" and
+// "nan(...)"). A NaN cannot be refused by a range check: no ordered comparison is
+// true for it, and under -ffast-math, which nRF52 builds use, the compiler may
+// assume it never occurs and fold any test on the parsed value away (clang does
+// that even with a test on the bits). So the text is checked: after optional
+// white space and sign, those are the only spellings that start with 'n' or 'i'.
+// Anything else keeps its old meaning, including garbage that reads as 0.
+bool spellsNanOrInf(const char* s) {
+  while (isspace((unsigned char)*s)) s++;
+  if (*s == '+' || *s == '-') s++;
+  char c = (char) tolower((unsigned char)*s);
+  return c == 'n' || c == 'i';
+}
+
+// True if text is a number in [0, max]; v is its parsed value. An infinity from
+// digits ("1e40") fails the comparison, which the compiler cannot fold because
+// the value is only known at run time.
+bool inRange(const char* text, float v, float max) {
+  return !spellsNanOrInf(text) && v >= 0 && v <= max;
 }
 
 // "get <name>"
@@ -154,10 +166,10 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
   if (memcmp(command, "set af ", 7) == 0) {
     char* end;
     float af = strtof(&command[7], &end);
-    // inRange() rejects NaN and infinity by their bits. Two comparisons alone
+    // inRange() refuses "nan" and "inf" by the text. Two comparisons alone
     // cannot: no ordered comparison is true for a NaN, so "af < 0 || af > 9"
     // let "set af nan" through, which a T-Echo accepted and reported back as 0.
-    if (end == &command[7] || !inRange(af, 9)) {
+    if (end == &command[7] || !inRange(&command[7], af, 9)) {
       strcpy(reply, "ERROR: af must be 0-9");
     } else {
       setAirtimeFactor(af);
@@ -175,7 +187,7 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
   }
   if (memcmp(command, "set dutycycle ", 14) == 0) {
     float dc = atof(&command[14]);
-    if (!inRange(dc, 100) || dc < 1) {
+    if (!inRange(&command[14], dc, 100) || dc < 1) {
       strcpy(reply, "ERROR: dutycycle must be 1-100");
     } else {
       setAirtimeFactor((100.0f / dc) - 1.0f);
@@ -247,7 +259,7 @@ bool CommonRadioPrefs::handleCommand(const char* command, uint32_t sender_timest
     if (value == NULL) continue;
     if (s.cli == CLI_FLOAT) {
       float v = atof(value);
-      if (!inRange(v, s.max)) {
+      if (!inRange(value, v, s.max)) {
         strcpy(reply, s.range_error);
         return true;
       }

@@ -238,7 +238,7 @@ void expectRadioCliEdgeCases(P& p) {
   // "set af nan" used to be accepted, and the result depended on the compiler:
   // no ordered comparison is true for a NaN, and -ffast-math (nRF52 builds use
   // -Ofast) may additionally assume that NaN never occurs. inRange() reads the
-  // bits, so the answer is now the same on every build and needs no guard here.
+  // text, so the answer is now the same on every build and needs no guard here.
   EXPECT_EQ("ERROR: af must be 0-9", rejected("set af nan"));
   EXPECT_FALSE(isNanBits(p.airtime_factor));
   EXPECT_FLOAT_EQ(0.0f, p.airtime_factor);
@@ -253,7 +253,7 @@ void expectRadioCliEdgeCases(P& p) {
   EXPECT_EQ("OK - 33.0%", accepted("set dutycycle 33"));
 
   // Neither command takes a value that is not a finite number. inRange()
-  // decides that on the bits, so the answer does not depend on -ffast-math and
+  // decides that on the text, so the answer does not depend on -ffast-math and
   // the cases need no guard. "set dutycycle" writes airtime_factor through a
   // division and had the same hole as "set af".
   EXPECT_EQ("ERROR: af must be 0-9", rejected("set af -nan"));
@@ -261,6 +261,9 @@ void expectRadioCliEdgeCases(P& p) {
   EXPECT_EQ("ERROR: af must be 0-9", rejected("set af 1e40"));
   EXPECT_EQ("ERROR: dutycycle must be 1-100", rejected("set dutycycle nan"));
   EXPECT_EQ("ERROR: dutycycle must be 1-100", rejected("set dutycycle inf"));
+  EXPECT_EQ("ERROR: af must be 0-9", rejected("set af +nan"));
+  EXPECT_EQ("ERROR: af must be 0-9", rejected("set af infinity"));
+  EXPECT_EQ("ERROR: dutycycle must be 1-100", rejected("set dutycycle  nan"));
   EXPECT_FALSE(isNanBits(p.airtime_factor));
 
   // int.thresh: atoi, no range, stored as uint8_t
@@ -299,6 +302,8 @@ void expectRadioCliEdgeCases(P& p) {
   EXPECT_EQ("Error, must be 0-20", rejected("set rxdelay -0.01"));
   EXPECT_EQ("Error, must be 0-20", rejected("set rxdelay nan"));
   EXPECT_EQ("Error, must be 0-20", rejected("set rxdelay inf"));
+  EXPECT_EQ("Error, must be 0-20", rejected("set rxdelay +nan"));
+  EXPECT_EQ("Error, must be 0-20", rejected("set rxdelay INF"));
   EXPECT_FLOAT_EQ(20.0f, p.rx_delay_base);
   EXPECT_EQ("OK", accepted("set rxdelay abc"));
   EXPECT_FLOAT_EQ(0.0f, p.rx_delay_base);
