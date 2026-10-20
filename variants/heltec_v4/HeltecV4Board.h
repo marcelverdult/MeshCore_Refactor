@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include <helpers/ESP32Board.h>
+#include <helpers/FemRxGain.h>
 #include "LoRaFEMControl.h"
 
 #ifndef ADC_MULTIPLIER
@@ -10,7 +11,8 @@
 #endif
 
 class HeltecV4Board : public ESP32Board {
-  KeyValueStore* _prefs = NULL;
+  friend class FemRxGain<HeltecV4Board>;
+  FemRxGain<HeltecV4Board> fem_rxgain;
 
   bool setLoRaFemLnaEnabled(bool enable);
   bool isLoRaFemLnaEnabled() const;
