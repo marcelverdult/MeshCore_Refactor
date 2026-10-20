@@ -106,8 +106,7 @@ protected:
   // so that a subclass can run the step on its own.
   bool upgradePrefs(uint8_t from) override;
 
-  // Mesh overrides
-  bool allowPacketForward(const mesh::Packet* packet) override;
+  // Mesh overrides (allowPacketForward() is the shared one in ServerMesh)
   // The sensor keeps its own retransmit delays: it draws from six discrete steps
   // while the other roles draw from a continuous range, and upstream still calls
   // that change experimental (see docs/refactoring/0005-sensor-alignment.md).

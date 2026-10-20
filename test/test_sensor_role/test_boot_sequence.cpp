@@ -26,3 +26,4 @@ using BootRole = BootSensor;
 #define BOOT_ROLE_LIFTS_UNVERSIONED_ZERO_HOP_LIMITS
 
 #include <BootSequenceChecks.h>
+#include <ForwardPolicyChecks.h>

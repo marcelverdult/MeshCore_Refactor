@@ -140,6 +140,13 @@ protected:
 
   // Mesh
   mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
+  /**
+   * \brief  The checks every server role makes before passing a packet on:
+   *         forwarding switched off, and the flood hop limits (flood.max,
+   *         flood.max.unscoped, flood.max.advert). A role with checks of its own
+   *         overrides this and calls it first.
+   */
+  bool allowPacketForward(const mesh::Packet* packet) override;
   int searchPeersByHash(const uint8_t* hash) override;
   void getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) override;
 
