@@ -21,4 +21,8 @@ protected:
 
 using BootRole = BootSensor;
 
+// Before prefs version 1 the sensor ignored the two hop limits and stored a zero
+// for both, so a zero in an unversioned file was never chosen.
+#define BOOT_ROLE_LIFTS_UNVERSIONED_ZERO_HOP_LIMITS
+
 #include <BootSequenceChecks.h>

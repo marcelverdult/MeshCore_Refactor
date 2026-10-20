@@ -59,12 +59,30 @@ const char* kPrefsJson =
 }  // namespace
 
 TEST(CommonNodePrefs, WritesTheKnownPrefsJson) {
+  // The v1.18.0 file with the prefs version in front, the only key added since.
   NodePrefs prefs;
   fillAll(prefs);
+  prefs.prefs_version = NODE_PREFS_VERSION;
 
   CaptureStream out;
   ASSERT_TRUE(prefs.saveSerial(out));
-  EXPECT_EQ(kPrefsJson, out.text());
+  EXPECT_EQ("{ver:" + std::to_string(NODE_PREFS_VERSION) + "," + std::string(kPrefsJson + 1),
+            out.text());
+}
+
+TEST(CommonNodePrefs, AFileWithoutAVersionReadsAsVersionZero) {
+  NodePrefs loaded;
+  ReplayStream in(kPrefsJson);
+  ASSERT_TRUE(loaded.loadSerial(in));
+  EXPECT_EQ(loaded.prefs_version, 0) << "v1.18.0 wrote no version";
+}
+
+TEST(CommonNodePrefs, TheVersionIsReadBack) {
+  NodePrefs loaded;
+  ReplayStream in("{ver:7,repeat:{f_max:3}}");
+  ASSERT_TRUE(loaded.loadSerial(in));
+  EXPECT_EQ(loaded.prefs_version, 7);
+  EXPECT_EQ(loaded.flood_max, 3) << "and the keys after it as before";
 }
 
 TEST(CommonNodePrefs, ReadsEveryPersistedFieldBack) {

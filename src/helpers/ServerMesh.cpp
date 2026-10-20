@@ -220,6 +220,13 @@ void ServerMesh::begin(FILESYSTEM* fs) {
   _fs = fs;
   // load persisted prefs
   loadPrefs();
+  // A file from an older firmware is brought up to date once. Booting writes nothing
+  // unless a value changed, and a newer version (after a downgrade) is left alone.
+  if (_prefs.prefs_version < NODE_PREFS_VERSION) {
+    bool changed = upgradePrefs(_prefs.prefs_version);
+    _prefs.prefs_version = NODE_PREFS_VERSION;
+    if (changed) savePrefs();
+  }
   acl.load(_fs, self_id);
   // TODO: key_store.begin();
   region_map.load(_fs);

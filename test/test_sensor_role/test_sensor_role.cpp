@@ -41,6 +41,7 @@ public:
   uint32_t floodRetransmitDelay(const mesh::Packet* pkt) { return getRetransmitDelay(pkt); }
   uint32_t airtimeFor(int len) { return _radio->getEstAirtimeFor(len); }
   NodePrefs* prefs() { return getNodePrefs(); }
+  bool upgradeFrom(uint8_t version) { return upgradePrefs(version); }
 
 protected:
   void onSensorDataRead() override { reads++; }
@@ -101,16 +102,101 @@ TEST_F(SensorRoleTest, MultiAcksTakesEffect) {
   EXPECT_EQ(mesh->extraAcks(), 0) << "and off still means off";
 }
 
-TEST_F(SensorRoleTest, OnlyFloodMaxIsAppliedToday) {
+TEST_F(SensorRoleTest, TheUnscopedHopLimitIsApplied) {
+  // Was: the sensor looked at flood_max only, so it forwarded this while the other
+  // two roles stopped it.
   mesh->prefs()->disable_fwd = 0;
   mesh->prefs()->flood_max = 5;
-  mesh->prefs()->flood_max_unscoped = 1;    // the other roles would stop at one hop
-  mesh->prefs()->flood_max_advert = 1;
+  mesh->prefs()->flood_max_unscoped = 1;
+  mesh->prefs()->flood_max_advert = 8;
 
-  mesh::Packet pkt = floodPacketWithHops(ROUTE_TYPE_FLOOD, 2);
+  mesh::Packet over = floodPacketWithHops(ROUTE_TYPE_FLOOD, 2);
+  EXPECT_FALSE(mesh->forwards(&over)) << "two hops is past the un-scoped limit of one";
 
-  EXPECT_TRUE(mesh->forwards(&pkt))
-      << "today the sensor forwards this, because it only looks at flood_max";
+  mesh::Packet under = floodPacketWithHops(ROUTE_TYPE_FLOOD, 0);
+  EXPECT_TRUE(mesh->forwards(&under)) << "and a fresh one still goes on";
+}
+
+TEST_F(SensorRoleTest, TheAdvertHopLimitIsApplied) {
+  mesh->prefs()->disable_fwd = 0;
+  mesh->prefs()->flood_max = 64;
+  mesh->prefs()->flood_max_unscoped = 64;
+  mesh->prefs()->flood_max_advert = 2;
+
+  mesh::Packet advert = floodPacketWithHops(ROUTE_TYPE_FLOOD, 2);
+  advert.header |= (PAYLOAD_TYPE_ADVERT << PH_TYPE_SHIFT);
+  EXPECT_FALSE(mesh->forwards(&advert)) << "adverts have their own, lower ceiling";
+
+  mesh::Packet plain = floodPacketWithHops(ROUTE_TYPE_FLOOD, 2);
+  EXPECT_TRUE(mesh->forwards(&plain)) << "a non advert at the same hop count goes on";
+}
+
+TEST_F(SensorRoleTest, AZeroHopLimitIsWrittenOutAsAZero) {
+  // The first half of the upgrade hazard: if a zero were written as an empty value,
+  // the loader would leave the new default alone and there would be no hazard.
+  mesh->prefs()->flood_max_unscoped = 0;
+  mesh->prefs()->flood_max_advert = 0;
+  mesh->savePrefs();
+
+  ASSERT_TRUE(fs.exists("/prefs.json"));
+  const auto& bytes = fs.files["/prefs.json"];
+  const std::string json(bytes.begin(), bytes.end());
+
+  EXPECT_NE(json.find("f_max_uns:0,"), std::string::npos)
+      << "a zero is written out as a zero, not left empty: " << json;
+}
+
+TEST_F(SensorRoleTest, ASensorUpgradedOntoZeroHopLimitsKeepsForwarding) {
+  // The hazard this change had to answer. A sensor built before it set no default for
+  // the two limits, so it stored zero for both, and with forwarding switched on by an
+  // operator that is the state an updated node boots into. Zero means "never
+  // forward", because the limits are compared with >=. The file carries no prefs
+  // version, so the first boot lifts both zeros to the role defaults (see
+  // BootSequenceChecks.h for the upgrade itself).
+  const char* older = "{repeat:{disable:0,f_max:64,f_max_uns:0,f_max_adv:0}}";
+  const std::string text(older);
+  fs.files["/prefs.json"] = std::vector<uint8_t>(text.begin(), text.end());
+
+  TestSensor updated(board, radio_driver, ms, rng, rtc_clock, tables);
+  updated.begin(&fs);
+
+  EXPECT_EQ(updated.prefs()->disable_fwd, 0) << "the operator had forwarding on";
+
+  mesh::Packet fresh_flood = floodPacketWithHops(ROUTE_TYPE_FLOOD, 0);
+  EXPECT_TRUE(updated.forwards(&fresh_flood))
+      << "an upgraded node goes on forwarding un-scoped floods";
+
+  mesh::Packet advert = floodPacketWithHops(ROUTE_TYPE_FLOOD, 0);
+  advert.header |= (PAYLOAD_TYPE_ADVERT << PH_TYPE_SHIFT);
+  EXPECT_TRUE(updated.forwards(&advert)) << "and adverts";
+}
+
+TEST_F(SensorRoleTest, TheHopLimitStepIsOnlyForFilesBeforeVersionOne) {
+  // begin() only asks for an upgrade from an older version, but the step must hold
+  // on its own: from version 1 on, a zero was chosen on a firmware that applies it.
+  mesh->prefs()->flood_max_unscoped = 0;
+  mesh->prefs()->flood_max_advert = 0;
+
+  EXPECT_FALSE(mesh->upgradeFrom(1));
+  EXPECT_EQ(mesh->prefs()->flood_max_unscoped, 0);
+  EXPECT_EQ(mesh->prefs()->flood_max_advert, 0);
+
+  EXPECT_TRUE(mesh->upgradeFrom(0)) << "and from version 0 it does lift them";
+  EXPECT_EQ(mesh->prefs()->flood_max_unscoped, 64);
+}
+
+TEST_F(SensorRoleTest, AMissingKeyLeavesTheNewDefaultStanding) {
+  // The other half of the upgrade picture: a key absent from the file overwrites
+  // nothing, so a node whose file predates the key gets the new default.
+  const char* without = "{repeat:{disable:0,f_max:64}}";
+  const std::string text(without);
+  fs.files["/prefs.json"] = std::vector<uint8_t>(text.begin(), text.end());
+
+  TestSensor updated(board, radio_driver, ms, rng, rtc_clock, tables);
+  updated.begin(&fs);
+
+  EXPECT_EQ(updated.prefs()->flood_max_unscoped, 64);
+  EXPECT_EQ(updated.prefs()->flood_max_advert, 8);
 }
 
 TEST_F(SensorRoleTest, FloodMaxItselfIsApplied) {

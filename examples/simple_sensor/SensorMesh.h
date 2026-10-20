@@ -102,6 +102,10 @@ protected:
   virtual int querySeriesData(uint32_t start_secs_ago, uint32_t end_secs_ago, MinMaxAvg dest[], int max_num) = 0;  // for app to implement
   virtual bool handleCustomCommand(uint32_t sender_timestamp, char* command, char* reply) { return false; }
 
+  // ServerMesh hook for begin(). Protected rather than private, unlike loadPrefs(),
+  // so that a subclass can run the step on its own.
+  bool upgradePrefs(uint8_t from) override;
+
   // Mesh overrides
   bool allowPacketForward(const mesh::Packet* packet) override;
   // The sensor keeps its own retransmit delays: it draws from six discrete steps
