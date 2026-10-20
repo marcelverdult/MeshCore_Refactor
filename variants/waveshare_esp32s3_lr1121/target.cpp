@@ -56,8 +56,3 @@ bool radio_init() {
 
   return true;
 }
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);
-}

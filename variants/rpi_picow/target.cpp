@@ -17,9 +17,3 @@ bool radio_init() {
   
   return radio.std_init(&SPI1);
 }
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-

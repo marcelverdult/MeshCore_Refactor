@@ -30,9 +30,3 @@ bool radio_init() {
   rtc_clock.begin(Wire1);
   return radio.std_init(&spi);
 }
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-

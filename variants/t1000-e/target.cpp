@@ -76,11 +76,6 @@ bool radio_init() {
   return true;  // success
 }
 
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-
 void T1000SensorManager::start_gps() {
   gps_active = true;
   digitalWrite(GPS_EN, HIGH);

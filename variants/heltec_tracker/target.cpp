@@ -38,11 +38,6 @@ bool radio_init() {
 
 }
 
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-
 void HWTSensorManager::start_gps() {
   if (!gps_active) {
     _location->begin();  // Claims periph_power via RefCountedDigitalPin

@@ -25,11 +25,6 @@ bool radio_init() {
   return radio.std_init(&SPI);
 }
 
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-
 void ThinkNodeM1SensorManager::start_gps() {
   if (!gps_active) {
     gps_active = true;
