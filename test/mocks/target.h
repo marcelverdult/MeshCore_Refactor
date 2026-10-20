@@ -139,6 +139,10 @@ public:
 };
 
 inline MockBoard board;
+
+// A variant's target.cpp defines this; the companion calls it in begin() when no
+// identity is stored yet. A suite that boots a companion defines it.
+mesh::LocalIdentity radio_new_identity();
 inline MockRTCClock rtc_clock;
 
 // SensorManager is concrete, so the real class serves as the stand-in; this one only
