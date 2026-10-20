@@ -45,6 +45,17 @@ About 6,800 frames, 12 minutes on a T-Echo.
 python3 companion_sweep.py <usb-serial>
 ```
 
+`companion_session.py` complements it with 39 frames the commands accept: every
+setter writes back the value the board already holds, so the state is unchanged
+afterwards. Run it once per image and diff the two outputs; only the build marker
+may differ.
+
+```sh
+python3 companion_session.py <usb-serial> > a.txt   # first image
+python3 companion_session.py <usb-serial> > b.txt   # second image
+diff a.txt b.txt
+```
+
 ## Diagnostic build for step 2
 
 `diag-tuning.patch` adds a `diag tuning` command to the room server and the
