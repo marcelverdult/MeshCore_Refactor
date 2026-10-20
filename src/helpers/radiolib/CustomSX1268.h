@@ -1,12 +1,10 @@
 #pragma once
 
 #include <RadioLib.h>
+#include "RxActivityTracker.h"
 
 class CustomSX1268 : public SX1268 {
-  uint32_t _preambleMillis = 66;
-  uint32_t _maxPayloadMillis = 3934;
-  uint32_t _activityAt = 0;
-  bool _headerSeen = false;
+  RxActivityTracker _rxActivity;
 
   public:
     CustomSX1268(Module *mod) : SX1268(mod) { }
@@ -87,55 +85,21 @@ class CustomSX1268 : public SX1268 {
 
     bool isReceiving() {
       uint32_t irq = getIrqFlags();
-      bool preamble = irq & RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED; // bit 2
-      bool header   = irq & RADIOLIB_SX126X_IRQ_HEADER_VALID;      // bit 4
-      bool hdrErr   = irq & RADIOLIB_SX126X_IRQ_HEADER_ERR;        // bit 5
-      uint32_t now  = millis();
-      if (hdrErr) {
+      RxActivityTracker::Result r = _rxActivity.update(
+          irq & RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED,
+          irq & RADIOLIB_SX126X_IRQ_HEADER_VALID,
+          irq & RADIOLIB_SX126X_IRQ_HEADER_ERR,
+          millis());
+      if (r == RxActivityTracker::CLEAR_PREAMBLE) {
+        clearIrqFlags(RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED);
+      } else if (r == RxActivityTracker::CLEAR_ALL) {
         clearIrqFlags(RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED | RADIOLIB_SX126X_IRQ_HEADER_VALID | RADIOLIB_SX126X_IRQ_HEADER_ERR | RADIOLIB_SX126X_IRQ_SYNC_WORD_VALID);
-        _activityAt = 0;
-        _headerSeen = false;
-        return false;
       }
-      if (!header && _headerSeen) {
-        // something cleared the header flag, reset our state.
-        _activityAt = 0; _headerSeen = false;
-        return false;
-      }
-
-      if (header) {
-        if (!_headerSeen) { _headerSeen = true; _activityAt = now; };
-        if (now - _activityAt > _maxPayloadMillis) {
-          MESH_DEBUG_PRINTLN("Clearing header IRQ after %ums", _maxPayloadMillis);
-          clearIrqFlags(RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED | RADIOLIB_SX126X_IRQ_HEADER_VALID | RADIOLIB_SX126X_IRQ_HEADER_ERR | RADIOLIB_SX126X_IRQ_SYNC_WORD_VALID);
-          _activityAt = 0; _headerSeen = false;
-          return false;
-        }
-        return true;
-      }
-      if (preamble) {
-        if (_activityAt == 0) _activityAt = now;
-        if (now - _activityAt > _preambleMillis) {
-          clearIrqFlags(RADIOLIB_SX126X_IRQ_PREAMBLE_DETECTED);
-          _activityAt = 0;
-          MESH_DEBUG_PRINTLN("Clearing preamble IRQ after %ums", _preambleMillis);
-
-          return false;
-        }
-        return true;
-      }
-      _activityAt = 0; _headerSeen = false;
-      return false;
+      return r == RxActivityTracker::RECEIVING;
     }
     
-    void setPreambleMillis(uint32_t preambleMillis) {
-      _preambleMillis = preambleMillis;
-      MESH_DEBUG_PRINTLN("Set _preambleMillis=%u", _preambleMillis);
-    }
-    void setMaxPayloadMillis(uint32_t payloadMillis) {
-      _maxPayloadMillis = payloadMillis;
-      MESH_DEBUG_PRINTLN("Set _maxPayloadMillis=%u", _maxPayloadMillis);
-    }
+    void setPreambleMillis(uint32_t preambleMillis) { _rxActivity.setPreambleMillis(preambleMillis); }
+    void setMaxPayloadMillis(uint32_t payloadMillis) { _rxActivity.setMaxPayloadMillis(payloadMillis); }
 
 
     bool getRxBoostedGainMode() {
