@@ -23,6 +23,7 @@
 #include <helpers/StatsFormatHelper.h>
 #include <helpers/ClientACL.h>
 #include <helpers/RegionMap.h>
+#include <helpers/ServerMesh.h>
 #include <RTClib.h>
 #include <target.h>
 
@@ -43,10 +44,9 @@
 
 #define FIRMWARE_ROLE "sensor"
 
-#define MAX_SEARCH_RESULTS     24
 #define MAX_CONCURRENT_ALERTS   4
 
-class SensorMesh : public mesh::Mesh, public CommonCLICallbacks {
+class SensorMesh : public ServerMesh {
 public:
   SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc, mesh::MeshTables& tables);
   void begin(FILESYSTEM* fs);
@@ -60,32 +60,16 @@ public:
   const char* getNodeName() { return _prefs.node_name; }
   NodePrefs* getNodePrefs() { return &_prefs; }
   void savePrefs() override { _cli.savePrefs(_fs); }
-  bool formatFileSystem() override;
-  void sendSelfAdvertisement(int delay_millis, bool flood) override;
-  void updateAdvertTimer() override;
-  void updateFloodAdvertTimer() override;
   void setLoggingOn(bool enable) override {  }
   void eraseLogFile() override { }
   void dumpLogFile() override { }
-  void setTxPower(int8_t power_dbm) override;
   void formatNeighborsReply(char *reply) override {
     strcpy(reply, "not supported");
   }
-  void formatStatsReply(char *reply) override;
-  void formatRadioStatsReply(char *reply) override;
-  void formatPacketStatsReply(char *reply) override;
   mesh::LocalIdentity& getSelfId() override { return self_id; }
-  void saveIdentity(const mesh::LocalIdentity& new_id) override;
   void clearStats() override { }
-  void applyTempRadioParams(float freq, float bw, uint8_t sf, uint8_t cr, int timeout_mins) override;
-  void startRegionsLoad() override;
-  bool saveRegions() override;
-  void onDefaultRegionChanged(const RegionEntry* r) override;
 
   float getTelemValue(uint8_t channel, uint8_t type);
-
-  void sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
-  void sendFloodReply(mesh::Packet* packet, unsigned long delay_millis, uint8_t path_hash_size);
 
 protected:
   // current telemetry data queries
@@ -126,10 +110,7 @@ protected:
   uint32_t getRetransmitDelay(const mesh::Packet* packet) override;
   uint32_t getDirectRetransmitDelay(const mesh::Packet* packet) override;
   uint8_t getExtraAckTransmitCount() const override;
-  mesh::DispatcherAction onRecvPacket(mesh::Packet* pkt) override;
   void onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, const mesh::Identity& sender, uint8_t* data, size_t len) override;
-  int searchPeersByHash(const uint8_t* hash) override;
-  void getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) override;
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data, size_t len) override;
   bool onPeerPathRecv(mesh::Packet* packet, int sender_idx, const uint8_t* secret, uint8_t* path, uint8_t path_len, uint8_t extra_type, uint8_t* extra, uint8_t extra_len) override;
   void onControlDataRecv(mesh::Packet* packet) override;
@@ -138,34 +119,18 @@ protected:
   virtual bool handleIncomingMsg(ClientInfo& from, uint32_t timestamp, uint8_t* data, uint8_t flags, size_t len);
   void sendAckTo(const ClientInfo& dest, uint32_t ack_hash, uint8_t path_hash_size=1);
 private:
-  FILESYSTEM* _fs;
-  unsigned long next_local_advert, next_flood_advert;
-  NodePrefs _prefs;
-  ClientACL  acl;
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];
   unsigned long dirty_contacts_expiry;
   CayenneLPP telemetry;
-  TransportKeyStore key_store;
-  RegionMap region_map, temp_map;
-  RegionEntry* recv_pkt_region;
-  RegionEntry* load_stack[8];
-  TransportKey default_scope;
   uint32_t last_read_time;
-  int matching_peer_indexes[MAX_SEARCH_RESULTS];
   int num_alert_tasks;
   Trigger* alert_tasks[MAX_CONCURRENT_ALERTS];
-  unsigned long set_radio_at, revert_radio_at;
-  float pending_freq;
-  float pending_bw;
-  uint8_t pending_sf;
-  uint8_t pending_cr;
-  bool region_load_active;
 
   bool telemHasChanged(ClientInfo* c);
   uint8_t handleLoginReq(const mesh::Identity& sender, const uint8_t* secret, uint32_t sender_timestamp, const uint8_t* data, bool is_flood);
   uint8_t handleRequest(ClientInfo* from, uint32_t sender_timestamp, uint8_t req_type, uint8_t* payload, size_t payload_len);
-  mesh::Packet* createSelfAdvert();
+  mesh::Packet* createSelfAdvert() override;
 
   void sendAlert(const ClientInfo* c, Trigger* t);
 

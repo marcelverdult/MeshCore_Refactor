@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdio.h>
 
 // Mock Stream class for native testing
 // Provides minimal interface needed by Utils.h
@@ -33,14 +35,36 @@ public:
         return write((const uint8_t *) buffer, size);
     }
 
-    virtual size_t print(unsigned char b, int r = DEC) { return 0; }
-    virtual size_t print(int v, int r = DEC) { return 0; }
-    virtual size_t print(unsigned int v, int r = DEC) { return 0; }
-    virtual size_t print(long v, int r = DEC) { return 0; }
-    virtual size_t print(unsigned long v, int r = DEC) { return 0; }
-    virtual size_t print(long long v, int r = DEC) { return 0; }
-    virtual size_t print(unsigned long long v, int r = DEC) { return 0; }
-    virtual size_t print(double v, int p = 2) { return 0; }
+    // Arduino's Print formats numbers itself and hands the bytes to write(), so a
+    // subclass only has to implement write(). These used to return 0 without
+    // writing anything, which silently produced files with empty numeric values.
+protected:
+    size_t emitSigned(long long v, int base) {
+        char text[24];
+        int n = (base == HEX) ? snprintf(text, sizeof(text), "%llx", (unsigned long long) v)
+                              : snprintf(text, sizeof(text), "%lld", v);
+        return write((const uint8_t *) text, (size_t) n);
+    }
+    size_t emitUnsigned(unsigned long long v, int base) {
+        char text[24];
+        int n = (base == HEX) ? snprintf(text, sizeof(text), "%llx", v)
+                              : snprintf(text, sizeof(text), "%llu", v);
+        return write((const uint8_t *) text, (size_t) n);
+    }
+
+public:
+    virtual size_t print(unsigned char b, int r = DEC) { return emitUnsigned(b, r); }
+    virtual size_t print(int v, int r = DEC) { return emitSigned(v, r); }
+    virtual size_t print(unsigned int v, int r = DEC) { return emitUnsigned(v, r); }
+    virtual size_t print(long v, int r = DEC) { return emitSigned(v, r); }
+    virtual size_t print(unsigned long v, int r = DEC) { return emitUnsigned(v, r); }
+    virtual size_t print(long long v, int r = DEC) { return emitSigned(v, r); }
+    virtual size_t print(unsigned long long v, int r = DEC) { return emitUnsigned(v, r); }
+    virtual size_t print(double v, int p = 2) {
+        char text[48];
+        int n = snprintf(text, sizeof(text), "%.*f", p, v);
+        return write((const uint8_t *) text, (size_t) n);
+    }
 
     size_t print(char c) { return write(c); }
     size_t print(const char* str) { return write(str); }
@@ -48,6 +72,18 @@ public:
     //size_t println(void)  { return 0; }
     
     virtual void flush() { /* Empty implementation for backward compatibility */ }    
+
+    // The ESP32 and RP2040 cores add printf() to Print; helpers/RegionMap.cpp uses it.
+    size_t printf(const char* fmt, ...) {
+        char buf[512];
+        va_list ap;
+        va_start(ap, fmt);
+        int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+        va_end(ap);
+        if (n < 0) return 0;
+        if ((size_t) n >= sizeof(buf)) n = sizeof(buf) - 1;
+        return write((const uint8_t *) buf, (size_t) n);
+    }
 };
 
 class Stream: public Print

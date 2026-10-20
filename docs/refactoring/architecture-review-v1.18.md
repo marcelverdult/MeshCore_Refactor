@@ -65,6 +65,32 @@ The copies have drifted (found by reading the code, not reproduced on hardware):
 - The sensor does not override `getExtraAckTransmitCount()`, whose base returns 0
   (`src/Mesh.cpp:25`), so `set multi.acks` is accepted but has no effect there.
 
+Since step 2 the sensor states this explicitly (`getExtraAckTransmitCount()`
+returning 0 with a comment), so the gap is documented rather than accidental, and
+`SensorMesh::sendAckTo()` still carries a branch that the base's 0 makes
+unreachable.
+
+#### Why the sensor drifted
+
+Checked with `git log -S` and the commit history of `upstream/dev` 428a95c6 before
+deciding whether to align the sensor. No deviation has a role specific reason such
+as battery life. Each one is a change that reached the repeater and the room server
+and skipped the sensor. The history below is from the commits; the run time effects
+are read from the source and not reproduced on a board:
+
+| deviation | history |
+|---|---|
+| Retransmit delay `nextInt(0, 6)*t` | The sensor sketch copied it verbatim from the repeater at its birth (`7fb7b69b`, 7 July 2025, where the repeater had the same line). The repeater and the room server left the six slot scheme in `8cbcd227` (29 October 2025), whose subject calls itself experimental, and got the divide by zero fix `96e786fa` a day later. The sensor keeps the old shared behaviour. The lines were touched once more, in `3e76161e` (19 February 2026, `path_len` to `getPathByteLen()`), in all three roles including the sensor, so only the formula itself was never revisited. |
+| Flood limits only `flood_max` | `fad11c90` (3 August 2026) moved the repeater and the room server to `mesh::isFloodHopLimitExceeded()`, with the shared helper in `src/helpers/RoutingPolicy.h` and `test/test_routing_policy`. The sensor was not touched. |
+| `multi.acks` without effect | `6bc8dd28` and `5881b04a` (16 July 2025) added the setting and the companion's use of it. `136f733d` (27 August 2025) added a consumer to `SensorMesh::sendAckTo()`, but no role side provider, so the base's 0 keeps that branch dead. |
+| RX boosted gain not applied at boot | The room server had the same gap until `a71cc238` (21 July 2026) fixed it by mirroring the repeater. The sensor still initialises no default and applies nothing in `begin()`, so a value set through the CLI applies at once but is lost on the next boot. |
+
+`nextInt(_min, _max)` returns `(num % (_max - _min)) + _min` (`src/Utils.cpp:18`), so
+the upper bound is exclusive: the sensor draws from the six multiples 0 to 5 times
+`t`, the other roles uniformly from 0 to `5*t`. Both have the same maximum. The
+`+ 1` of `96e786fa` exists because `t == 0` made the bound 0 and `num % 0` crashed,
+which the sensor's form could not do.
+
 ### F3. Board variants are near copies
 
 89 `variants/*/target.cpp` files; `radio_new_identity()` is identical (ignoring
@@ -90,6 +116,13 @@ The native test environment builds four source files (`platformio.ini`,
 `[env:native]`). None of the role code, the persistence code or the radio CLI was
 covered before step 1.
 
+Status: the radio CLI and the prefs are covered since steps 1 to 3, and the server
+roles themselves since the harness of step 4: `test/mocks` now carries an in-memory
+file system, an RTC and the globals a variant's `target.h` declares, so all three
+role implementations compile natively and `native_server` drives the real room
+server. The gap that is left is the deeper request handling, which needs packets and
+a populated ACL.
+
 ## Issues noticed while reading (not part of this series)
 
 Found by reading v1.18.0, not reproduced on hardware. Each should get its own
@@ -106,3 +139,4 @@ issue or fix.
 | 7 | The server roles load `/prefs.json` without range checks (only the legacy loader clamps) | `src/helpers/CommonCLI.cpp:38` |
 | 8 | Role fallback radio defaults (915 / 250 / SF10) differ from the root `platformio.ini` (869.618 / 62.5 / SF8) | `examples/simple_repeater/MyMesh.cpp:7-13`, `platformio.ini` |
 | 9 | nRF52 firmware is built with `-Ofast` (`-ffast-math`), so float comparisons may assume no NaN; whether a range check rejects `nan` then depends on how it is written. `set af nan` is accepted on the boards. (Found during step 3, measured on a T-Echo) | `src/helpers/CommonRadioPrefs.cpp` |
+| 10 | The two flood route types disagree about a denied Region. `onRecvPacket()` checks `REGION_DENY_FLOOD` itself for an un-scoped flood, while a scoped flood goes through `RegionMap::findMatch()`, whose transport-code-0 shortcut returns the wildcard before the mask is applied. So denying flood on the wildcard stops an un-scoped flood but not a scoped one carrying no code. (Found during step 4a, pinned in test_server_base) | `src/helpers/ServerMesh.cpp`, `src/helpers/RegionMap.cpp:findMatch()` |
