@@ -156,6 +156,10 @@ TEST_P(RadioInit, LeavesOtherRadiosAlone) {
 
 INSTANTIATE_TEST_SUITE_P(VariantCopy, RadioInit, ::testing::Values(&variant_copy_radio_init));
 
+// The default in src/helpers/radiolib/RadioLibTarget.cpp, which the 31 variants
+// no longer repeat.
+INSTANTIATE_TEST_SUITE_P(SharedDefault, RadioInit, ::testing::Values(&radio_init));
+
 }  // namespace
 
 int main(int argc, char **argv) {

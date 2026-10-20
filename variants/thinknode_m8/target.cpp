@@ -24,8 +24,3 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager();
   MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
   RotaryInputGPIO rotary_input(PIN_BUTTON1_A, PIN_BUTTON1_B);
 #endif
-
-bool radio_init() {
-  rtc_clock.begin(Wire);
-  return radio.std_init(&SPI);
-}

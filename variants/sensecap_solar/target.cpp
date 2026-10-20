@@ -18,9 +18,3 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
 #else
 EnvironmentSensorManager sensors = EnvironmentSensorManager();
 #endif
-
-bool radio_init() {
-    rtc_clock.begin(Wire);
-
-    return radio.std_init(&SPI);
-}

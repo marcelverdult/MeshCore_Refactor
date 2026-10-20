@@ -16,4 +16,28 @@ __attribute__((weak)) mesh::LocalIdentity radio_new_identity() {
   return mesh::LocalIdentity(&rng);
 }
 
+// The radio_init() of the nRF52 variants with an SX1262: start the RTC, then the
+// radio on the default SPI bus. Only there, because elsewhere the variants also
+// start a fallback clock or use another SPI bus, which they still write out
+// themselves; a board there without its own radio_init() fails to link instead
+// of getting this one.
+#if defined(NRF52_PLATFORM) && defined(USE_SX1262)
+
+#include <SPI.h>
+#include <Wire.h>
+
+// The radio a driver wraps, as the variant's RADIO_CLASS (which it is, since the
+// variant constructs radio_driver from its global radio).
+struct RadioLibTargetAccess {
+  template <class RADIO>
+  static RADIO& radio(RadioLibWrapper& driver) { return static_cast<RADIO&>(*driver._radio); }
+};
+
+__attribute__((weak)) bool radio_init() {
+  rtc_clock.begin(Wire);
+  return RadioLibTargetAccess::radio<RADIO_CLASS>(radio_driver).std_init(&SPI);
+}
+
+#endif
+
 #endif
