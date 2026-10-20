@@ -1,8 +1,8 @@
 # 0005: Align the sensor, part one: multi.acks and RX boosted gain
 
 Status: implemented. The third part of the alignment, the flood hop limits, is
-parked on `refactor/sensor-flood-limits` and waits for the `/prefs.json` range
-checking; the reason is in "What is deliberately held back" below.
+[0006](0006-sensor-flood-limits.md); why it is a change of its own is in "What is
+deliberately held back" below.
 
 This is a change of behaviour, not a move, so it is a branch of its own with a note
 of its own.
@@ -78,9 +78,11 @@ How far it reaches: forwarding is off by default on the sensor
 repeater forwards out of the box). The hazard therefore only affects sensors where
 an operator switched forwarding on, and those are exactly the ones where it matters.
 
-Marcel's decision of 20 October: wait for Fix 9. Once `/prefs.json` is range
-checked, the cause is gone and the flood limits can be aligned without a migration
-of their own. Until then only the two changes above land.
+Marcel's decision of 20 October was first to wait for Fix 9, on the assumption that
+range checking `/prefs.json` would remove the cause. It does not: 0 is a legal value
+for these limits, so Fix 9 does not clamp them. The second decision, the same day, is
+to lift a stored 0 once on upgrade, behind a version in `/prefs.json`. That is
+[0006](0006-sensor-flood-limits.md).
 
 A separate observation, worth its own issue either way (ledger issue 12): because a
 0 is stored and applied verbatim, `set flood.max.unscoped 0` is persistable on every
