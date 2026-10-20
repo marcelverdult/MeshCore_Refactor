@@ -20,7 +20,7 @@ jobs:
         uses: ./.github/actions/setup-build-environment
 
       - name: Run Unit Tests
-        run: pio test -e native -e native_kiss_modem -e native_core -e native_ofast -e native_chat -e native_identity_store -e native_node_prefs -e native_radio_wrappers -e native_server -e native_sensor -e native_repeater -e native_repeater_full -vv
+        run: pio test -e native -e native_kiss_modem -e native_core -e native_ofast -e native_chat -e native_identity_store -e native_node_prefs -e native_radio_wrappers -e native_server -e native_sensor -e native_repeater -e native_repeater_full -e native_region -vv
 
       - name: Upload Test Results
         # Upload test results even if the test step failed.

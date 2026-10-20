@@ -228,12 +228,11 @@ TEST_F(RegionResolutionTest, AScopedFloodPacketWithTransportCodeZeroArrivesOnThe
   EXPECT_TRUE(mesh->seenRegion()->isWildcard());
 }
 
-TEST_F(RegionResolutionTest, TransportCodeZeroIgnoresTheWildcardsFloodDenial) {
-  // Pinned because the two flood route types disagree here. The un-scoped branch in
-  // onRecvPacket() checks REGION_DENY_FLOOD itself, while the scoped branch delegates
-  // to findMatch(), whose transport-code-0 shortcut returns the wildcard before the
-  // mask is applied. So denying flood on the wildcard stops an un-scoped flood but
-  // not a scoped one carrying no code. Recorded as observed behaviour, not endorsed.
+TEST_F(RegionResolutionTest, TransportCodeZeroRespectsTheWildcardsFloodDenial) {
+  // Both flood route types agree here. The un-scoped branch in onRecvPacket() checks
+  // REGION_DENY_FLOOD itself, and findMatch() now applies the wildcard's flags to a
+  // scoped flood carrying code 0 as well (ledger issue 10), so denying flood on the
+  // wildcard stops both. Before that fix this test pinned the disagreement.
   mesh->regions().getWildcard().flags |= REGION_DENY_FLOOD;
 
   mesh::Packet unscoped = packetOfRouteType(ROUTE_TYPE_FLOOD);
@@ -242,7 +241,7 @@ TEST_F(RegionResolutionTest, TransportCodeZeroIgnoresTheWildcardsFloodDenial) {
 
   mesh::Packet scoped = packetOfRouteType(ROUTE_TYPE_TRANSPORT_FLOOD);
   mesh->recv(&scoped);
-  EXPECT_NE(mesh->seenRegion(), nullptr) << "scoped flood with code 0 does not";
+  EXPECT_EQ(mesh->seenRegion(), nullptr) << "scoped flood with code 0 respects the denial too";
 }
 
 TEST_F(RegionResolutionTest, AScopedFloodPacketWithAnUnknownCodeHasNoRegion) {
