@@ -1,7 +1,8 @@
 # 0011: One generic variant target built from a board description
 
 Status: cut A (one shared `radio_new_identity()`) and cut B (one shared FEM RX gain
-handler) implemented, each its own pull request, B stacked on A. Cuts C to E are
+handler) implemented, each its own pull request, B stacked on A. Cut C (one default
+`radio_init()` for 31 nRF52 variants) designed, see "Cut C". Cuts D and E are
 planned and need their own review before code. Behaviour change: none.
 
 ## Context
@@ -85,7 +86,7 @@ weak" below).
 |---|---|---|---|
 | A | one `radio_new_identity()` for all RadioLib variants | 87 `target.cpp`, 1 new source, 1 header | implemented, see "Cut A" |
 | B | one class for the FEM gain handlers of HeltecV4, HeltecV4R8, T096, HeltecTrackerV2 | 4 board classes, 1 new helper | implemented, see "Cut B" |
-| C | a shared default `radio_init()` for the largest groups (28 + 18 + 5 + 4 + 3 of 89) | about 58 `target.cpp` | planned |
+| C | a shared default `radio_init()` for the bodies that need no new description (28 + 3 of 89, all nRF52) | 31 `target.cpp`, 1 source, 1 header | designed, see "Cut C" |
 | D | the radio, wrapper and RTC globals from the board's build flags | about 87 `target.cpp` | planned (description: build flags, decided) |
 | E | sensors, display and button from the board description | the rest | planned |
 
@@ -707,6 +708,168 @@ code with unchanged RAM. If a reviewer wants a board run, the check on any of th
 four: `get radio.fem.rxgain`, `set radio.fem.rxgain off`, reboot, `get radio.fem.rxgain`
 shows `> off`; the same with `on`; on a board whose FEM cannot switch the LNA both
 reply `Error: unsupported`.
+
+## Cut C: one default `radio_init()`
+
+Design, written before any code of this cut. The results (tests, mutations,
+builds) are added below when the code is done.
+
+### Inventory of the `radio_init()` bodies
+
+Measured on `e5a8f164` (`integration`, cut B merged) with
+`tools/refactoring/variant_duplication.py` (the bodies compared normalized:
+comments and white space removed), plus `pio project config` for the environments
+of each variant (an environment belongs to a variant when its `build_src_filter`
+names `variants/<dir>`). 89 `target.cpp`, 29 different bodies. The groups with
+three or more files:
+
+| files | envs | body (normalized) | platform, chip | variants |
+|---:|---:|---|---|---|
+| 28 | 172 | `rtc_clock.begin(Wire); return radio.std_init(&SPI);` | nRF52, SX1262 | `gat562_30s_mesh_kit`, `gat562_mesh_evb_pro`, `gat562_mesh_tracker_pro`, `gat562_mesh_watch13`, `heltec_mesh_solar`, `heltec_tower_v2`, `ikoka_handheld_nrf`, `ikoka_nano_nrf`, `ikoka_stick_nrf`, `keepteen_lt1`, `lilygo_t_impulse_plus`, `lilygo_techo`, `lilygo_techo_card`, `lilygo_techo_lite`, `meshtiny`, `muziworks_r1_neo`, `nano_g2_ultra`, `promicro`, `rak3401`, `rak4631`, `rak_wismesh_tag`, `sensecap_solar`, `thinknode_m1`, `thinknode_m6`, `thinknode_m8`, `wio-tracker-l1-1w`, `wio-tracker-l1`, `xiao_nrf52` |
+| 18 | 168 | `fallback_clock.begin(); rtc_clock.begin(Wire);` then `std_init(&spi)` if `P_LORA_SCLK`, else `std_init()` | ESP32, SX1262/SX1268/SX1276 | `generic-e22`, `heltec_e213`, `heltec_e290`, `heltec_rc32`, `heltec_t190`, `heltec_tracker`, `heltec_tracker_v2`, `heltec_v2`, `heltec_v3`, `heltec_v4`, `heltec_v4_r8`, `heltec_wireless_paper`, `lilygo_tbeam_SX1276`, `lilygo_tlora_c6`, `lilygo_tlora_v2_1`, `meshadventurer`, `rak3112`, `tenstar_c3` |
+| 5 | 32 | `fallback_clock.begin(); rtc_clock.begin(Wire); return radio.std_init(&spi);` | ESP32, SX1262 | `lilygo_t3s3`, `lilygo_tbeam_SX1262`, `lilygo_teth_elite`, `nibble_screen_connect`, `nibble_zero_connect` |
+| 4 | 29 | as the 18, with `spi.begin(P_LORA_SCLK, P_LORA_MISO, P_LORA_MOSI)` before `std_init(&spi)` | ESP32, SX1262/SX1276 | `lilygo_t3s3_sx1276`, `station_g2`, `station_g3_esp32`, `xiao_c3` |
+| 3 | 23 | `rtc_clock.begin(Wire);` then `std_init(&SPI)` if `P_LORA_SCLK`, else `std_init()` | nRF52, SX1262 | `heltec_t096`, `heltec_t1`, `heltec_t114` |
+| 3 | 26 | as the 4, with `pinMode(21, INPUT); pinMode(48, OUTPUT);` first | ESP32, SX1262 | `thinknode_m2`, `xiao_s3`, `xiao_s3_wio` |
+
+The other 25 bodies occur once or twice; most of them are their own radio setup
+(LR11x0, STM32WL, own `begin()` arguments), the rest differ in the SPI object
+(`SPI1` on `rak11310` and `rpi_picow`) or leave out the RTC (`mesh_pocket`,
+`meshtracker_x1`).
+
+### What cut C shares, and why exactly that
+
+Cut C shares the 28 and the 3 nRF52 bodies (31 files, 195 environments) and
+nothing else. The criterion is the one the cut plan set: share only what needs no
+new board description.
+
+- **The 28 and the 3 are one function.** The 3 differ from the 28 only in passing
+  nothing instead of `&SPI` when `P_LORA_SCLK` is not defined. `std_init()` of
+  every chip class that has one (`CustomSX1262`, `CustomSX1268`, `CustomSX1276`,
+  `CustomLLCC68`, `CustomLR2021`) reads its `spi` argument only inside
+  `#if defined(P_LORA_SCLK)`, so without `P_LORA_SCLK` the argument is unused and
+  both calls do the same; with it, both pass `&SPI`. Checked by reading the five
+  headers (`grep -n "P_LORA_SCLK\|spi" src/helpers/radiolib/Custom*.h`).
+- **Everything the body names is already declared for the shared code.** All 31
+  `target.h` declare `extern AutoDiscoverRTCClock rtc_clock;`, `Wire` and `SPI` are
+  the Arduino globals, and the radio is reached through `radio_driver` (see
+  below). Checked by script over the 31 files: each has exactly the declaration,
+  defines `RADIO_CLASS radio = new Module(...)` and `WRAPPER_CLASS
+  radio_driver(radio, board);`, uses `VolatileRTCClock fallback_clock` (which
+  needs no `begin()`, which is why none of them calls it), and has its
+  `radio_init()` outside any `#if`. None uses CRLF.
+- **All 195 environments are nRF52 with `CustomSX1262` and `CustomSX1262Wrapper`**
+  (from `pio project config`), so one platform and one chip class to verify.
+- **The 18, 5, 4 and 3 ESP32 bodies are left for cut D.** They start
+  `fallback_clock`, which is an `ESP32RTCClock` there and a file local global no
+  `target.h` declares, and most pass `spi`, a file local `SPIClass` of the
+  variant. Sharing them needs exactly the new description cut D introduces (which
+  fallback clock, which SPI object). `heltec_ct62` (`fallback_clock.begin()` and
+  `&SPI`) and the two `SPI1` variants belong to D for the same reason.
+
+### What changes
+
+- `src/helpers/radiolib/RadioLibTarget.cpp` gets a second weak definition, next
+  to `radio_new_identity()`:
+  ```cpp
+  #if defined(NRF52_PLATFORM) && defined(USE_SX1262)
+  __attribute__((weak)) bool radio_init() {
+    rtc_clock.begin(Wire);
+    return RadioLibTargetAccess::radio<RADIO_CLASS>(radio_driver).std_init(&SPI);
+  }
+  #endif
+  ```
+- `RadioLibWrapper` names one more friend, a small accessor the shared target code
+  uses to reach the radio it wraps, as `RadioNoiseListener` does for cut A:
+  `static_cast<RADIO_CLASS&>(*driver._radio)`. The cast is the one every chip
+  wrapper already makes (`((CustomSX1262 *)_radio)`), and `radio_driver` wraps
+  `radio` in all 31 files (checked above).
+- The 31 copies are deleted from `variants/*/target.cpp`, deletions only, as in
+  cut A. The declaration stays in every `target.h`.
+
+The guard: `NRF52_PLATFORM` and `USE_SX1262` (which `CustomSX1262Wrapper.h`
+defines and every `target.h` of the 31 includes) are existing macros, so no new
+description. It is that narrow on purpose:
+
+- The default is only correct where it was the copy. On ESP32 every RadioLib
+  variant starts its `fallback_clock`, on RP2040 they pass `SPI1` or `spi`. A new
+  ESP32 board that forgets its `radio_init()` should fail to link, not silently get
+  an nRF52 default that never starts its clock.
+- The weak function is compiled in every environment where the guard holds, also
+  in variants that keep their own. Among the nRF52 variants with another chip,
+  `meshtracker_x1` (LR2021) declares `rtc_clock` as `VolatileRTCClock`, which has
+  no `begin(Wire)`, and the LR11x0 classes have no `std_init()`, so a wider guard
+  would not compile there. The two nRF52 SX1262 variants that keep their own
+  body (`mesh_pocket`, `muzi_base`) both declare the same `rtc_clock` and have
+  `std_init()`, so the default compiles there and is not used.
+
+### Alternatives considered
+
+- **Share the ESP32 groups now as well, with `fallback_clock` and `spi` declared
+  `extern` in the shared file.** Rejected: both are file local names of the
+  variant that no `target.h` declares, and whether there is a `spi` and which
+  clock class it is, is board description. That is cut D.
+- **`extern RADIO_CLASS radio;` in the shared file.** Rejected for the reason given
+  in cut A: `radio` is not part of any variant's declared interface,
+  `radio_driver` is. Also, the weak default is compiled where the variant keeps
+  its own, and would then reference `radio` from a function that is not used.
+- **A public `getRadio()` on `RadioLibWrapper`.** Rejected for now, as in cut A: it
+  widens the wrapper's interface for the shared target code only. With two users
+  (cut A's listener and this default) a friend accessor is still local; if cut D
+  constructs the radio in the shared code, the accessor goes away again.
+- **A virtual `std_init()` on the wrapper.** Rejected: a vtable entry and an indirect
+  call in every RadioLib wrapper for a function called once at boot, and the
+  LR11x0 and STM32WL wrappers have no such function to override.
+- **One default for every platform with `#if` branches per platform inside.**
+  Rejected: it would write the ESP32 and RP2040 board description as `#if` chains
+  into the shared code, which is what cut D replaces with the build flags.
+- **Leave out the 3 (`heltec_t096`, `heltec_t1`, `heltec_t114`).** Not chosen: they
+  are the same function (see above), and deleting their copy is the same edit.
+
+### Verification plan
+
+- Host tests in `native_variant_target`, as for cut A. A first commit pins the
+  variants' body, copied verbatim into the test, with a recording RTC clock and a
+  recording radio: the RTC is started first, with `Wire`; then `std_init()` is
+  called once on the radio that `radio_driver` wraps, with `&SPI`; its result is
+  returned unchanged (`true` and `false`). The second commit runs the same cases
+  against the shared default. `native_variant_target_override` gets a variant
+  `radio_init()` of its own and checks it is the one called (does not link if the
+  shared one is not weak).
+- Mutation tests on the shared default (examples: RTC started after the radio,
+  `std_init()` without `&SPI`, result inverted or dropped, not weak, guarded wider
+  or narrower).
+- Builds from `e5a8f164` and from the code commit, each in its own worktree: one
+  environment for each of the 31 edited variants, `mesh_pocket` and `muzi_base`
+  (compile the default, keep their own), `meshtracker_x1` and an LR1110 nRF52
+  environment (guard false), the 18 environments of the series' matrix (ESP32,
+  nRF52, RP2040, STM32), and the two C6 variants without a `target.cpp`. Flash and
+  RAM compared per environment; on one environment `nm` shows `radio_init()` weak
+  (`W`) and a variant that keeps its own shows it strong (`T`).
+- No hardware unless a board from the 31 is free in the pool (`kb device claim`);
+  otherwise recorded as without board.
+
+### Upstream collisions
+
+Checked on 20.10.2026 against meshcore-dev/MeshCore: the file lists of all 500
+open pull requests (GraphQL, 100 files each; the four with more than 100 files
+read through the REST file list), and the diffs of every open pull request that
+touches one of the 31 `target.cpp`, checked hunk by hunk for changed lines in or
+around `radio_init()`.
+
+- **No open pull request changes a line of the 31 `radio_init()` bodies.**
+- **#1962** (keep time across warm resets on nRF52, open, updated 2026-10-12)
+  touches 19 of the 31 files, but only the line `VolatileRTCClock fallback_clock;`
+  (to `NRF52RTCClock`). No conflict with this cut. It is relevant for cut D: it
+  makes the nRF52 fallback clock a board choice as well.
+- Context only (a hunk that shows `radio_init()` lines without changing them, so a
+  rebase without logic): #1799 (5 files), #1913, #1937, #2185, #2794, #3331,
+  #3374, #3527, #3613 (1 file each).
+- **#2682** (ThinkNode M4) lists `thinknode_m8` and `wio-tracker-l1-1w` as changed,
+  but its head is identical to `upstream/dev` in both (`git diff upstream/dev
+  pull/2682/head`, 0 lines), as found for cut B: a merge of `dev`, not a change.
+- Open pull requests that add an nRF52 SX1262 board carry their own
+  `radio_init()`; with the weak default they keep linking unchanged.
 
 ## Upstream
 
