@@ -52,12 +52,12 @@ The full analysis, with file and line references for every finding, is in
 | 3 | Drive the radio settings (JSON, CLI, key/value store) from one table | [0003](0003-radio-settings-table.md) | ready for review |
 | 4 | Share the underpinnings of repeater, room server and sensor in one base class (steps 4a to 4g; the boot sequence and the forwarding checks are the last two) | [0004](0004-shared-server-base.md), [0007](0007-boot-sequence.md), [0008](0008-forward-policy.md) | ready for review |
 | 9 | One RadioLib adapter per chip family, part one: the receive detection the seven chip classes shared as copies (step 9a; 9b to 9d planned in the note) | [0009](0009-radio-chip-adapter.md) | 9a ready for review |
+| 10 | A command table for the companion protocol: a host harness that pins every frame (10a), then one row per command code instead of the if chain (10b); 10c and 10d proposed in the note | [0010](0010-companion-command-table.md) | 10a and 10b ready for review |
 | 11 | One generic variant target built from a board description, cut A: one shared `radio_new_identity()` (cuts B to E planned in the note) | [0011](0011-variant-target.md) | cut A ready for review |
 
 Steps are numbered after their design note, so the numbers have gaps: 5 to 8
-are notes of fixes and of step 4. Step 10, a companion frame codec with a
-command table (note 0010), is in progress on its own branch. See the review for
-the reasoning behind the order.
+are notes of fixes and of step 4. See the review for the reasoning behind the
+order.
 
 ## Verifying a step yourself
 
