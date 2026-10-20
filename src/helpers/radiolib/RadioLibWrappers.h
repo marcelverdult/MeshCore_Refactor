@@ -13,6 +13,7 @@ struct PacketMillis {
 
 class RadioLibWrapper : public mesh::Radio {
   friend class RadioNoiseListener;  // listens on _radio, without a public accessor for it
+  friend struct RadioLibTargetAccess;  // RadioLibTarget.cpp starts _radio in the default radio_init()
 protected:
   PhysicalLayer* _radio;
   mesh::MainBoard* _board;

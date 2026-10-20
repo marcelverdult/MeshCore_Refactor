@@ -26,9 +26,3 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager();
   MomentaryButton joystick_right(JOYSTICK_RIGHT, 1000, true, false, false);
   MomentaryButton back_btn(PIN_BACK_BTN, 1000, true, false, true);
 #endif
-
-bool radio_init() {
-  rtc_clock.begin(Wire);
-
-  return radio.std_init(&SPI);
-}

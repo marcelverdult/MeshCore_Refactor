@@ -25,9 +25,3 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager();
   MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
   MomentaryButton back_btn(PIN_BUTTON2, 1000, true);
 #endif
-
-bool radio_init() {
-  rtc_clock.begin(Wire);
-  
-  return radio.std_init(&SPI);
-}

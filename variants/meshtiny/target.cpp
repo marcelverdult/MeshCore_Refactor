@@ -20,8 +20,3 @@ DISPLAY_CLASS display;
   MomentaryButton joystick_right(ENCODER_RIGHT, 1000, true, true);
   MomentaryButton back_btn(PIN_SIDE_BUTTON, 1000, true, true);
 #endif
-
-bool radio_init() {
-  rtc_clock.begin(Wire);
-  return radio.std_init(&SPI);
-}

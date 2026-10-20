@@ -32,13 +32,3 @@ EnvironmentSensorManager sensors;
 DISPLAY_CLASS display(&board.periph_power);
 MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
 #endif
-
-bool radio_init() {
-  rtc_clock.begin(Wire);
-
-#if defined(P_LORA_SCLK)
-  return radio.std_init(&SPI);
-#else
-  return radio.std_init();
-#endif
-}

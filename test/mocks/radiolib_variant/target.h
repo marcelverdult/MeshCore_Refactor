@@ -7,6 +7,40 @@
 // (here: the test) defines the globals declared below.
 
 #include <helpers/radiolib/RadioLibWrappers.h>
+#include <SPI.h>
+#include <Wire.h>
+
+#include <string>
+#include <vector>
+
+// What the stand-ins below were asked to do, in order, for the tests to compare.
+inline std::vector<std::string> target_calls;
+
+// Stand-in for a chip class with std_init() (CustomSX1262 and its siblings):
+// records the call and the SPI bus it was given, and counts the calls per radio.
+class TestRadio : public PhysicalLayer {
+public:
+  bool std_init_result = true;
+  int std_init_calls = 0;
+
+  bool std_init(SPIClass* spi = nullptr) {
+    target_calls.push_back(spi == &SPI ? "std_init(&SPI)" : spi ? "std_init(other SPI)" : "std_init()");
+    std_init_calls++;
+    return std_init_result;
+  }
+};
+
+// Stand-in for AutoDiscoverRTCClock: records which bus it was started on.
+class TestRTCClock {
+public:
+  void begin(TwoWire& wire) { target_calls.push_back(&wire == &Wire ? "rtc_clock.begin(Wire)" : "rtc_clock.begin(other)"); }
+};
+
+// What CustomSX1262Wrapper.h defines, which every target.h of an SX1262 variant
+// includes.
+#ifndef USE_SX1262
+#define USE_SX1262
+#endif
 
 class TestRadioWrapper : public RadioLibWrapper {
 public:
@@ -25,6 +59,7 @@ public:
 };
 
 extern WRAPPER_CLASS radio_driver;
+extern TestRTCClock rtc_clock;
 
 bool radio_init();
 mesh::LocalIdentity radio_new_identity();

@@ -20,11 +20,6 @@ SolarExternalWatchdog external_watchdog;
   DISPLAY_CLASS display;
 #endif
 
-bool radio_init() {
-  rtc_clock.begin(Wire);
-  return radio.std_init(&SPI);
-}
-
 void SolarSensorManager::start_gps() {
   if (!gps_active) {
     gps_active = true;
