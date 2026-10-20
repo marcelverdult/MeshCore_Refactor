@@ -14,6 +14,11 @@
 #define LOOP_DETECT_MODERATE  2
 #define LOOP_DETECT_STRICT    3
 
+// The version of the layout and meaning of /prefs.json. A file without the key is
+// version 0. ServerMesh::begin() brings an older file up to this version once, on the
+// first boot of a firmware that knows a newer one; see ServerMesh::upgradePrefs().
+#define NODE_PREFS_VERSION    1
+
 /**
  * \brief  Persisted settings of the server roles (repeater, room server, sensor),
  *         stored as /prefs.json and edited through CommonCLI.
@@ -51,6 +56,7 @@ public:
   char owner_info[120];
   uint8_t loop_detect = 0;
   uint8_t extra_sf[4];
+  uint8_t prefs_version = 0;  // 0 until loaded or upgraded, see NODE_PREFS_VERSION
 
 private:
   CommonRadioPrefs radio;
@@ -115,6 +121,7 @@ private:
 
 protected:
   void structure() override {
+    def("ver", prefs_version);
     def("name", node_name, sizeof(node_name));
     def("pass", password, sizeof(password));
     def("guest", guest_password, sizeof(guest_password));

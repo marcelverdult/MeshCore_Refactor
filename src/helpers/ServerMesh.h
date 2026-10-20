@@ -84,6 +84,16 @@ protected:
   virtual void loadPrefs() = 0;
 
   /**
+   * \brief  Bring prefs that an older firmware stored up to NODE_PREFS_VERSION.
+   *         Called by begin() right after loadPrefs(), and only when the stored
+   *         version is older; begin() then records the current version.
+   * \param  from  the stored version, 0 for a file written before versions existed
+   * \returns true if a value was changed, so begin() saves the result at once and
+   *          the upgrade does not run again on the next boot
+   */
+  virtual bool upgradePrefs(uint8_t from) { return false; }
+
+  /**
    * \brief  Start the role's bridge, if it has one and it is enabled. Called after
    *         everything is loaded and before the radio is configured.
    */

@@ -314,8 +314,29 @@ void SensorMesh::alertIf(bool condition, Trigger& t, AlertPriority pri, const ch
 
 bool SensorMesh::allowPacketForward(const mesh::Packet* packet) {
   if (_prefs.disable_fwd) return false;
-  if (packet->isRouteFlood() && packet->getPathHashCount() >= _prefs.flood_max) return false;
+  if (packet->isRouteFlood()
+      && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped, _prefs.flood_max_advert)) {
+    return false;
+  }
   return true;
+}
+
+// The hop limits the repeater and the room server start with. The constructor and
+// the prefs upgrade both need them.
+static const uint8_t DEFAULT_FLOOD_MAX_UNSCOPED = 64;
+static const uint8_t DEFAULT_FLOOD_MAX_ADVERT = 8;
+
+bool SensorMesh::upgradePrefs(uint8_t from) {
+  bool changed = false;
+  if (from < 1) {
+    // Before version 1 the sensor ignored these two limits and set no default for
+    // them, so every saved file holds a zero that nobody chose and that never took
+    // effect. Applied as it is, a zero refuses every un-scoped flood and every advert.
+    // A value other than zero was set on purpose and is kept.
+    if (_prefs.flood_max_unscoped == 0) { _prefs.flood_max_unscoped = DEFAULT_FLOOD_MAX_UNSCOPED; changed = true; }
+    if (_prefs.flood_max_advert == 0) { _prefs.flood_max_advert = DEFAULT_FLOOD_MAX_ADVERT; changed = true; }
+  }
+  return changed;
 }
 
 uint32_t SensorMesh::getRetransmitDelay(const mesh::Packet* packet) {
@@ -736,6 +757,8 @@ SensorMesh::SensorMesh(mesh::MainBoard& board, mesh::Radio& radio, mesh::Millise
   _prefs.flood_advert_interval = 0;   // disabled
   _prefs.disable_fwd = true;
   _prefs.flood_max = 64;
+  _prefs.flood_max_unscoped = DEFAULT_FLOOD_MAX_UNSCOPED;
+  _prefs.flood_max_advert = DEFAULT_FLOOD_MAX_ADVERT;
   _prefs.interference_threshold = 0;  // disabled
   _prefs.cad_enabled = 0;             // hardware CAD before TX (off by default; 'set cad on')
 

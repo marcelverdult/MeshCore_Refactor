@@ -25,6 +25,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <Arduino.h>
 #include <target.h>
@@ -60,6 +61,13 @@ public:
   }
   mutable bool asked = false;
   mutable float first_airtime_factor = -1.0f;
+
+  // Which stored versions begin() asked the role to upgrade from.
+  bool upgradePrefs(uint8_t from) override {
+    upgrades_from.push_back(from);
+    return BootRole::upgradePrefs(from);
+  }
+  std::vector<int> upgrades_from;
 };
 
 class BootSequenceTest : public ::testing::Test {
@@ -520,5 +528,149 @@ TEST_F(BootSequenceTest, ADisabledBridgeIsNotStarted) {
 }
 
 #endif  // WITH_BRIDGE
+
+// ---- settings stored by an older firmware -----------------------------------
+//
+// /prefs.json carries a version since the sensor alignment, so that a setting whose
+// meaning changed can be brought up to date once, on the first boot of the newer
+// firmware, and never again. See docs/refactoring/0006-sensor-flood-limits.md. A
+// suite defines BOOT_ROLE_LIFTS_UNVERSIONED_ZERO_HOP_LIMITS if its role is the one
+// whose stored zero limits were never applied before version 1.
+
+class StoredPrefsTest : public BootSequenceTest {
+protected:
+  void putPrefs(const char* text) {
+    const std::string t(text);
+    fs.files["/prefs.json"] = std::vector<uint8_t>(t.begin(), t.end());
+  }
+  std::string prefsText() {
+    const auto& bytes = fs.files["/prefs.json"];
+    return std::string(bytes.begin(), bytes.end());
+  }
+};
+
+// A file from before version 1 that carries both limits at zero, with forwarding on.
+static const char* const UNVERSIONED_ZERO_LIMITS =
+    "{repeat:{disable:0,f_max:64,f_max_uns:0,f_max_adv:0}}";
+
+TEST_F(StoredPrefsTest, AFreshNodeIsAtTheCurrentVersion) {
+  auto node = bootFresh();
+
+  EXPECT_EQ(node->prefs().prefs_version, NODE_PREFS_VERSION);
+  EXPECT_TRUE(fs.files.empty()) << "and booting still writes nothing";
+}
+
+TEST_F(StoredPrefsTest, AStoredFileGetsTheCurrentVersionWithTheNextSave) {
+  putPrefs("{repeat:{disable:0,f_max:64,f_max_uns:64,f_max_adv:8}}");
+
+  auto node = bootFresh();
+  EXPECT_EQ(node->prefs().prefs_version, NODE_PREFS_VERSION);
+
+  node->savePrefs();
+  EXPECT_NE(prefsText().find("ver:" + std::to_string(NODE_PREFS_VERSION)), std::string::npos)
+      << prefsText();
+}
+
+TEST_F(StoredPrefsTest, AnOlderFileThatNeedsNothingIsNotRewrittenAtBoot) {
+  const char* text = "{repeat:{disable:0,f_max:64,f_max_uns:64,f_max_adv:8}}";
+  putPrefs(text);
+
+  bootFresh();
+
+  EXPECT_EQ(prefsText(), text) << "booting stays read only when nothing is upgraded";
+}
+
+TEST_F(StoredPrefsTest, TheRoleIsAskedToUpgradeOnlyAnOlderFile) {
+  putPrefs("{repeat:{f_max:64}}");
+  EXPECT_EQ(bootFresh()->upgrades_from, std::vector<int>({0})) << "once, from version 0";
+
+  putPrefs("{ver:1,repeat:{f_max:64}}");
+  EXPECT_TRUE(bootFresh()->upgrades_from.empty()) << "not at the current version";
+
+  putPrefs("{ver:200,repeat:{f_max:64}}");
+  EXPECT_TRUE(bootFresh()->upgrades_from.empty()) << "nor at a newer one";
+}
+
+TEST_F(StoredPrefsTest, ZeroLimitsStoredAtTheCurrentVersionAreKept) {
+  // A zero chosen on a firmware that applies the limits is deliberate, on every role.
+  putPrefs("{ver:1,repeat:{disable:0,f_max:64,f_max_uns:0,f_max_adv:0}}");
+
+  auto node = bootFresh();
+
+  EXPECT_EQ(node->prefs().flood_max_unscoped, 0);
+  EXPECT_EQ(node->prefs().flood_max_advert, 0);
+}
+
+TEST_F(StoredPrefsTest, ANewerVersionIsLeftAsItIs) {
+  // A downgrade onto a file a later firmware wrote: nothing is upgraded, and the
+  // version is not lowered, so the later firmware does not run its steps twice.
+  putPrefs("{ver:200,repeat:{disable:0,f_max:64,f_max_uns:0,f_max_adv:0}}");
+
+  auto node = bootFresh();
+
+  EXPECT_EQ(node->prefs().prefs_version, 200);
+  EXPECT_EQ(node->prefs().flood_max_unscoped, 0);
+}
+
+#ifdef BOOT_ROLE_LIFTS_UNVERSIONED_ZERO_HOP_LIMITS
+
+TEST_F(StoredPrefsTest, UnversionedZeroHopLimitsAreLiftedToTheRoleDefaults) {
+  putPrefs(UNVERSIONED_ZERO_LIMITS);
+
+  auto node = bootFresh();
+
+  EXPECT_EQ(node->prefs().flood_max_unscoped, 64);
+  EXPECT_EQ(node->prefs().flood_max_advert, 8);
+  EXPECT_EQ(node->prefs().disable_fwd, 0) << "nothing else is touched";
+  EXPECT_EQ(node->prefs().flood_max, 64);
+}
+
+TEST_F(StoredPrefsTest, TheLiftIsSavedWithTheVersionSoItRunsOnce) {
+  putPrefs(UNVERSIONED_ZERO_LIMITS);
+
+  bootFresh();
+
+  const std::string text = prefsText();
+  EXPECT_NE(text.find("ver:1"), std::string::npos) << text;
+  EXPECT_NE(text.find("f_max_uns:64,"), std::string::npos) << text;
+  EXPECT_NE(text.find("f_max_adv:8,"), std::string::npos) << text;
+}
+
+TEST_F(StoredPrefsTest, OnlyAZeroIsLifted) {
+  putPrefs("{repeat:{disable:0,f_max:64,f_max_uns:5,f_max_adv:0}}");
+
+  auto node = bootFresh();
+
+  EXPECT_EQ(node->prefs().flood_max_unscoped, 5) << "an operator's value is kept";
+  EXPECT_EQ(node->prefs().flood_max_advert, 8);
+}
+
+TEST_F(StoredPrefsTest, AZeroSetAfterTheUpgradeSurvivesTheNextBoot) {
+  putPrefs(UNVERSIONED_ZERO_LIMITS);
+  {
+    auto node = bootFresh();
+    node->prefs().flood_max_unscoped = 0;   // what "set flood.max.unscoped 0" stores
+    node->savePrefs();
+  }
+
+  auto node = bootFresh();
+
+  EXPECT_EQ(node->prefs().flood_max_unscoped, 0) << "the upgrade does not run a second time";
+}
+
+#else
+
+TEST_F(StoredPrefsTest, UnversionedZeroHopLimitsAreKept) {
+  // This role has always applied the limits, so a stored zero was a choice.
+  putPrefs(UNVERSIONED_ZERO_LIMITS);
+
+  auto node = bootFresh();
+
+  EXPECT_EQ(node->prefs().flood_max_unscoped, 0);
+  EXPECT_EQ(node->prefs().flood_max_advert, 0);
+  EXPECT_EQ(prefsText(), UNVERSIONED_ZERO_LIMITS) << "and the file is not rewritten";
+}
+
+#endif  // BOOT_ROLE_LIFTS_UNVERSIONED_ZERO_HOP_LIMITS
 
 }  // namespace boot_checks
