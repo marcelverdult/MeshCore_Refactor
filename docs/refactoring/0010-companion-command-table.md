@@ -1,7 +1,7 @@
 # 0010: A command table for the companion protocol
 
-Status: step 10a (host harness and characterization) ready for review; step 10b
-(the table itself) designed here, not yet built. Behaviour change: none.
+Status: steps 10a (host harness and characterization) and 10b (the table) ready
+for review; 10c and 10d are proposals. Behaviour change: none.
 
 ## Context
 
@@ -162,9 +162,10 @@ Each branch body moves, unchanged apart from the outer test, into a method
 condition test it first and return `false`, which reproduces the fall through:
 
 ```c++
-bool MyMesh::cmdSetPathHashMode(size_t len) {
-  if (cmd_frame[1] != 0) return false;    // was: && cmd_frame[1] == 0
-  ...
+bool MyMesh::cmdSetPathHashMode(size_t) {
+  if (cmd_frame[1] != 0) return false;
+  if (cmd_frame[2] >= 3) {
+    ...
   return true;
 }
 ```
@@ -183,21 +184,20 @@ visible `1` in a table rather than an absent clause.
 
 ### Cost on the targets
 
-To be measured in 10b on the full companion matrix (nRF52, ESP32, RP2040, STM32,
-BLE, USB, WiFi) against `integration`. Expected from the shapes involved, not
-measured: on ARM a pointer to member function is 8 bytes, so the table is 61
-rows of 12 bytes, about 730 bytes of flash and no RAM (the table is `const`).
-The chain itself shrinks, since the 62 comparisons disappear. Each handler gains
-a prologue and an epilogue, and GCC may stop sharing code between branches that
-used to be one function. A net change of up to 2 kB of flash on nRF52 would be
-acceptable (the RAK 4631 BLE companion uses 462 kB of 796 kB); more than that,
-and the cheaper variant below is the fallback.
+Measured in 10b, see "Verification of step 10b" for the table. RAM is unchanged
+in every environment (the table is `const`, 59 rows). Flash grows by about
+1.6 to 1.7 kB on nRF52, 1.5 kB on STM32, 1.2 to 1.9 kB on RP2040, 2.6 kB on
+ESP32-C3 and 3.5 kB on ESP32-S3, and shrinks by 1.3 kB on ESP32-C6. The design
+set 2 kB on nRF52 as the bound beyond which the cheaper `switch` variant would be
+used instead; the measured cost is inside it. The extra flash is the 59 function
+prologues and epilogues the chain did not need, plus the table (on ARM a pointer
+to member function is 8 bytes, so a row is 12).
 
 ### Steps
 
 | Step | Content | Behaviour |
 |---|---|---|
-| 10a | Host harness for `MyMesh.cpp`, frame sweep, per command tests (this change) | none |
+| 10a | Host harness for `MyMesh.cpp`, frame sweep, per command tests | none |
 | 10b | `CMD_TABLE` and one method per command, bodies moved unchanged | none, the sweep must stay byte identical |
 | 10c | A bounded frame reader (`FrameReader r(cmd_frame, len); r.u8(); r.u32(); r.bytes(n)`) in the handlers, replacing the hand counted offsets | none; a reader that runs out reports it instead of reading the tail |
 | 10d | Optional, a protocol change: answer a too short frame with `ILLEGAL_ARG` | visible to apps, needs its own proposal |
@@ -341,7 +341,7 @@ All host environments, on the committed tree, including the new one:
 ```
 native_companion       test_companion_frames      PASSED
 ... (the other 21 suites in 13 environments)     PASSED
-================ 404 test cases: 404 succeeded ================
+================ 414 test cases: 414 succeeded ================
 ```
 
 `native_companion` is added to `.github/workflows/run-unit-tests.yml`, which
@@ -405,3 +405,87 @@ key import, contact and channel changes). For those the host tests are the
 evidence; the length fixes recorded hardware runs for some of them. Only
 nRF52 was run; ESP32 and RP2040 companions compile the same `MyMesh.cpp`, and
 their build is checked by CI, not their behaviour.
+
+## Verification of step 10b
+
+### What changed
+
+`handleCmdFrame()` is the dispatcher above, followed by 59 handlers in the order
+of the old chain. The bodies were moved by a script, not retyped: of the 863
+lines the diff removes from `MyMesh.cpp`, 796 reappear with the same text, and
+the 67 without a counterpart are exactly the 62 branch heads, the final `else`
+(now the dispatcher's fallback) and the three early `return;` of
+`SEND_CHANNEL_DATA`, now `return true;`. `MyMesh.h` gains the row type, the
+table and the 59 declarations, all private.
+
+### Host
+
+The suites of 10a pass unchanged, test files and golden file untouched: the frame
+sweep (every code, every length, five fills, replies byte for byte and a digest of
+every queued packet and stored file) and the 49 command tests. All host suites on
+the committed tree: 414 of 414.
+
+The 10a mutations were aimed at the chain. These are aimed at the table, each on
+its own:
+
+| Mutation | Caught by |
+|---|---|
+| `SET_TUNING_PARAMS` row minimum 9 becomes 8 | sweep, `TuningParamsRoundTrip` |
+| `SEND_TELEMETRY_REQ` row minimum 4 becomes 5 | sweep, `TelemetryHasTwoForms` |
+| `ADD_UPDATE_CONTACT` row minimum loses the 4 timestamp bytes | sweep, `AddContactNeedsEveryMandatoryField` |
+| the row of `GET_TUNING_PARAMS` is missing | sweep, `TuningParamsRoundTrip` |
+| the dispatcher ignores a handler that declines | sweep and 6 command tests |
+| the dispatcher skips the minimum | 32 tests fail |
+| `cmdSetPathHashMode` no longer declines byte 1 other than 0 | sweep, `PathHashMode` |
+| `cmdSendControlData` declines the wrong flag value | sweep, `ControlData` |
+
+### Builds
+
+15 environments built from 10a (`2f5cf53c`) and from 10b with the same
+toolchain, each in its own worktree. All build on both sides.
+
+| Environment | Flash 10a | Flash 10b | Delta | RAM delta |
+|---|---:|---:|---:|---:|
+| `Heltec_v3_companion_radio_ble` | 1,666,365 | 1,669,897 | +3,532 | +0 |
+| `Heltec_v3_companion_radio_wifi` | 1,102,533 | 1,105,985 | +3,452 | +0 |
+| `Heltec_v3_companion_radio_usb` | 652,925 | 656,449 | +3,524 | +0 |
+| `RAK_4631_companion_radio_ble` | 462,228 | 463,956 | +1,728 | +0 |
+| `RAK_4631_companion_radio_usb` | 453,188 | 454,916 | +1,728 | +0 |
+| `ProMicro_companion_radio_usb` | 356,980 | 358,708 | +1,728 | +0 |
+| `LilyGo_T-Echo_companion_radio_ble` | 373,776 | 375,360 | +1,584 | +0 |
+| `LilyGo_T-Echo_companion_radio_usb` | 366,384 | 367,968 | +1,584 | +0 |
+| `PicoW_companion_radio_ble` | 632,364 | 633,580 | +1,216 | +0 |
+| `PicoW_companion_radio_wifi` | 526,780 | 528,708 | +1,928 | +0 |
+| `LilyGo_Tlora_C6_companion_radio_ble_` | 1,446,171 | 1,444,861 | -1,310 | +0 |
+| `wio-e5-mini_companion_radio_usb` | 207,472 | 208,944 | +1,472 | +0 |
+| `Xiao_C3_companion_radio_ble` | 1,252,846 | 1,255,424 | +2,578 | +0 |
+| `Heltec_v3_repeater` | 1,174,625 | 1,174,625 | +0 | +0 |
+| `RAK_4631_repeater` | 441,656 | 441,656 | +0 | +0 |
+
+The thirteen companions cover the five platform packages that compile
+`MyMesh.cpp` (nRF52, Espressif 32 for S3 and C3, pioarduino for C6, RP2040,
+STM32) and the BLE, USB and WiFi interfaces. The two repeaters do not compile the
+file and are there as the control. The tightest flash budget among them is the
+STM32WLE5 of `wio-e5-mini` (256 kB), which goes from 79.1 % to 79.7 %.
+
+### Hardware
+
+The same T-Echo, `techo-2`, with two USB companion images built from 10a and from
+10b, marked `c10a-int` and `c10b-tab` and confirmed by `ver` before each run.
+
+- `tools/refactoring/companion_session.py` sends 39 frames the commands accept:
+  every setter with the value the board already holds (TX power, radio, tuning,
+  other parameters, auto add, path hash mode, name, location, PIN, default scope),
+  the declining sub commands, out of range values, stats, self telemetry, a whole
+  signing round, channels, two CLI commands and the wrong reboot and reset words.
+  Run once per image and compared: the only two differing lines are the build
+  marker inside `DEVICE_QUERY` and the reply to `ver`.
+- `companion_sweep.py` against the 10b image: 6502 of 6502 frames as on the host.
+- State before and after, read as in 10a: identical apart from the build marker.
+- Afterwards the official 1.18.0 BLE image went back on, and the phone that uses
+  the board reconnected 4 seconds later.
+
+Not covered on hardware: the setters with new values, sends on air, `REBOOT`,
+`FACTORY_RESET`, private key import, contact and channel changes. Their handlers
+are moved text, pinned on the host by the sweep and the command tests. Only nRF52
+ran on hardware.
