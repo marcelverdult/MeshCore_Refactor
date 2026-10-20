@@ -59,12 +59,17 @@ inline long random(long howsmall, long howbig) {
 
 inline long random(long howbig) { return random(0, howbig); }
 
-#ifndef min
-  #define min(a, b) ((a) < (b) ? (a) : (b))
-#endif
-#ifndef max
-  #define max(a, b) ((a) > (b) ? (a) : (b))
-#endif
+// Arduino's min() and max(), as functions rather than macros. They must not be
+// macros: production code uses those words as ordinary identifiers, and
+// helpers/CommonRadioPrefs.cpp has both a struct field 'float max' and a parameter
+// named 'max', which a function-like macro turns into a syntax error. Two type
+// parameters, because the call sites mix types, for example
+// min(sp - hex, PUB_KEY_SIZE*2) with a pointer difference and an int.
+template <typename T, typename U>
+inline auto min(T a, U b) -> decltype(a < b ? a : b) { return a < b ? a : b; }
+
+template <typename T, typename U>
+inline auto max(T a, U b) -> decltype(a > b ? a : b) { return a > b ? a : b; }
 
 // Arduino's Serial. It keeps what the firmware printed, so a test can assert on
 // output the roles write there (the packet log dump, for example).
