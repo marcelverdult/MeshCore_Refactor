@@ -1,0 +1,88 @@
+diff --git a/platformio.ini b/platformio.ini
+index 5a57d9fa..d6c0867d 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -340,6 +340,7 @@ lib_deps =
+   google/googletest @ 1.17.0
+ 
+ [env:native_companion]
++extra_scripts = post:tools/refactoring/asan_link.py
+ ; The companion on the host: the real MyMesh.cpp and DataStore.cpp against the mocks in
+ ; test/mocks, so the frame protocol (handleCmdFrame) can be characterized before it
+ ; is restructured (docs/refactoring/0010-companion-command-table.md). RP2040_PLATFORM
+@@ -348,7 +349,7 @@ lib_deps =
+ ; sides of those two branches are reachable.
+ platform = native
+ test_framework = googletest
+-build_flags = -std=c++17
++build_flags = -std=c++17 -g -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer
+   -D RP2040_PLATFORM
+   -D ENABLE_PRIVATE_KEY_EXPORT=1
+   -D ENABLE_PRIVATE_KEY_IMPORT=1
+diff --git a/test/test_companion_frames/CompanionHarness.h b/test/test_companion_frames/CompanionHarness.h
+index 07bb4fa7..4508500c 100644
+--- a/test/test_companion_frames/CompanionHarness.h
++++ b/test/test_companion_frames/CompanionHarness.h
+@@ -1,4 +1,7 @@
+ #pragma once
++#include <sanitizer/asan_interface.h>
++#include <cstddef>
++inline size_t g_poison_skip = 1;
+ 
+ // The companion on the host, driven through its frame protocol. A test hands a
+ // command frame to a fake serial interface, runs one MyMesh::loop() (which is where
+@@ -45,6 +48,7 @@ public:
+   std::vector<Bytes> written;
+   bool enabled = false;
+   int disable_calls = 0;
++  uint8_t* asan_buf = nullptr;
+ 
+   void enable() override { enabled = true; }
+   void disable() override { enabled = false; disable_calls++; }
+@@ -62,6 +66,8 @@ public:
+     Bytes f = inbound.front();
+     inbound.pop_front();
+     memcpy(dest, f.data(), f.size());
++    asan_buf = dest;
++    if (g_poison_skip <= MAX_FRAME_SIZE + 1 - f.size()) __asan_poison_memory_region(dest + f.size() + g_poison_skip, MAX_FRAME_SIZE + 1 - f.size() - g_poison_skip);
+     return f.size();
+   }
+ };
+@@ -148,6 +154,7 @@ public:
+     serial.written.clear();
+     serial.inbound.push_back(frame);
+     node->loop();
++    if (serial.asan_buf) __asan_unpoison_memory_region(serial.asan_buf, MAX_FRAME_SIZE + 1);
+     return serial.written;
+   }
+ 
+diff --git a/test/test_companion_frames/test_asan_probe.cpp b/test/test_companion_frames/test_asan_probe.cpp
+new file mode 100644
+index 00000000..d315f549
+--- /dev/null
++++ b/test/test_companion_frames/test_asan_probe.cpp
+@@ -0,0 +1,24 @@
++// ASan probe for reads past len: every code, every length, ten fills. Bytes above
++// the frame are poisoned from len + PROBE_SKIP (0: the byte at len too).
++#include "CompanionHarness.h"
++#include <cstdlib>
++using namespace companion;
++TEST(AsanProbe, AllCodesAllLengths) {
++  const char* e = getenv("PROBE_SKIP");
++  if (!e) GTEST_SKIP();
++  g_poison_skip = atoi(e);
++  const uint8_t fills[] = {0x00, 0x01, 0x02, 0x3F, 0x40, 0x7F, 0x81, 0xBF, 0xFF, 0x5A};
++  Harness h;
++  for (int code = 0; code < 70; code++) {
++    for (uint8_t fill : fills) {
++      for (size_t len = 1; len <= MAX_FRAME_SIZE; len++) {
++        h.reset();
++        h.boot();
++        Bytes f; putU8(f, (uint8_t)code); putFill(f, len - 1, fill);
++        fprintf(stderr, "PROBE code=%d fill=%02x len=%zu\n", code, fill, len);
++        h.send(f);
++      }
++    }
++  }
++  g_poison_skip = 1;
++}

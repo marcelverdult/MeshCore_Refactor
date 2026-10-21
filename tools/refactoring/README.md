@@ -56,6 +56,29 @@ python3 companion_session.py <usb-serial> > b.txt   # second image
 diff a.txt b.txt
 ```
 
+## Frame reads past the end (step 10c)
+
+`cmd_frame_offsets.py` lists every access to `cmd_frame` in the handlers of the
+companion command table, with the row's minimum, and marks constant offsets that
+are read without a length test of their own.
+
+`companion_asan_probe.patch` measures the same at run time: it builds the
+`native_companion` harness with AddressSanitizer, poisons the bytes of `cmd_frame`
+above each frame and sends every code 0 to 69 at every length with ten fills. Apply
+it, run, summarise, revert:
+
+```sh
+git apply tools/refactoring/companion_asan_probe.patch
+ASAN_OPTIONS=halt_on_error=0:detect_leaks=0:detect_container_overflow=0:suppress_equal_pcs=0:malloc_context_size=0 \
+  PROBE_SKIP=1 pio test -e native_companion -v -a '--gtest_filter=AsanProbe.*' > probe.log 2>&1
+python3 tools/refactoring/companion_asan_probe_summary.py probe.log
+git apply -R tools/refactoring/companion_asan_probe.patch
+```
+
+`PROBE_SKIP=1` poisons from `len + 1` (the terminator some handlers write at `len`
+is allowed); `PROBE_SKIP=0` from `len`, which also lists those terminators. About 30
+seconds with `PROBE_SKIP=1`, 15 minutes with `0` (every terminator is a report).
+
 ## Diagnostic build for step 2
 
 `diag-tuning.patch` adds a `diag tuning` command to the room server and the
