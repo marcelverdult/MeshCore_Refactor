@@ -10,6 +10,7 @@
 #include <helpers/SensorManager.h>
 
 extern XiaoC3Board board;
+#define RADIOLIB_TARGET_GLOBALS   // radio, radio_driver and rtc_clock come from RadioLibTarget.cpp
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
 extern SensorManager sensors;

@@ -9,6 +9,8 @@
 #include <helpers/SensorManager.h>
 
 extern ESP32Board board;
+#define RADIOLIB_TARGET_GLOBALS   // radio, radio_driver and rtc_clock come from RadioLibTarget.cpp
+#define P_LORA_SPI_HOST 0   // the radio's own SPI bus
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
 extern SensorManager sensors;

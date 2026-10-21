@@ -27,49 +27,6 @@ TestBoard board;
 // rtc_clock falls back to.
 extern ESP32RTCClock fallback_clock;
 
-// The variant's block and radio_init(), verbatim from the variants with this
-// environment's description: SX1276 from heltec_v2 and lilygo_tbeam_SX1276,
-// an own SPI host from heltec_e213, heltec_e290, heltec_rc32 and heltec_t190,
-// otherwise from the 10 with the plain block (heltec_v3 and others).
-#if defined(USE_SX1276)
-#if defined(P_LORA_SCLK)
-  static SPIClass spi;
-  RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_0, P_LORA_RESET, P_LORA_DIO_1, spi);
-#else
-  RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_0, P_LORA_RESET, P_LORA_DIO_1);
-#endif
-#elif defined(P_LORA_SPI_HOST)
-#if defined(P_LORA_SCLK)
-  static SPIClass spi(FSPI);
-  RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, spi);
-#else
-  RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY);
-#endif
-#else
-#if defined(P_LORA_SCLK)
-  static SPIClass spi;
-  RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, spi);
-#else
-  RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY);
-#endif
-#endif
-
-WRAPPER_CLASS radio_driver(radio, board);
-
-ESP32RTCClock fallback_clock;
-AutoDiscoverRTCClock rtc_clock(fallback_clock);
-
-bool radio_init() {
-  fallback_clock.begin();
-  rtc_clock.begin(Wire);
-  
-#if defined(P_LORA_SCLK)
-  return radio.std_init(&spi);
-#else
-  return radio.std_init();
-#endif
-}
-
 // The same block and body once more, as the reference the cases are checked
 // against on every commit, whatever defines the globals above.
 namespace copy {
