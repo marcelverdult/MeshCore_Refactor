@@ -1026,6 +1026,11 @@ void MyMesh::startInterface(BaseSerialInterface &serial) {
   serial.enable();
 }
 
+// The bytes a path length byte announces; Packet::writePath() copies as many.
+static size_t pathByteLen(uint8_t path_len) {
+  return (path_len & 63) * ((path_len >> 6) + 1);
+}
+
 // One row per command: the code, the shortest frame the command accepts (code byte
 // included), and its handler. A frame below the minimum, a code without a row, and
 // a handler that returns false ("not this command") all get the answer the if chain
@@ -1263,9 +1268,9 @@ bool MyMesh::cmdSendChannelData(size_t len) {
     writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     return true;
   }
-  int i = 1;
-  uint8_t channel_idx = cmd_frame[i++];
-  uint8_t path_len = cmd_frame[i++];
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t channel_idx = r.u8();
+  uint8_t path_len = r.u8();
 
   // validate path len, allowing 0xFF for flood
   if (!mesh::Packet::isValidPathLen(path_len) && path_len != OUT_PATH_UNKNOWN) {
@@ -1277,19 +1282,20 @@ bool MyMesh::cmdSendChannelData(size_t len) {
   // parse provided path if not flood
   uint8_t path[MAX_PATH_SIZE];
   if (path_len != OUT_PATH_UNKNOWN) {
-    i += mesh::Packet::writePath(path, &cmd_frame[i], path_len);
+    const uint8_t *src = r.bytes(pathByteLen(path_len));
+    if (src) mesh::Packet::writePath(path, src, path_len);
   }
 
-  if ((size_t)(i + 2) > len) {   // the 2 byte data_type must be inside the frame
+  if (!r.ok() || !r.has(2)) {   // the path and the 2 byte data_type must be inside the frame
     MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA frame too short for data_type: %d", (uint32_t)len);
     writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     return true;
   }
 
-  uint16_t data_type = ((uint16_t)cmd_frame[i]) | (((uint16_t)cmd_frame[i + 1]) << 8);
-  i += 2;
-  const uint8_t *payload = &cmd_frame[i];
-  int payload_len = (len > (size_t)i) ? (int)(len - i) : 0;
+  uint16_t data_type = r.u8();
+  data_type |= ((uint16_t)r.u8()) << 8;
+  int payload_len = r.remaining();
+  const uint8_t *payload = r.bytes(payload_len);
 
   ChannelDetails channel;
   if (!getChannel(channel_idx, channel)) {
@@ -1312,8 +1318,9 @@ bool MyMesh::cmdGetContacts(size_t len) {
   if (_iter_started) {
     writeErrFrame(ERR_CODE_BAD_STATE); // iterator is currently busy
   } else {
-    if (len >= 5) { // has optional 'since' param
-      memcpy(&_iter_filter_since, &cmd_frame[1], 4);
+    FrameReader r(cmd_frame, len, 1);
+    if (r.has(4)) { // has optional 'since' param
+      _iter_filter_since = r.u32();
     } else {
       _iter_filter_since = 0;
     }
@@ -1344,11 +1351,12 @@ bool MyMesh::cmdSetAdvertName(size_t len) {
 }
 
 bool MyMesh::cmdSetAdvertLatlon(size_t len) {
-  int32_t lat, lon, alt = 0;
-  memcpy(&lat, &cmd_frame[1], 4);
-  memcpy(&lon, &cmd_frame[5], 4);
-  if (len >= 13) {
-    memcpy(&alt, &cmd_frame[9], 4); // for FUTURE support
+  FrameReader r(cmd_frame, len, 1);
+  int32_t lat = r.i32();
+  int32_t lon = r.i32();
+  int32_t alt = 0;
+  if (r.has(4)) {
+    alt = r.i32(); // for FUTURE support
   }
   if (lat <= 90 * 1E6 && lat >= -90 * 1E6 && lon <= 180 * 1E6 && lon >= -180 * 1E6) {
     sensors.node_lat = ((double)lat) / 1000000.0;
@@ -1384,6 +1392,7 @@ bool MyMesh::cmdSetDeviceTime(size_t len) {
 }
 
 bool MyMesh::cmdSendSelfAdvert(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
   mesh::Packet* pkt;
   if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
     pkt = createSelfAdvert(_prefs.node_name);
@@ -1391,7 +1400,7 @@ bool MyMesh::cmdSendSelfAdvert(size_t len) {
     pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
   }
   if (pkt) {
-    if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
+    if (r.has(1) && r.u8() == 1) { // optional param (1 = flood, 0 = zero hop)
       unsigned long delay_millis = 0;
       TransportKey default_scope;
       memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
@@ -1492,7 +1501,8 @@ bool MyMesh::cmdGetContactByKey(size_t len) {
 }
 
 bool MyMesh::cmdExportContact(size_t len) {
-  if (len < 1 + PUB_KEY_SIZE) {
+  FrameReader r(cmd_frame, len, 1);
+  if (!r.has(PUB_KEY_SIZE)) {
     // export SELF
     mesh::Packet* pkt;
     if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
@@ -1511,7 +1521,7 @@ bool MyMesh::cmdExportContact(size_t len) {
       writeErrFrame(ERR_CODE_TABLE_FULL); // Error
     }
   } else {
-    uint8_t *pub_key = &cmd_frame[1];
+    uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     uint8_t out_len;
     if (recipient && (out_len = exportContact(*recipient, &out_frame[1])) > 0) {
@@ -1549,18 +1559,14 @@ bool MyMesh::cmdSyncNextMessage(size_t) {
 
 // freq, bw, sf, cr; the repeat flag stays optional
 bool MyMesh::cmdSetRadioParams(size_t len) {
-  int i = 1;
-  uint32_t freq;
-  memcpy(&freq, &cmd_frame[i], 4);
-  i += 4;
-  uint32_t bw;
-  memcpy(&bw, &cmd_frame[i], 4);
-  i += 4;
-  uint8_t sf = cmd_frame[i++];
-  uint8_t cr = cmd_frame[i++];
+  FrameReader r(cmd_frame, len, 1);
+  uint32_t freq = r.u32();
+  uint32_t bw = r.u32();
+  uint8_t sf = r.u8();
+  uint8_t cr = r.u8();
   uint8_t repeat = 0;  // default - false
-  if (len > i) {
-    repeat = cmd_frame[i++];   // FIRMWARE_VER_CODE  9+
+  if (r.has(1)) {
+    repeat = r.u8();   // FIRMWARE_VER_CODE  9+
   }
 
   if (repeat && !isValidClientRepeatFreq(freq)) {
@@ -1625,16 +1631,18 @@ bool MyMesh::cmdGetTuningParams(size_t) {
 
 // the fields after manual_add stay optional
 bool MyMesh::cmdSetOtherParams(size_t len) {
-  _prefs.manual_add_contacts = cmd_frame[1];
-  if (len >= 3) {
-    _prefs.telemetry_mode_base = cmd_frame[2] & 0x03; // v5+
-    _prefs.telemetry_mode_loc = (cmd_frame[2] >> 2) & 0x03;
-    _prefs.telemetry_mode_env = (cmd_frame[2] >> 4) & 0x03;
+  FrameReader r(cmd_frame, len, 1);
+  _prefs.manual_add_contacts = r.u8();
+  if (r.has(1)) {
+    uint8_t modes = r.u8();
+    _prefs.telemetry_mode_base = modes & 0x03; // v5+
+    _prefs.telemetry_mode_loc = (modes >> 2) & 0x03;
+    _prefs.telemetry_mode_env = (modes >> 4) & 0x03;
 
-    if (len >= 4) {
-      _prefs.advert_loc_policy = cmd_frame[3];
-      if (len >= 5) {
-        _prefs.multi_acks = cmd_frame[4];
+    if (r.has(1)) {
+      _prefs.advert_loc_policy = r.u8();
+      if (r.has(1)) {
+        _prefs.multi_acks = r.u8();
       }
     }
   }
@@ -1719,15 +1727,17 @@ bool MyMesh::cmdImportPrivateKey(size_t len) {
 }
 
 bool MyMesh::cmdSendRawData(size_t len) {
-  int i = 1;
-  uint8_t path_len = cmd_frame[i++];
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t path_len = r.u8();
   if (path_len >= 0 && mesh::Packet::isValidPathLen(path_len)) {
     uint8_t path[MAX_PATH_SIZE];
-    i += mesh::Packet::writePath(path, &cmd_frame[i], path_len);
-    if (i + 4 > len) {  // min payload 4 bytes
+    const uint8_t *src = r.bytes(pathByteLen(path_len));
+    if (src) mesh::Packet::writePath(path, src, path_len);
+    if (!r.ok() || !r.has(4)) {  // the path and a payload of at least 4 bytes
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      auto pkt = createRawData(&cmd_frame[i], len - i);
+      size_t n = r.remaining();
+      auto pkt = createRawData(r.bytes(n), n);
       if (pkt) {
         sendDirect(pkt, path, path_len);
         writeOKFrame();
@@ -1862,8 +1872,10 @@ bool MyMesh::cmdSendPathDiscoveryReq(size_t len) {
 }
 
 bool MyMesh::cmdSendTelemetryReq(size_t len) {
-  if (len >= 4 + PUB_KEY_SIZE) {  // can deprecate, in favour of CMD_SEND_BINARY_REQ
-    uint8_t *pub_key = &cmd_frame[4];
+  FrameReader r(cmd_frame, len, 1);
+  r.skip(3);  // reserved
+  if (r.has(PUB_KEY_SIZE)) {  // can deprecate, in favour of CMD_SEND_BINARY_REQ
+    uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient) {
       uint32_t tag, est_timeout;
@@ -1884,7 +1896,7 @@ bool MyMesh::cmdSendTelemetryReq(size_t len) {
     }
     return true;
   }
-  if (len == 4) {  // 'self' telemetry request
+  if (r.remaining() == 0) {  // 'self' telemetry request
     telemetry.reset();
     telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
     float temperature = board.getMCUTemperature();
@@ -1974,16 +1986,17 @@ bool MyMesh::cmdGetChannel(size_t len) {
 }
 
 bool MyMesh::cmdSetChannel(size_t len) {
-  if (len >= 2 + 32 + 32) {
+  FrameReader r(cmd_frame, len, 1);
+  if (r.has(1 + 32 + 32)) {
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); // not supported (yet)
     return true;
   }
-  if (len >= 2 + 32 + 16) {
-    uint8_t channel_idx = cmd_frame[1];
+  if (r.has(1 + 32 + 16)) {
+    uint8_t channel_idx = r.u8();
     ChannelDetails channel;
-    StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
+    StrHelper::strncpy(channel.name, (char *)r.bytes(32), 32);
     memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
-    memcpy(channel.channel.secret, &cmd_frame[2 + 32], 16); // NOTE: only 128-bit supported
+    memcpy(channel.channel.secret, r.bytes(16), 16); // NOTE: only 128-bit supported
     if (setChannel(channel_idx, channel)) {
       saveChannels();
       writeOKFrame();
@@ -2039,19 +2052,20 @@ bool MyMesh::cmdSignFinish(size_t) {
 }
 
 bool MyMesh::cmdSendTracePath(size_t len) {
-  if (len - 10 >= MAX_PACKET_PAYLOAD-5) return false;
-  uint8_t path_len = len - 10;
-  uint8_t flags = cmd_frame[9];
+  FrameReader r(cmd_frame, len, 1);
+  uint32_t tag = r.u32();
+  uint32_t auth = r.u32();
+  uint8_t flags = r.u8();
+  if (r.remaining() >= MAX_PACKET_PAYLOAD-5) return false;
+  uint8_t path_len = r.remaining();
+  uint8_t *path = r.bytes(path_len);
   uint8_t path_sz = flags & 0x03;  // NEW v1.11+
   if ((path_len >> path_sz) > MAX_PATH_SIZE || (path_len % (1 << path_sz)) != 0) { // make sure is multiple of path_sz
     writeErrFrame(ERR_CODE_ILLEGAL_ARG);
   } else {
-    uint32_t tag, auth;
-    memcpy(&tag, &cmd_frame[1], 4);
-    memcpy(&auth, &cmd_frame[5], 4);
     auto pkt = createTrace(tag, auth, flags);
     if (pkt) {
-      sendDirect(pkt, &cmd_frame[10], path_len);
+      sendDirect(pkt, path, path_len);
 
       uint32_t t = _radio->getEstAirtimeFor(pkt->payload_len + pkt->path_len + 2);
       uint32_t est_timeout = calcDirectTimeoutMillisFor(t, path_len >> path_sz);
@@ -2230,9 +2244,11 @@ bool MyMesh::cmdFactoryReset(size_t len) {
 }
 
 bool MyMesh::cmdSetFloodScopeKey(size_t len) {
-  if (len >= 2 && cmd_frame[1] == 0) {
-    if (len >= 2 + 16) {
-      memcpy(send_scope.key, &cmd_frame[2], sizeof(send_scope.key));  // set scope override TransportKey
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t mode = r.u8();
+  if (mode == 0) {
+    if (r.has(16)) {
+      memcpy(send_scope.key, r.bytes(sizeof(send_scope.key)), sizeof(send_scope.key));  // set scope override TransportKey
     } else {
       memset(send_scope.key, 0, sizeof(send_scope.key));  // reset scope override
     }
@@ -2240,7 +2256,7 @@ bool MyMesh::cmdSetFloodScopeKey(size_t len) {
     writeOKFrame();
     return true;
   }
-  if (len >= 2 && cmd_frame[1] == 1) {  // ver 12+
+  if (mode == 1) {  // ver 12+
     send_unscoped = true;
     writeOKFrame();
     return true;
@@ -2249,11 +2265,15 @@ bool MyMesh::cmdSetFloodScopeKey(size_t len) {
 }
 
 bool MyMesh::cmdSetDefaultFloodScope(size_t len) {
-  if (len >= 1+31+16) {
-    int n = strlen((char *) &cmd_frame[1]);
+  FrameReader r(cmd_frame, len, 1);
+  if (r.has(31 + 16)) {
+    size_t avail = r.remaining();
+    const char *name = (const char *) r.bytes(31);
+    const uint8_t *key = r.bytes(16);
+    int n = strnlen(name, avail);   // may run on into the key, never past the frame
     if (n > 0 && n < 31) {
-      strcpy(_prefs.default_scope_name, (char *) &cmd_frame[1]);
-      memcpy(_prefs.default_scope_key, &cmd_frame[1+31], 16);
+      strcpy(_prefs.default_scope_name, name);
+      memcpy(_prefs.default_scope_key, key, 16);
       savePrefs();
       writeOKFrame();
     } else {
@@ -2297,9 +2317,11 @@ bool MyMesh::cmdSendControlData(size_t len) {
 
 // autoadd_max_hops stays optional
 bool MyMesh::cmdSetAutoaddConfig(size_t len) {
-  _prefs.autoadd_config = cmd_frame[1];
-  if (len >= 3) {
-    _prefs.autoadd_max_hops = min(cmd_frame[2], (uint8_t)64);
+  FrameReader r(cmd_frame, len, 1);
+  _prefs.autoadd_config = r.u8();
+  if (r.has(1)) {
+    uint8_t hops = r.u8();   // read once: min() may be a macro
+    _prefs.autoadd_max_hops = min(hops, (uint8_t)64);
   }
   savePrefs();
   writeOKFrame();
