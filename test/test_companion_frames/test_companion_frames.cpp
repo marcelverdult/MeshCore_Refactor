@@ -6,6 +6,8 @@
 // - test_frame_sweep.cpp: every code at every length, against a recorded transcript
 // - test_commands.cpp: what each command does with a valid frame, and where its
 //   minimum length is
+// - test_frame_bounds.cpp: that no command reads the bytes a previous frame left
+//   above the end of the current one (step 10c)
 
 #include <gtest/gtest.h>
 
