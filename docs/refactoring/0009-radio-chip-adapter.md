@@ -271,3 +271,165 @@ Each step is its own branch with characterization first, as here.
 
 Flash cost expected for 9b to 9d: none or a few bytes, because a firmware still
 links exactly one chip class; the gain is in the source, not in the image.
+
+## Step 9b: one template for SX1262, SX1268 and LLCC68
+
+Status: designed, not implemented yet. Behaviour change: none intended.
+
+### Measured inventory
+
+`tools/refactoring/scripts/sx126x_inventory.py` cuts every member out of
+`CustomSX1262.h`, `CustomSX1268.h` and `CustomLLCC68.h`, removes comments and
+white space, replaces the chip name with a placeholder and compares the copies.
+On `integration` 68e0fcdc:
+
+| Member | Lines (normalized, SX1262) | Groups of identical copies |
+|--------|----------------------------|----------------------------|
+| includes | 4 | SX1262 / SX1268, LLCC68 |
+| `_rxActivity`, constructor | 1 each | all three |
+| `std_init()` | 75 | SX1262 / SX1268, LLCC68 |
+| `startReceive()` | 3 | all three |
+| `isReceiving()` | 14 | all three |
+| `setPreambleMillis()`, `setMaxPayloadMillis()` | 1 each | all three |
+| `getRxBoostedGainMode()` | 5 | all three |
+
+SX1268 and LLCC68 are identical to each other in every member. Against SX1262
+they differ in two places only, both in or for `std_init()`:
+
+1. `#include "MeshCore.h"` (SX1262 only; it brings `MESH_DEBUG_PRINTLN`).
+2. In `std_init()`, SX1262 alone has
+   - the `SX126X_USE_REGULATOR_LDO` option, passed as the last argument of both
+     `begin()` calls; SX1268 and LLCC68 call `begin()` with eight arguments, so
+     RadioLib's default `useRegulatorLDO = false` applies (checked in RadioLib
+     at the pinned commit 6d89348: `SX1262::begin`, `SX1268::begin` and
+     `LLCC68::begin` all default it to `false`);
+   - the `SX126X_REGISTER_PATCH` block (read register 0x8B5, set bit 0, write
+     it back);
+   - three `MESH_DEBUG_PRINTLN` lines: regulator requested, the retry with the
+     TCXO at 0 V, and status and device errors at the end.
+
+Everything else in `std_init()` (TCXO voltage, coding rate, SPI pins per
+platform, the retry on -706/-707, `setCRC(1)`, current limit, DIO2, boosted
+gain, RF switch pins) is the same text in all three.
+
+In the tree, no variant that builds SX1268 (`generic-e22`, `meshadventurer`,
+`tenstar_c3`) sets `SX126X_USE_REGULATOR_LDO` or `SX126X_REGISTER_PATCH`, and no
+variant uses LLCC68 at all. So taking SX1262's `std_init()` for all three would
+change no in-tree release image; it would change debug builds (three more lines)
+and any downstream board that sets one of the two macros with an SX1268 or
+LLCC68. That is still a behaviour change and needs a decision of its own, so
+9b keeps the differences.
+
+### Template form
+
+A new header `src/helpers/radiolib/CustomSX126x.h`:
+
+```cpp
+template <class Base, class Traits>
+class CustomSX126x : public Base {
+  RxActivityTracker _rxActivity;
+public:
+  explicit CustomSX126x(Module* mod) : Base(mod) { }
+  bool std_init(SPIClass* spi = NULL);     // SX1262's body, see below
+  int16_t startReceive() override;         // Base::startReceive(...)
+  bool isReceiving();
+  void setPreambleMillis(uint32_t);
+  void setMaxPayloadMillis(uint32_t);
+  bool getRxBoostedGainMode();
+};
+```
+
+The three chip headers keep their class, now a thin subclass:
+
+```cpp
+struct SX1262InitTraits {
+  static constexpr bool regulatorOption = true;   // honour SX126X_USE_REGULATOR_LDO
+  static constexpr bool registerPatch = true;     // honour SX126X_REGISTER_PATCH
+  static constexpr bool initDebug = true;         // the three MESH_DEBUG lines
+  static const char* name() { return "SX1262"; }
+};
+class CustomSX1262 : public CustomSX126x<SX1262, SX1262InitTraits> {
+public:
+  CustomSX1262(Module* mod) : CustomSX126x(mod) { }
+};
+```
+
+`SX1268InitTraits` and `LLCC68InitTraits` set all three flags to `false`. In
+`std_init()` the flags are plain `if (Traits::flag)` on compile time constants
+(C++11, no `if constexpr`; the firmware toolchains do not all build C++17), so
+the compiler drops the dead branches:
+
+- regulator: `bool useRegulatorLDO = Traits::regulatorOption ? <macro or false> : false;`
+  and `begin()` always gets it as the ninth argument. For SX1268 and LLCC68 that
+  is `false`, the value RadioLib's default gave them before.
+- register patch: the `#ifdef SX126X_REGISTER_PATCH` block stays, its body under
+  `if (Traits::registerPatch)`.
+- debug lines: under `if (Traits::initDebug)`, printing `Traits::name()` through
+  `%s`, which prints the same text as the literal "SX1262" before.
+
+`CustomSX126x.h` includes `MeshCore.h` for all three; for SX1268 and LLCC68 that
+is one more include, no new symbol a firmware uses. The wrappers, `SX126xReset.h`
+and `CustomSTM32WLx` are untouched (wrappers are step 9c; STM32WLx has a different
+module type and no `std_init()`, and keeps its own class with the tracker).
+
+Deciding later to give SX1268 and LLCC68 the LDO option, the patch or the debug
+lines is then a one line change of a trait, reviewable as the behaviour change
+it is.
+
+### Alternatives considered for 9b
+
+- **Take SX1262's `std_init()` as is for all three.** Smallest code, but the
+  behaviour change described above. Rejected for this step, offered as a
+  separate decision.
+- **`using CustomSX1262 = CustomSX126x<SX1262, ...>;` instead of a subclass.**
+  Breaks a downstream forward declaration `class CustomSX1262;`, and puts every
+  SX1262 only addition (such as #3638's) into the shared template. The thin
+  subclass keeps the class name a real class and gives chip only code a place.
+- **One `bool` template parameter instead of a traits struct.** The three
+  differences happen to coincide today, but one flag would make "give SX1268
+  the LDO option" impossible without also giving it the patch. Three named
+  flags say what each one guards.
+- **A non template base class over `SX126x`.** `begin()` is not virtual in
+  `SX1268` (it is in `SX1262`), so `std_init()` must call the concrete chip's
+  `begin()`; that needs the chip type, i.e. a template.
+- **A macro that stamps out the class body.** Unreadable in a debugger and in
+  compiler errors; nothing gained over a template.
+
+### Upstream collisions (checked 21 October 2026)
+
+All open pull requests on `meshcore-dev/MeshCore` (499) were listed with their
+files; these touch `CustomSX1262.h`, `CustomSX1268.h` or `CustomLLCC68.h`:
+
+| PR | Touches | Collision with 9b |
+|----|---------|-------------------|
+| #3638 dual radio profiles | `CustomSX1262.h` +380 -2: new members (profile switching, `standby()`/`sleep()`/`setBandwidth()`... overrides, TCXO restore) and a new `startReceive()` body; `std_init()` and `isReceiving()` unchanged | Heavy textual, light semantic. Its members are SX1262 only and land in the thin `CustomSX1262` subclass unchanged; its `startReceive()` there overrides the template's. A rebase moves its hunks from the old class body into the subclass. No line of the shared template needs changing for it. |
+| #2131 error aware receive hook | +6 -1 in each of the three | Textual; with the template it becomes one helper in `CustomSX126x` instead of three. |
+| #2869 nRF52 radio init recovery | +27 -2 in each of the three `std_init()` | Textual; again one edit instead of three after 9b. |
+| #2912 bump RadioLib to 7.7.1 | +14 to +17 in each `std_init()` (`ConfigLoRa_t`) | Textual; one edit instead of three. |
+| #2933 noise floor | `CustomSX1262.h` +3 -1, the status debug line | Textual, one line in the template. |
+| #3530 nRF54L platform | `CustomSX1262.h` +2, one more SPI branch | Textual, two lines in the template; would then also reach SX1268 and LLCC68 boards on that platform, which is that PR's concern. |
+| #2624 DX-LR20 variant | `CustomLLCC68.h` +5 -5 | Textual; to be checked on rebase whether its change is LLCC68 only (then a trait or the subclass) or general. |
+
+#2682, #2999, #2944 (named in the 9a section) no longer touch these three files.
+#3638 is the heavy one, but because 9b keeps `CustomSX1262` as a class and its
+additions are SX1262 only, the collision is a hunk move, not a redesign. This
+does not make 9b pointless; four of the seven PRs edit three copies identically
+and would get smaller with it.
+
+### Planned verification
+
+- Characterization tests first, on the host against the stubs in
+  `test/test_radio_chips/stubs` (extended to record `begin()` arguments, register
+  reads and writes and the setter calls): `std_init()` without any option macro
+  for all three chips, the retry with TCXO 0 V, the failure path; and in a second
+  suite (`test/test_radio_chips_init`, its own program, so the macros differ
+  without an ODR clash) with `SX126X_USE_REGULATOR_LDO`, `SX126X_REGISTER_PATCH`,
+  `MESH_DEBUG` and the other option macros set, pinning per chip that only SX1262
+  passes LDO, patches 0x8B5 and prints the three lines.
+- Mutation tests, among them each trait flipped for SX1268.
+- Build matrix: every environment with SX1268 (`Generic_E22_sx1268_*`,
+  `meshadventurer` SX1268, `tenstar_c3` SX1268), the five boards that set
+  `SX126X_REGISTER_PATCH`, the standard 18, STM32WLx; flash and RAM against
+  68e0fcdc. No LLCC68 firmware environment exists; LLCC68 is covered by the host
+  suites only.
+- All 17 native environments.
