@@ -1,7 +1,7 @@
 # 0009: One RadioLib adapter per chip family, part one: the receive detection
 
-Status: steps 9a and 9b implemented. Behaviour change: none. Steps 9c and 9d are
-planned below and need their own branches.
+Status: steps 9a and 9b implemented, 9c designed. Behaviour change: none. Steps 9c and 9d
+are planned below and need their own branches.
 
 ## Context
 
@@ -1092,3 +1092,208 @@ No board test for 9b. The release images of SX1262 and SX1268 boards run the sam
 `std_init()` calls in the same order as before (host suites), and differ in flash
 by the few bytes above; the debug build output is pinned on the host. LLCC68 has no
 firmware environment and is covered by the host suites only.
+
+## Step 9c: one wrapper template per chip family
+
+Status: design. Behaviour change: none intended.
+
+### Measured inventory
+
+`tools/refactoring/scripts/wrapper_inventory.py` cuts every member out of the
+eight `Custom<chip>Wrapper.h`, removes comments and white space, replaces the
+chip name with a placeholder and compares the copies. On `integration`
+e0d05fde (normalized lines per copy in brackets):
+
+| Member | Groups of identical copies |
+|--------|----------------------------|
+| constructor | all eight (1) |
+| `setParams()` | SX1262, SX1268, LLCC68, STM32WLx, LR1110, LR1121 (10) / LR2021 (11) / SX1276 (7) |
+| `isReceivingPacket()`, `getLastRSSI()`, `getLastSNR()` | all eight (3, 1, 1) |
+| `getCurrentRSSI()` | SX1262, SX1268, LLCC68, STM32WLx, SX1276 (3) / LR1110, LR1121, LR2021 (5) |
+| `getSpreadingFactor()` | SX1262, SX1268, LLCC68, STM32WLx, SX1276 (1) / LR1110, LR1121, LR2021 (1) |
+| `doResetAGC()` | SX1262, SX1268, LLCC68, STM32WLx (1) / LR1110, LR1121 (1) / LR2021, SX1276 absent |
+| `setRxBoostedGainMode()` | SX1262, SX1268, LLCC68, LR1110, LR1121 (3) / LR2021 (6) / STM32WLx, SX1276 absent |
+| `getRxBoostedGainMode()` | SX1262, SX1268, LLCC68, LR1110, LR1121, LR2021 (3) / STM32WLx, SX1276 absent |
+| `onSendFinished()` | LR1110, LR1121, LR2021 (4) / the rest absent |
+| `getEstAirtimeFor()` | LR1110, LR1121 (4) / the rest absent |
+| `powerOff()` | SX1262 (3) / the rest absent |
+| `configSideDetectors()`, `applySideDetectorConfig()`, `calcTsym()`, `_sideDet`, `_numSideDet` | LR2021 only |
+
+Whole wrappers, identical after normalization: SX1268 and LLCC68; LR1110 and
+LR1121. The setParams() differences: LR2021 calls `applySideDetectorConfig()`
+between `updatePreamble()` and the deadlines, SX1276 sets no deadlines (its chip
+class has no preamble IRQ, see 9a).
+
+Every cast is `(Custom<chip> *)_radio` on a `PhysicalLayer*`. In RadioLib 7.7.1
+every chip class reaches `PhysicalLayer` by single inheritance (`SX126x`,
+`SX127x` and `LRxxxx` derive from it directly; `SX1262`, `SX1268`, `LLCC68`,
+`STM32WLx`, `SX1276`, `LR1110`, `LR1121`, `LR2021` below those), and the
+`Custom` classes add no base, so the C cast is a `static_cast` without pointer
+adjustment. `doResetAGC()` casts to `SX126x*` or `LR11x0*` for the reset helper;
+both are bases of the chip, so the implicit upcast replaces that cast.
+
+No class in `src`, `variants` or `examples` derives from a wrapper; the variants
+name them as `WRAPPER_CLASS` (86 SX1262, 15 SX1268, 7 LR1110, 4 STM32WLx, 4
+SX1276, 2 LR1121, 2 LR2021 lines in the `.ini` files) and in `target.h`.
+
+### Template form
+
+Three templates, each in its own header next to the wrappers:
+
+```cpp
+// CustomChipWrapper.h: what all eight share
+template <class Chip>
+class CustomChipWrapper : public RadioLibWrapper {
+protected:
+  Chip* chip() const { return static_cast<Chip*>(_radio); }
+  // first half of every setParams(): the four modem setters, then the preamble
+  void setModemParams(float freq, float bw, uint8_t sf, uint8_t cr);
+  // second half for the chips with the receive tracker of 9a
+  void setRxDeadlines(float bw, uint8_t sf, uint8_t cr);
+public:
+  CustomChipWrapper(Chip& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
+  bool isReceivingPacket() override { return chip()->isReceiving(); }
+  float getLastRSSI() const override { return chip()->getRSSI(); }
+  float getLastSNR() const override { return chip()->getSNR(); }
+};
+
+// CustomSX126xWrapper.h: SX1262, SX1268, LLCC68, STM32WLx
+template <class Chip>
+class CustomSX126xWrapper : public CustomChipWrapper<Chip> {
+public:
+  void setParams(...) override;          // setModemParams + setRxDeadlines
+  float getCurrentRSSI() override;       // chip()->getRSSI(false)
+  uint8_t getSpreadingFactor() const override;   // chip()->spreadingFactor
+  void doResetAGC() override;            // sx126xResetAGC(chip(), getRxBoostedGainMode())
+};
+
+// CustomLR11x0Wrapper.h: LR1110, LR1121
+template <class Chip>
+class CustomLR11x0Wrapper : public CustomChipWrapper<Chip> {
+public:
+  void setParams(...) override;          // setModemParams + setRxDeadlines
+  float getCurrentRSSI() override;       // getRssiInst, -110 if it writes nothing
+  uint8_t getSpreadingFactor() const override;   // chip()->getSpreadingFactor()
+  void doResetAGC() override;            // lr11x0ResetAGC(chip(), chip()->getFreqMHz(), ...)
+  uint32_t getEstAirtimeFor(int) override;       // at least 200 ms
+  void onSendFinished() override;        // preamble length again
+  bool setRxBoostedGainMode(bool) override;
+  bool getRxBoostedGainMode() const override;
+};
+```
+
+`setModemParams()` and `setRxDeadlines()` are plain (not virtual) member
+functions of a class template, so they are only instantiated where a wrapper
+calls them: SX1276 never calls `setRxDeadlines()` and needs no
+`setPreambleMillis()`. Members of the dependent base are named through
+`this->`. Everything is C++11 (no `if constexpr`), as in 9b.
+
+The eight wrapper classes stay real classes with the same names, headers,
+constructors and `USE_<chip>` defines:
+
+| Wrapper | Derives from | Keeps in its own body |
+|---------|--------------|------------------------|
+| `CustomSX1262Wrapper` | `CustomSX126xWrapper<CustomSX1262>` | `powerOff()`, boosted gain set/get |
+| `CustomSX1268Wrapper` | `CustomSX126xWrapper<CustomSX1268>` | boosted gain set/get |
+| `CustomLLCC68Wrapper` | `CustomSX126xWrapper<CustomLLCC68>` | boosted gain set/get |
+| `CustomSTM32WLxWrapper` | `CustomSX126xWrapper<CustomSTM32WLx>` | nothing |
+| `CustomLR1110Wrapper` | `CustomLR11x0Wrapper<CustomLR1110>` | nothing |
+| `CustomLR1121Wrapper` | `CustomLR11x0Wrapper<CustomLR1121>` | nothing |
+| `CustomLR2021Wrapper` | `CustomChipWrapper<CustomLR2021>` | `setParams()` (with the side detectors), `getCurrentRSSI()`, `getSpreadingFactor()`, `onSendFinished()`, boosted gain, the side detector members |
+| `CustomSX1276Wrapper` | `CustomChipWrapper<CustomSX1276>` | `setParams()` (no deadlines), `getCurrentRSSI()`, `getSpreadingFactor()` |
+
+`LR2021::setParams()` becomes `setModemParams(); applySideDetectorConfig();
+setRxDeadlines();`, `SX1276::setParams()` becomes `setModemParams()`: same calls,
+same order. Every method keeps its virtual signature, so the vtables have the
+same slots; only the class that defines a slot changes.
+
+### Exceptions, kept as they are
+
+- **STM32WLx has no boosted gain override.** Its wrapper inherits
+  `RadioLibWrapper::getRxBoostedGainMode()`, which returns `false`, and passes
+  that to `sx126xResetAGC()`. Moving the SX1262 boosted gain pair into the SX126x
+  template would make `rxboost` start working on the 16 STM32WL environments:
+  a behaviour change. So the pair stays in the three SX126x subclasses (three
+  copies of six lines), and a host test pins that STM32WLx still reports `false`.
+- **LR2021 shares with LR11x0** `getCurrentRSSI()`, `getSpreadingFactor()` and
+  `onSendFinished()`, and **SX1276 shares with SX126x** `getCurrentRSSI()` and
+  `getSpreadingFactor()`. Each of these is one to five lines; a third template
+  level (an `LRxxxx` layer, an "RSSI by status" layer) for them would cost more
+  reading than the copies. They stay in the subclass.
+- **`powerOff()`** of SX1262 (`sleep(false)`) is SX1262 only and stays there.
+  Whether SX1268 and LLCC68 should do the same is a behaviour question.
+- **LR2021 boosted gain** goes through standby and a level, a different method.
+- `RadioLibWrapper`, `SX126xReset.h`, `LR11x0Reset.h` and the chip classes are
+  untouched.
+
+### Alternatives considered for 9c
+
+- **One template with a traits struct, as in 9b.** The family differences are
+  different calls (`getRSSI(false)` against `getRssiInst()`, a member against a
+  getter), not flags. Without `if constexpr`, both branches of `if
+  (Traits::x)` must compile for every chip, and `getRssiInst()` does not exist on
+  an SX126x. It would need tag dispatch per call, more machinery than two family
+  templates.
+- **Free functions overloaded on the RadioLib family base** (`rssiNow(SX126x&)`,
+  `rssiNow(LR11x0&)`), picked by derived to base conversion. Works, but which
+  overload a chip gets is implicit (LLCC68 and STM32WLx derive from SX1262 in
+  RadioLib), and a wrong pick compiles. The family templates say it in the class
+  head.
+- **Override in the subclass what differs, keep everything in one template.**
+  Virtual members of a class template are instantiated with the class, so a
+  `setParams()` calling `setPreambleMillis()` would not compile for SX1276 even
+  if the subclass overrides it.
+- **`using CustomSX1262Wrapper = CustomSX126xWrapper<CustomSX1262>;`** Breaks a
+  downstream forward declaration and leaves no place for SX1262 only members
+  (`powerOff()`, #3638's profile hooks). Rejected as in 9b.
+- **Storing a `Chip*` next to `_radio`.** Saves the cast at run time, which costs
+  nothing anyway (no pointer adjustment), and grows every wrapper object by a
+  pointer.
+- **Moving the boosted gain pair into the SX126x template and overriding it back
+  to `false` in STM32WLx.** Same behaviour, but reads as if STM32WLx turned a
+  feature off on purpose. The copies say what is true today.
+
+### Upstream collisions (checked 21 October 2026)
+
+All open pull requests on `meshcore-dev/MeshCore` (499) were listed with their
+files; these touch one of the eight wrapper headers:
+
+| PR | Touches | Collision with 9c |
+|----|---------|-------------------|
+| #3638 dual radio profiles | all eight wrappers (+7 to +22): `setParams()` becomes `bool applyParams()` with a check per setter; LR1110 uses `setLoRaModulationParams()`, LR1121 passes a high bandwidth flag; profile hooks and `minimumAirtimeMillis()` in LR1110 and LR1121; `getLastRSSI()`/`getLastSNR()` removed in all | Heavy, semantic. Its `applyParams()` differs per chip in the LR11x0 family, so on rebase LR1110 and LR1121 override it in their subclass, or the template grows a hook. Its removal of `getLastRSSI()`/`getLastSNR()` becomes one deletion in `CustomChipWrapper`. |
+| #3496 KISS gain control | `supportsRxBoostedGain()` in six wrappers, one line each | Textual; with 9c it lands in the three SX126x subclasses and once in `CustomLR11x0Wrapper`, plus LR2021. |
+| #2933 noise floor | `verifyRxChipMode()` in four SX126x wrappers | Textual; one method in `CustomSX126xWrapper` instead of four. |
+| #2670 repeated direct send | `verifyRxChipMode()` in four SX126x wrappers | As #2933. |
+| #2131 error aware receive hook | `tryReadRawWithMeta()` in four SX126x wrappers, 10 lines each | Textual; one method in `CustomSX126xWrapper`. |
+| #2842 RSSI and noise floor | removes `getLastRSSI()`/`getLastSNR()` from six wrappers | Textual; one deletion in `CustomChipWrapper`. |
+| #1923, #2367 coding rate | `setCodingRate()` in six wrappers | Textual; one method in `CustomChipWrapper`. |
+| #2916 dynamic CAD | `getCADDetPeakBase()`: SX126x formula in four, a table in LR1110 | Textual; one method per family template. |
+| #2986 sleep fails | `CustomSX1262Wrapper::powerOff()` +1 | Textual, stays in the SX1262 subclass. |
+| #2624 DX-LR20 | `CustomLLCC68Wrapper.h` +4 | Textual, LLCC68 subclass. |
+| #2999, #2696, #2682, #2198 LR1121 boards | create `CustomLR1121Wrapper.h` as a new file | Already conflict with the file the tree has; 9c changes nothing for them. |
+| #2944 LR2021 kit | creates `CustomLR2021Wrapper.h` | As above. |
+
+#3638 is the one with a semantic collision. The other ten add the same member to
+four to six wrappers by hand and would each shrink to one edit with 9c.
+
+### Verification plan
+
+- Characterization first, committed before the move and passing unchanged on
+  both sides: a third test program `test/test_radio_chip_wrappers` in the
+  `native_radio_chips` environment (no new environment, still 17) builds all
+  eight wrappers over the real chip classes and the chip stubs, which gain a
+  `PhysicalLayer` with a call log, `getRSSI(bool)`, `getRssiInst()`, a
+  `getSpreadingFactor()` that returns a value other than the `spreadingFactor`
+  member, the calls of both reset helpers, and the LR2021 side detector call.
+  Pinned per wrapper: the ordered calls of `setParams()` and the deadlines that
+  reach the chip, `isReceivingPacket()`, last and current RSSI including the
+  -110 default, SNR, which spreading factor is read, the calls of `doResetAGC()`
+  (with the boosted gain macros set, so the value passed is pinned, `false` for
+  STM32WLx), boosted gain set/get, `onSendFinished()`, the 200 ms floor of
+  `getEstAirtimeFor()`, `powerOff()`.
+- Mutation tests on the code commit.
+- Build matrix: every firmware environment whose `WRAPPER_CLASS` is one of the
+  eight, on the start commit and the code commit in the same worktree, flash
+  and RAM per environment; image comparison of a sample built with
+  `SOURCE_DATE_EPOCH` set.
+- All 17 host environments.
