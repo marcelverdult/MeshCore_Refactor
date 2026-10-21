@@ -374,3 +374,35 @@ TEST(FrameBounds, FloodScopeKeyNeedsAllSixteenBytes) {
     EXPECT_EQ(queued[0][0] & 0x03, key_bytes == 16 ? 0 : 1) << key_bytes << " key bytes";
   }
 }
+
+// The three handlers that read past the frame before step 10c, each with a frame
+// that makes them do it and behind tails that would matter if the bytes were used:
+// a previous frame whose bytes complete the announced path and the payload (or end
+// the unterminated scope name early). The answer is ILLEGAL_ARG every time,
+// nothing is queued for the air, and no file changes (the prefs hold the default
+// flood scope).
+TEST(FrameBounds, TheReadsPastTheEndThatStep10cRemoved) {
+  const struct { const char* name; Bytes frame; } CASES[] = {
+    // path length byte 8: eight 1 byte hashes, the frame holds 2 of them
+    {"SEND_CHANNEL_DATA", {SEND_CHANNEL_DATA, 0, 8, 7, 8}},
+    // path length byte 8 again, the frame holds 4 bytes after it
+    {"SEND_RAW_DATA", {SEND_RAW_DATA, 8, 1, 2, 3, 4}},
+    // 47 bytes without a zero: name and key run together
+    {"SET_DEFAULT_FLOOD_SCOPE", cat({{SET_DEFAULT_FLOOD_SCOPE}, fill(47, 0x61)})},
+  };
+  const std::vector<Bytes> tails = {
+    fill(1, 0x00), fill(1, 0x34), fill(1, 0x61),
+    {0x61, 0x62, 0x00, 0x34, 0x12, 0x01, 0x02, 0x03},
+  };
+  Harness h;
+  for (const auto& c : CASES) {
+    for (const Bytes& tail : tails) {
+      prepare(h);
+      h.send(staleFrame(tail));
+      auto files_before = h.fs.files;
+      EXPECT_EQ(h.reply(c.frame), Bytes({1, ERR_ILLEGAL_ARG})) << c.name << ", tail " << hex(tail);
+      EXPECT_EQ(h.mesh().outboundTotal(), 0) << c.name << ", tail " << hex(tail);
+      EXPECT_TRUE(h.fs.files == files_before) << c.name << ", tail " << hex(tail);
+    }
+  }
+}

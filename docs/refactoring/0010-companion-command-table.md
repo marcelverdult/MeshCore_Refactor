@@ -752,6 +752,14 @@ again against the handlers of `68e0fcdc` after the step (60 of 60 pass there too
 - `OnlyAnAnnouncedPathRunsOut`: every code 0 to 69 at every length with six
   fills, and every catalog frame; the reader may run out only for an announced
   path in `SEND_RAW_DATA` and `SEND_CHANNEL_DATA`.
+- `TheReadsPastTheEndThatStep10cRemoved`: the three handler cases of the
+  inventory (`SEND_CHANNEL_DATA` and `SEND_RAW_DATA` with a path length byte that
+  announces 8 bytes, `SET_DEFAULT_FLOOD_SCOPE` with 47 bytes and no zero), each
+  behind four tails chosen so that the stale bytes would complete the path and
+  payload or end the name early. Every time: `ILLEGAL_ARG`, nothing queued, no file
+  changed (the prefs file holds the default scope). Passes on the handlers of
+  `68e0fcdc` and on the converted ones; a mutation that accepts the 47 byte name
+  fails it.
 - `FloodScopeKeyNeedsAllSixteenBytes`: added after a mutation survived (below).
   The key's effect only shows in the next flood, which carries a transport code
   with 16 key bytes and none with 15.
@@ -810,10 +818,10 @@ bash array:
 ```
 native_companion                test_companion_frames         PASSED
 ... (the other 26 suites in 16 environments)                  PASSED
-================ 587 test cases: 587 succeeded ================
+================ 588 test cases: 588 succeeded ================
 ```
 
-577 before the step, 10 new: four in `test_frame_bounds.cpp`, six in
+577 before the step, 11 new: five in `test_frame_bounds.cpp`, six in
 `test_frame_reader.cpp`.
 
 ### Builds
@@ -890,3 +898,31 @@ Not covered on hardware: the setters with new values, sends on air, `REBOOT`,
 tail cases (a board cannot be made to hold a chosen tail without sending that
 frame first, which the host tests do). For those the host tests are the evidence.
 Only nRF52 ran on hardware.
+
+### Open findings, not changed in 10c
+
+Each needs its own fix and proposal; 10c leaves the code as it is.
+
+1. **`Dispatcher::tryParsePacket()` reads before its length test.** For a route
+   type with transport codes it reads the 4 code bytes and the path length byte
+   before it compares with `len`. Reached from `SEND_RAW_PACKET` with frames of 4
+   to 6 bytes, and on every received radio packet. The answer is unchanged
+   (`ILLEGAL_ARG`, the later test fails). Reproduce: apply
+   `tools/refactoring/companion_asan_probe.patch`, run it with `PROBE_SKIP=1`, and
+   `companion_asan_probe_summary.py` lists `MyMesh::cmdSendRawPacket` with
+   `mesh::Dispatcher::tryParsePacket` for code 65, fills `00` and `3f`, lengths 4
+   to 6 (see `tools/refactoring/README.md`).
+2. **The CLI parser compares prefixes past the terminator.**
+   `CommonRadioPrefs::handleCommand()`, `MyMesh::handleCommand()` and `isGet()` use
+   `memcmp()` with prefixes longer than the command text. The result is decided at
+   the terminator, so no reply changes. Reproduce: the same probe lists
+   `MyMesh::cmdRunCliCommand` with those three callers for code 66, lengths 3 to 22.
+3. **Packet digests under ASan (unchecked).** Built with ASan, the frame sweep's
+   packet digests differ for codes 2, 3, 26, 27 and 39. Guess, not verified: the encryption pads from an uninitialised stack
+   buffer that the sweep's stack scrub reaches only without ASan. Reproduce: apply
+   the probe patch and run `pio test -e native_companion` without a filter;
+   `FrameSweep.MatchesTheRecordedTranscript` fails; the differences it printed (it
+   prints at most ten) were all `packets` lines of those codes, with equal `files`
+   digests.
+4. **`SEND_TRACE_PATH`'s upper bound is dead code.** `len - 10 >= MAX_PACKET_PAYLOAD - 5`
+   needs 189 bytes; a frame has at most 176.
