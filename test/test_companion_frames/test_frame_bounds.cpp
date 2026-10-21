@@ -201,6 +201,28 @@ std::vector<Case> catalog() {
   return c;
 }
 
+// A queued packet as text. The host's AES128 mock writes nothing, so the payload
+// of an encrypted packet (and its MAC, and a transport code computed over it) is
+// whatever the packet buffer held before, which depends on the allocator: on Linux
+// it held bytes of an earlier node's frames. For those types only the header, the
+// route, the path and the payload length are compared; their content cannot show
+// a frame byte on the host anyway. Plain types are compared byte for byte.
+std::string packetLine(const Bytes& p) {
+  uint8_t type = (p[0] >> 2) & 0x0F;
+  bool encrypted = type <= 0x02 || (type >= 0x05 && type <= 0x08);
+  if (!encrypted) return hex(p);
+  uint8_t route = p[0] & 0x03;
+  size_t i = 1 + ((route == 0 || route == 3) ? 4 : 0);
+  uint8_t path_len = p[i];
+  size_t path_bytes = (path_len & 63) * ((path_len >> 6) + 1);
+  size_t payload_at = i + 1 + path_bytes;
+  std::ostringstream o;
+  o << hex(Bytes(p.begin(), p.begin() + 1)) << " route " << (int)route << " path "
+    << hex(Bytes(p.begin() + i, p.begin() + std::min(payload_at, p.size())))
+    << " payload " << (p.size() > payload_at ? p.size() - payload_at : 0) << " bytes";
+  return o.str();
+}
+
 // What one frame did, as text: replies, packets, files, and the counters of the
 // collaborators, then what a few later steps show. /channels2 is left out, because CMD_SET_CHANNEL writes stack
 // bytes behind the channel name there (see test_frame_sweep.cpp); the channel's
@@ -212,7 +234,7 @@ std::string outcome(Harness& h, const Bytes& f) {
   uint32_t rtc = rtc_clock.now;
   std::ostringstream o;
   for (const Bytes& r : h.send(f)) o << "reply " << hex(r) << "\n";
-  for (const Bytes& p : h.mesh().outbound()) o << "packet " << hex(p) << "\n";
+  for (const Bytes& p : h.mesh().outbound()) o << "packet " << packetLine(p) << "\n";
   for (auto& file : h.fs.files)
     if (file.first != "/channels2") o << "file " << file.first << " " << hex(file.second) << "\n";
   // State that only shows later: a contact listing still running (it writes one
@@ -228,7 +250,7 @@ std::string outcome(Harness& h, const Bytes& f) {
   putU32(chat, RTC0);
   putStr(chat, "x");
   for (const Bytes& r : h.send(chat)) o << "flood " << hex(r) << "\n";
-  for (const Bytes& p : h.mesh().outbound()) o << "queued " << hex(p) << "\n";
+  for (const Bytes& p : h.mesh().outbound()) o << "queued " << packetLine(p) << "\n";
   for (auto& e : g_events) o << "event " << e << "\n";
   o << "reboot " << board.reboot_calls - reboots << " params " << radio_driver.set_params_calls - params
     << " power " << radio_driver.tx_power_calls - power << " rtc " << rtc_clock.now - rtc

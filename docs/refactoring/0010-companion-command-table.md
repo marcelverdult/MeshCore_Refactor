@@ -304,12 +304,10 @@ handlers and go away with the reader without changing an answer; the CLI and
 `tryParsePacket()` are callees that 10c does not touch (the latter also parses
 every received radio packet), recorded here as findings for their own fixes.
 
-A side observation of the ASan build, not checked further: built with ASan, the
-frame sweep's packet digests differ for codes 2, 3, 26, 27 and 39 (encrypted
-requests and messages) while every reply stays the same. Unproven guess: the
-encryption pads its last block from an uninitialised stack buffer, which the
-sweep's stack scrub reaches in a normal build and does not reach under ASan's
-stack layout. Not part of 10c.
+A side observation of the ASan build: the frame sweep's packet digests differ for
+codes 2, 3, 26, 27 and 39 (encrypted requests and messages) while every reply
+stays the same. Explained later, under "Open findings": an artefact of the host's
+cipher mock, not of the firmware.
 
 ### The reader
 
@@ -744,7 +742,9 @@ again against the handlers of `68e0fcdc` after the step (60 of 60 pass there too
   every eighth byte). Replies, queued packets, stored files (except the name tails
   in `/channels2`, see 10a), calls to board, radio, clock and sensors, and what 12
   more loops, a `GET_CHANNEL` and a channel flood show afterwards, must be
-  identical.
+  identical. Encrypted packets are compared by header, route, path and payload
+  length, since the host's cipher mock leaves their content undefined (open
+  finding 3).
 - `OneByteBelowEachMinimum`: for each of the 44 rows with a minimum above 1, the
   catalog frame at the minimum minus one byte answers `UNSUPPORTED`
   (`SEND_CHANNEL_DATA`: `ILLEGAL_ARG`) behind every tail and queues nothing; and the
@@ -917,12 +917,20 @@ Each needs its own fix and proposal; 10c leaves the code as it is.
    `memcmp()` with prefixes longer than the command text. The result is decided at
    the terminator, so no reply changes. Reproduce: the same probe lists
    `MyMesh::cmdRunCliCommand` with those three callers for code 66, lengths 3 to 22.
-3. **Packet digests under ASan (unchecked).** Built with ASan, the frame sweep's
-   packet digests differ for codes 2, 3, 26, 27 and 39. Guess, not verified: the encryption pads from an uninitialised stack
-   buffer that the sweep's stack scrub reaches only without ASan. Reproduce: apply
-   the probe patch and run `pio test -e native_companion` without a filter;
-   `FrameSweep.MatchesTheRecordedTranscript` fails; the differences it printed (it
-   prints at most ten) were all `packets` lines of those codes, with equal `files`
-   digests.
+3. **Encrypted packets on the host carry leftover memory (resolved, a mock
+   artefact).** The ASan build changed the frame sweep's packet digests for codes
+   2, 3, 26, 27 and 39, and the first CI run of 10c failed
+   `NoCommandReadsThePreviousFrame` on Linux only, with bytes of earlier frames in
+   the payload of a queued channel message. Cause, checked: the host's `AES128`
+   mock (`test/mocks/AES.h`) writes nothing in `encryptBlock()`, and
+   `Utils::encrypt()` encrypts straight into the packet buffer, so the "ciphertext"
+   (and the MAC and transport code computed over it) is whatever that buffer held
+   before, which depends on the allocator. With a mock that copies its input, the
+   test passes on Linux and only the sweep differs. Not a firmware issue. The frame
+   sweep's digests of encrypted packets rest on the same leftovers and are stable
+   only because the sweep allocates the same way on macOS and on the CI's Linux;
+   giving the mock a deterministic output means regenerating the golden file, a
+   change of its own. `test_frame_bounds.cpp` compares encrypted packets by
+   header, route, path and payload length only.
 4. **`SEND_TRACE_PATH`'s upper bound is dead code.** `len - 10 >= MAX_PACKET_PAYLOAD - 5`
    needs 189 bytes; a frame has at most 176.
