@@ -51,7 +51,7 @@ def handlers(src):
 
 def classify(line):
     kinds = []
-    if re.search(r"cmd_frame\[[^\]]+\]\s*=[^=]", line) or re.search(r"\*np\+\+\s*=", line):
+    if re.search(r"cmd_frame\[[^\]]+\]\s*=[^=]", line) or re.search(r"\*np\+\+\s*=", line) or re.search(r"\btext\[tlen\]\s*=", line):
         kinds.append("write")
     for m in re.finditer(r"(&?)cmd_frame\[([^\]]+)\]", line):
         off = ev(m.group(2))
