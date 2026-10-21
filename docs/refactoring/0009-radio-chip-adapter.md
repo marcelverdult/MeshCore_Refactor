@@ -410,7 +410,7 @@ files; these touch `CustomSX1262.h`, `CustomSX1268.h` or `CustomLLCC68.h`:
 | #3530 nRF54L platform | `CustomSX1262.h` +2, one more SPI branch | Textual, two lines in the template; would then also reach SX1268 and LLCC68 boards on that platform, which is that PR's concern. |
 | #2624 DX-LR20 variant | `CustomLLCC68.h` +5 -5 | Textual; to be checked on rebase whether its change is LLCC68 only (then a trait or the subclass) or general. |
 
-#2682, #2999, #2944 (named in the 9a section) no longer touch these three files.
+#2682, #2999, #2944 (named in the 9a section) do not touch these three files.
 #3638 is the heavy one, but because 9b keeps `CustomSX1262` as a class and its
 additions are SX1262 only, the collision is a hunk move, not a redesign. This
 does not make 9b pointless; four of the seven PRs edit three copies identically
