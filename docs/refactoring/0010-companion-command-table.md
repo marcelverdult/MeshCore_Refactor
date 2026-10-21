@@ -261,7 +261,8 @@ Measured on `integration` at `68e0fcdc` in two ways.
 code byte. Between them they use 68 constant offsets (`cmd_frame[1]`,
 `&cmd_frame[1 + PUB_KEY_SIZE]`), 30 accesses through a running index `i`, 7
 lengths derived from `len` that go to a callee together with a pointer into the
-frame, and 5 writes into the frame: `cmd_frame[len] = 0` in `APP_START`,
+frame, and 6 writes into the frame: the terminator at `len` (`cmd_frame[len] = 0`
+or `text[tlen] = 0`) in `APP_START`,
 `RUN_CLI_COMMAND`, `SEND_TXT_MSG`, `SEND_LOGIN` and `SET_CUSTOM_VAR` (the in place
 terminator; `cmd_frame` is `MAX_FRAME_SIZE + 1` bytes, so index `len` is always
 inside it) and the `':'` that `SET_CUSTOM_VAR` replaces. Every constant offset that
