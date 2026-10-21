@@ -1,42 +1,16 @@
 #pragma once
 
 #include "CustomLLCC68.h"
-#include "RadioLibWrappers.h"
-#include "SX126xReset.h"
+#include "CustomSX126xWrapper.h"
 
-class CustomLLCC68Wrapper : public RadioLibWrapper {
+class CustomLLCC68Wrapper : public CustomSX126xWrapper<CustomLLCC68> {
 public:
-  CustomLLCC68Wrapper(CustomLLCC68& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
-
-  void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
-    ((CustomLLCC68 *)_radio)->setFrequency(freq);
-    ((CustomLLCC68 *)_radio)->setSpreadingFactor(sf);
-    ((CustomLLCC68 *)_radio)->setBandwidth(bw);
-    ((CustomLLCC68 *)_radio)->setCodingRate(cr);
-    updatePreamble(sf);
-    PacketMillis pm = calcMaxPacketMillis(sf, bw, cr, preambleLengthForSF(sf));
-    ((CustomLLCC68 *)_radio)->setPreambleMillis(pm.preambleMillis);
-    ((CustomLLCC68 *)_radio)->setMaxPayloadMillis(pm.payloadMillis);
-
-  }
-
-  bool isReceivingPacket() override { 
-    return ((CustomLLCC68 *)_radio)->isReceiving();
-  }
-  float getCurrentRSSI() override {
-    return ((CustomLLCC68 *)_radio)->getRSSI(false);
-  }
-  float getLastRSSI() const override { return ((CustomLLCC68 *)_radio)->getRSSI(); }
-  float getLastSNR() const override { return ((CustomLLCC68 *)_radio)->getSNR(); }
-
-  uint8_t getSpreadingFactor() const override { return ((CustomLLCC68 *)_radio)->spreadingFactor; }
-
-  void doResetAGC() override { sx126xResetAGC((SX126x *)_radio, getRxBoostedGainMode()); }
+  CustomLLCC68Wrapper(CustomLLCC68& radio, mesh::MainBoard& board) : CustomSX126xWrapper(radio, board) { }
 
   bool setRxBoostedGainMode(bool en) override {
-    return ((CustomLLCC68 *)_radio)->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
+    return chip()->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
   }
   bool getRxBoostedGainMode() const override {
-    return ((CustomLLCC68 *)_radio)->getRxBoostedGainMode();
+    return chip()->getRxBoostedGainMode();
   }
 };
