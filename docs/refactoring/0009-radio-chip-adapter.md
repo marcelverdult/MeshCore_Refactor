@@ -517,12 +517,54 @@ Measured for `Heltec_v3_repeater` (+4) with `nm` and `size -A` on both ELF files
 to 0x198 bytes, where the radio object is now built through one more base class
 constructor. Every chip and wrapper method has the same size as before (compared
 with the template name folded into `CustomSX1262`). The -2 builds are the ESP32-C3
-and C6 ones; the outliers (-40, -16, +16) were not examined one by one.
+and C6 ones.
 
-The image hashes differ between the two sides in all 512, but they also differ
-for every control environment, whose code the step does not touch, at equal
-size, so the builds are not byte reproducible across commits and the hashes
-prove nothing here. Why was not examined.
+#### Image comparison and where the bytes go
+
+The image hashes of the matrix above differ in all 512, controls included,
+because RadioLib puts the build time into every image: `Module.cpp:47` keeps
+`static volatile const char rlb_info[] = RADIOLIB_INFO;`, and `BuildOpt.h:647`
+ends `RADIOLIB_INFO` with `__DATE__ " " __TIME__`. Two builds of the same commit
+one minute apart differ in exactly those three bytes. With `SOURCE_DATE_EPOCH`
+set, which GCC uses for both macros, two builds of the same commit are byte
+identical.
+
+65 environments were then built again on both sides with
+`SOURCE_DATE_EPOCH=1792540800`, keeping the ELF files: all 22 controls, all 21
+environments with a flash difference other than +0 or +4, and 22 picked from the
++0 and +4 groups across the platforms and both chips.
+
+- 23 images are byte identical: all 22 controls and `RAK_4631_repeater`.
+- 42 differ. In each of them, `nm -S` of both ELF files was compared symbol by
+  symbol, with the template name folded back into the class name. In 12 every
+  symbol has the same size; only the order of the template members in flash
+  changed (in `PicoW_repeater`, 23 of 2132 code symbols moved, for example
+  `isReceiving()` from 0x10006214 to 0x100063b0). In the other 30 only these
+  change size: `_GLOBAL__sub_I_board`, the static initializer of the variant
+  globals that builds the radio object (22 environments, +1 to +8 bytes);
+  `radio_init()`, into which `std_init()` is inlined (12, -2 to +12); and in a
+  few environments functions the step does not touch (`sx126xResetAGC()` -4,
+  `MicroNMEALocationProvider::waitFor()` -1, `::loop()` +4, `start_cpu0` -8,
+  `esp_vfs_open` +4, `ESP32Board::getResetReasonString()` -2).
+
+Three of them were disassembled and compared instruction by instruction:
+
+- `_GLOBAL__sub_I_board` in `Heltec_v3_repeater` (+4): 156 instructions on both
+  sides, the same stores in a different order, and four of them emitted in the
+  wide instead of the narrow Xtensa encoding (`s32i.n` to `s32i`, `mov.n` to
+  `or`), one byte each.
+- `std_init()` of SX1268 in `Generic_E22_sx1268_repeater` (+4): the same
+  instruction sequence; one `ill` padding word after a jump and one `mov.n`
+  emitted as `or`, both alignment of a branch target.
+- `MicroNMEALocationProvider::waitFor()` (-1): identical up to its final
+  `retw.n`; the difference is the padding after it, which depends on where the
+  function lands.
+
+So the flash differences are scheduling, instruction width and alignment around
+the object construction and the inlined `std_init()`. The -40 of
+`RAK_3112_room_server` is not a code change of its own: its changed symbols add
+up to -6 (`_GLOBAL__sub_I_board` +3, `start_cpu0` -8, `waitFor` -1), the rest
+is section padding.
 
 <details>
 <summary>Flash and RAM per environment (512)</summary>
