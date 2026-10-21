@@ -14,6 +14,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <map>
+#include <string>
 #include <vector>
 
 #define RADIOLIB_ERR_NONE             0
@@ -63,10 +66,24 @@ enum {
 #define RADIOLIB_LR2021_RX_TIMEOUT_INF          (0xFFFFFFUL)
 #define RADIOLIB_LR2021_LORA_SYNC_WORD_PRIVATE  (0x12)
 
+// Formats a call and its arguments for the call logs below, so a test can pin
+// which calls a chip class makes, with which arguments, in which order.
+inline std::string stubArg(double v) { char b[32]; snprintf(b, sizeof(b), "%g", v); return b; }
+inline std::string stubArg(float v) { return stubArg((double)v); }
+template <typename T> std::string stubArg(T v) { return std::to_string(v); }
+template <typename... A> std::string stubCall(const char* name, A... a) {
+  std::string s = name;
+  s += "(";
+  const char* sep = "";
+  ((s += sep, s += stubArg(a), sep = ","), ...);
+  return s + ")";
+}
+
 class SPIClass {
 public:
-  template <typename... A> void begin(A...) { }
-  template <typename... A> void setPins(A...) { }
+  std::vector<std::string> calls;
+  template <typename... A> void begin(A... a) { calls.push_back(stubCall("begin", a...)); }
+  template <typename... A> void setPins(A... a) { calls.push_back(stubCall("setPins", a...)); }
 };
 
 class Module {
@@ -112,21 +129,52 @@ public:
 
   template <typename... A> int16_t begin(A...) { return RADIOLIB_ERR_NONE; }
   template <typename... A> int16_t standby(A...) { return RADIOLIB_ERR_NONE; }
-  template <typename... A> int16_t setCRC(A...) { return RADIOLIB_ERR_NONE; }
-  template <typename... A> int16_t setCurrentLimit(A...) { return RADIOLIB_ERR_NONE; }
-  template <typename... A> int16_t setDio2AsRfSwitch(A...) { return RADIOLIB_ERR_NONE; }
-  template <typename... A> int16_t setRxBoostedGainMode(A...) { return RADIOLIB_ERR_NONE; }
-  template <typename... A> void setRfSwitchPins(A...) { }
-  template <typename... A> int16_t readRegister(A...) { return RADIOLIB_ERR_NONE; }
-  template <typename... A> int16_t writeRegister(A...) { return RADIOLIB_ERR_NONE; }
+  // The configuration calls std_init() makes, in order, with their arguments.
+  std::vector<std::string> calls;
+  // Register contents readRegister() returns and writeRegister() changes.
+  std::map<uint16_t, uint8_t> regs;
+
+  template <typename... A> int16_t setCRC(A... a) { calls.push_back(stubCall("setCRC", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> int16_t setCurrentLimit(A... a) { calls.push_back(stubCall("setCurrentLimit", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> int16_t setDio2AsRfSwitch(A... a) { calls.push_back(stubCall("setDio2AsRfSwitch", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> int16_t setRxBoostedGainMode(A... a) { calls.push_back(stubCall("setRxBoostedGainMode", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> void setRfSwitchPins(A... a) { calls.push_back(stubCall("setRfSwitchPins", a...)); }
+  int16_t readRegister(uint16_t addr, uint8_t* data, size_t len) {
+    calls.push_back(stubCall("readRegister", addr, len));
+    for (size_t i = 0; i < len; i++) data[i] = regs[addr + i];
+    return RADIOLIB_ERR_NONE;
+  }
+  int16_t writeRegister(uint16_t addr, const uint8_t* data, size_t len) {
+    std::string c = stubCall("writeRegister", addr, len);
+    for (size_t i = 0; i < len; i++) { regs[addr + i] = data[i]; c += ":" + std::to_string(data[i]); }
+    calls.push_back(c);
+    return RADIOLIB_ERR_NONE;
+  }
   template <typename... A> int16_t setRegulatorDCDC(A...) { return RADIOLIB_ERR_NONE; }
   template <typename... A> int16_t checkOutputPower(A...) { return RADIOLIB_ERR_NONE; }
   template <typename... A> int16_t explicitHeader(A...) { return RADIOLIB_ERR_NONE; }
-  uint8_t getStatus() { return 0; }
-  uint16_t getDeviceErrors() { return 0; }
+  // Distinct values, so a debug line that prints them is pinned with them.
+  uint8_t getStatus() { return 0xA5; }
+  uint16_t getDeviceErrors() { return 0x0120; }
 };
 
-class SX126x : public StubChip { public: using StubChip::StubChip; };
+// The SX126x begin() with RadioLib's parameters and defaults (SX1262.h, SX1268.h
+// and LLCC68.h at the pinned commit all default useRegulatorLDO to false). Each
+// call is logged; the results a test queues are returned in order, then
+// RADIOLIB_ERR_NONE.
+class SX126x : public StubChip {
+public:
+  using StubChip::StubChip;
+  std::vector<int16_t> begin_results;
+  int16_t begin(float freq = 434.0, float bw = 125.0, uint8_t sf = 9, uint8_t cr = 7, uint8_t syncWord = RADIOLIB_SX126X_SYNC_WORD_PRIVATE,
+                int8_t power = 10, uint16_t preambleLength = 8, float tcxoVoltage = 1.6, bool useRegulatorLDO = false) {
+    calls.push_back(stubCall("begin", freq, bw, sf, cr, syncWord, power, preambleLength, tcxoVoltage, useRegulatorLDO));
+    if (begin_results.empty()) return RADIOLIB_ERR_NONE;
+    int16_t r = begin_results.front();
+    begin_results.erase(begin_results.begin());
+    return r;
+  }
+};
 class SX1262 : public SX126x { public: using SX126x::SX126x; };
 class SX1268 : public SX126x { public: using SX126x::SX126x; };
 class LLCC68 : public SX1262 { public: using SX1262::SX1262; };
