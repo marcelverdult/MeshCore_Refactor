@@ -352,3 +352,25 @@ TEST(FrameBounds, OnlyAnAnnouncedPathRunsOut) {
     if (!may_run_out) EXPECT_EQ(frame_reader_overruns, before) << c.name;
   }
 }
+
+// The scope key of SET_FLOOD_SCOPE_KEY is set only by a frame that carries all 16
+// bytes; one byte less clears it. Which of the two happened shows in the next
+// flood: with a key it carries a transport code (route type TRANSPORT_FLOOD, 0),
+// without one it does not (FLOOD, 1).
+TEST(FrameBounds, FloodScopeKeyNeedsAllSixteenBytes) {
+  Harness h;
+  for (size_t key_bytes : {15, 16}) {
+    h.reset();
+    h.boot();
+    Bytes f = {SET_FLOOD_SCOPE_KEY, 0};
+    putFill(f, key_bytes, 0x42);
+    ASSERT_EQ(h.reply(f), Bytes({0}));
+    Bytes chat = {SEND_CHANNEL_TXT_MSG, 0, 0};
+    putU32(chat, RTC0);
+    putStr(chat, "x");
+    ASSERT_EQ(h.reply(chat), Bytes({0}));
+    auto queued = h.mesh().outbound();
+    ASSERT_EQ(queued.size(), 1u);
+    EXPECT_EQ(queued[0][0] & 0x03, key_bytes == 16 ? 0 : 1) << key_bytes << " key bytes";
+  }
+}
