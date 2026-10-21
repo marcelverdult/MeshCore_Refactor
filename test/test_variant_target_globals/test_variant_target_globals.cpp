@@ -30,15 +30,6 @@ TestBoard board;
 // rtc_clock falls back to.
 extern VolatileRTCClock fallback_clock;
 
-// The radio block of the 31 nRF52 variants of cut D1, verbatim, as their
-// target.cpp define it.
-RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, SPI);
-
-WRAPPER_CLASS radio_driver(radio, board);
-
-VolatileRTCClock fallback_clock;
-AutoDiscoverRTCClock rtc_clock(fallback_clock);
-
 // The same block once more, as the reference the cases are checked against on
 // every commit, whatever defines the globals above.
 namespace copy {
