@@ -1,7 +1,8 @@
 # 0010: A command table for the companion protocol
 
-Status: steps 10a (host harness and characterization) and 10b (the table) ready
-for review; 10c and 10d are proposals. Behaviour change: none.
+Status: steps 10a (host harness and characterization), 10b (the table) and 10c
+(a bounded frame reader) ready for review; 10d is a proposal.
+Behaviour change: none.
 
 ## Context
 
@@ -249,6 +250,227 @@ this fork, already in `integration`.
 
 Step 10a touches none of those lines: it adds tests and a native environment.
 
+## Step 10c: a bounded frame reader
+
+### What the handlers read today
+
+Measured on `integration` at `68e0fcdc` in two ways.
+
+`tools/refactoring/cmd_frame_offsets.py` lists every access to `cmd_frame` in the
+59 handlers of `CMD_TABLE`. 48 handlers touch the frame, 11 read nothing past the
+code byte. Between them they use 68 constant offsets (`cmd_frame[1]`,
+`&cmd_frame[1 + PUB_KEY_SIZE]`), 30 accesses through a running index `i`, 7
+lengths derived from `len` that go to a callee together with a pointer into the
+frame, and 6 writes into the frame: the terminator at `len` (`cmd_frame[len] = 0`
+or `text[tlen] = 0`) in `APP_START`,
+`RUN_CLI_COMMAND`, `SEND_TXT_MSG`, `SEND_LOGIN` and `SET_CUSTOM_VAR` (the in place
+terminator; `cmd_frame` is `MAX_FRAME_SIZE + 1` bytes, so index `len` is always
+inside it) and the `':'` that `SET_CUSTOM_VAR` replaces. Every constant offset that
+is read without a further length test lies below the row's minimum; the reads
+above it (`alt` of `SET_ADVERT_LATLON`, the tail of `SET_OTHER_PARAMS`, the repeat
+flag, `since`, the 256 bit scope key) each sit behind their own `len` test.
+
+The static list cannot see what a callee does with a pointer, and a running index
+can be driven by a byte of the frame. So the second measurement is dynamic: the
+host harness built with AddressSanitizer (`tools/refactoring/companion_asan_probe.patch`),
+the bytes of `cmd_frame` above the frame poisoned before each frame is handled,
+and every code 0 to 69 sent at every length 1 to 176 with ten fills (`00 01 02 3f
+40 7f 81 bf ff 5a`, which include the path length bytes of every hash size), each
+to a freshly booted node. 123,200 frames. Reads above `len`:
+
+| Handler | Where | Lengths | What it reads | Answer, either way |
+|---|---|---|---|---|
+| `SEND_CHANNEL_DATA` | `Packet::writePath()` | 4 to 64 | the path the length byte announces, before the test whether path and `data_type` fit | `ILLEGAL_ARG` |
+| `SEND_RAW_DATA` | `Packet::writePath()` | 6 to 63 | the same, before the test for 4 payload bytes | `ILLEGAL_ARG` |
+| `SEND_RAW_PACKET` | `Dispatcher::tryParsePacket()` | 4 to 6 | the 4 transport code bytes and the path length byte, before its length test | `ILLEGAL_ARG` |
+| `RUN_CLI_COMMAND` | `CommonRadioPrefs::handleCommand()`, `MyMesh::handleCommand()` | 3 to 22 | `memcmp()` of a command prefix longer than the text, past the terminator | the CLI reply |
+| `SET_DEFAULT_FLOOD_SCOPE` | `strlen()` in the handler | 48 to 175 | the byte at `len`, and on a board onwards while no terminator comes | `ILLEGAL_ARG` |
+
+The last row only shows up with the byte at `len` poisoned too (`PROBE_SKIP=0`): in
+the probe that byte is always 0 (every node is fresh), on a board it is left over
+from the previous frame, and `strlen()` runs on to the next zero. Reads of the byte
+at `len` by the five handlers that just wrote the terminator there are not listed;
+with the poison starting at `len + 1` (`PROBE_SKIP=1`) the first four rows remain
+and nothing else.
+
+None of the five changes an answer. For the first three, a path or header that
+runs past the frame always fails the length test that follows, because the cursor
+is then already beyond `len`; the stale bytes go into a local buffer that is
+discarded. For `SET_DEFAULT_FLOOD_SCOPE`, `strlen()` only runs past the frame when
+bytes 1 to `len - 1` (at least 47) hold no zero, and then it returns at least 47,
+which is refused as at least 31. For the CLI, `memcmp()` stops being decisive at
+the terminator, which differs from the prefix. The first two and the fifth are in
+handlers and go away with the reader without changing an answer; the CLI and
+`tryParsePacket()` are callees that 10c does not touch (the latter also parses
+every received radio packet), recorded here as findings for their own fixes.
+
+A side observation of the ASan build, not checked further: built with ASan, the
+frame sweep's packet digests differ for codes 2, 3, 26, 27 and 39 (encrypted
+requests and messages) while every reply stays the same. Unproven guess: the
+encryption pads its last block from an uninitialised stack buffer, which the
+sweep's stack scrub reaches in a normal build and does not reach under ASan's
+stack layout. Not part of 10c.
+
+### The reader
+
+A header only class in `src/helpers/FrameReader.h`:
+
+```c++
+class FrameReader {
+public:
+  FrameReader(uint8_t* buf, size_t len, size_t pos = 0);
+  uint8_t  u8();             // 0 when it runs out
+  uint16_t u16();            // memcpy, as the handlers do today
+  uint32_t u32();
+  int32_t  i32();
+  uint8_t* bytes(size_t n);  // n bytes at the cursor, nullptr when they are not all there
+  void     skip(size_t n);
+  bool     has(size_t n) const;    // n more bytes are in the frame
+  size_t   remaining() const;
+  size_t   pos() const;
+  bool     ok() const;       // false once a read ran out; stays false
+  char*    restAsCString();  // the rest as a C string: writes 0 at buf[len], as today
+};
+```
+
+Each handler starts with `FrameReader r(cmd_frame, len, 1);` and reads its fields in
+order instead of counting offsets:
+
+```c++
+bool MyMesh::cmdSetTuningParams(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint32_t rx = r.u32();
+  uint32_t af = r.u32();
+  ...
+```
+
+Optional trailing fields keep their own test, written as `r.has(n)` (or
+`r.remaining()`, where the old test compared `len`). Reads of several bytes use
+`memcpy` into the value, exactly as the handlers do today, so the byte order is
+the same on every target by construction rather than by a little endian
+assumption.
+
+`restAsCString()` writes the terminator at `buf[len]`, the same byte the five
+handlers write today; its precondition (the buffer has room for `len + 1` bytes)
+is what `cmd_frame` already guarantees. `SET_CUSTOM_VAR` keeps editing its text in
+place after that.
+
+### Why the answers stay byte for byte the same
+
+- **The minimum stays in the table.** A frame below a row's minimum never reaches
+  the handler and gets the dispatcher's `UNSUPPORTED` as before. The reader does
+  not add a second check that could answer differently.
+- **Inside the minimum, nothing runs out.** Every unconditional read is below the
+  row's minimum (measured above), so for every frame a handler sees, the reader
+  returns the same bytes the offsets did. A read that would run out yields 0 and
+  clears `ok()`; in 10c that can only happen in the places listed next, each of
+  which already tests and refuses.
+- **The handlers that check their own length keep the exact test.** `len < 4` in
+  `SEND_CHANNEL_DATA`, the 4 payload bytes of `SEND_RAW_DATA`, `len == 4` and
+  `len >= 36` of `SEND_TELEMETRY_REQ`, the two lengths of `SET_CHANNEL`, `len < 33`
+  of `EXPORT_CONTACT`, `len >= 48` of `SET_DEFAULT_FLOOD_SCOPE`, `len >= 18` of
+  `SET_FLOOD_SCOPE_KEY` and the upper bound of `SEND_TRACE_PATH` stay the same
+  comparisons, on `len` or on `r.remaining()` with the same value. Where a test
+  follows a path copy today (`SEND_CHANNEL_DATA`, `SEND_RAW_DATA`), the copy becomes
+  `r.bytes(n)`, and "did not fit" (`!r.ok()`) joins the existing test with `||`;
+  both lead to the `ILLEGAL_ARG` the over-read case answers today. The number of
+  bytes a path length byte announces comes from a small helper next to the table,
+  `pathByteLen()`, the same product `Packet::writePath()` copies.
+- **Byte order stays as written.** Where a handler composed a value by shifting
+  (the `data_type` of `SEND_CHANNEL_DATA`, low byte first), it still does, from two
+  `u8()` reads; everything that used `memcpy` now uses `u16()`/`u32()`/`i32()`,
+  which use `memcpy`.
+- **The unbounded `strlen()`** of `SET_DEFAULT_FLOOD_SCOPE` becomes a length
+  bounded to the frame (`strnlen(p, r.remaining())`); argued above, the answer is
+  the same for every frame.
+- **Callees are not changed.** `updateContactFromFrame()`, `importContact()`,
+  `tryParsePacket()`, `createControlData()`, `sendAnonReq()` and the CLI parser get
+  the same pointer and length as today (`r.bytes()`/`r.remaining()` instead of
+  `&cmd_frame[n]`/`len - n`).
+
+On the host the reader counts every read that runs out (`-D
+FRAME_READER_COUNT_OVERRUNS`, set only in `native_companion`; on the targets the
+counter does not exist), so a test can assert that no frame makes a handler run
+out, apart from the two path cases where running out is the refusal.
+
+### Tests and evidence (plan; results under "Verification of step 10c")
+
+- The sweep and the 49 command tests of 10a, unchanged, before and after.
+- New tests first, on the unchanged handlers: for every row, the frame one byte
+  below the minimum (`UNSUPPORTED`) and exactly at it (accepted); every optional
+  field one byte short and complete (`SET_ADVERT_LATLON` 12/13, `SET_RADIO_PARAMS`
+  11/12, `SET_OTHER_PARAMS` 2 to 5, `SET_AUTOADD_CONFIG` 2/3, `GET_CONTACTS` 4/5,
+  `SET_FLOOD_SCOPE_KEY` 17/18, `SET_CHANNEL` 49/50/65/66, `SEND_TELEMETRY_REQ`
+  4/5/35/36, `EXPORT_CONTACT` 32/33, `SET_DEFAULT_FLOOD_SCOPE` 47/48,
+  `SEND_TRACE_PATH` at its upper bound); and each measured over-read with a
+  stale tail that would change the outcome if it were used (a path length byte
+  announcing more than the frame holds, behind a previous frame whose bytes form a
+  valid path and payload; a 47 byte scope name without terminator behind a tail
+  with a zero after 3 more bytes).
+- Unit tests of the reader itself (each read at the end of the frame, past it,
+  `ok()` staying false, `restAsCString()` writing exactly `buf[len]`).
+- Mutations of the converted handlers (a field read with the wrong width, an
+  optional field read without `has()`, `has(n)` off by one, a lost `!r.ok()`).
+- Builds of every companion environment (BLE, USB, WiFi) per platform plus control
+  environments, flash and RAM against `68e0fcdc`; all 17 host environments;
+  `companion_session.py` on a board if one can be claimed, otherwise recorded as
+  not run.
+
+The cost to expect: the bounds test in every read. Target: at most 1 kB of flash on
+nRF52 for the whole step; if it is more, the reads inside the minimum get an
+unchecked variant (the table has already checked them) and the checked reads stay
+for the optional fields.
+
+### One pull request or several
+
+One. The reader is useless without users, and the handlers are independent of one
+another, so the step is cut into commits instead: the new boundary and stale tail
+tests on the unchanged handlers; the reader with its unit tests; the 34 handlers
+that read their fields one after the other without a length test of their own;
+the 14 with optional fields, sub commands, a path or their own length tests,
+where a reviewer has to compare each test. Each commit passes all suites on its
+own. Splitting into two pull requests along the last line would double the build
+matrix and the review overhead without making either half easier to read.
+
+### Alternatives considered for 10c
+
+- **The dispatcher passes the reader** (`bool (MyMesh::*)(FrameReader&)`). Makes it
+  harder to bypass the reader, but changes 59 declarations, the table type and
+  every handler that only wants `len`, while a handler could still index
+  `cmd_frame`. Not worth a diff that touches the 11 handlers that read nothing.
+- **Reading into packed structs** (`memcpy(&frame, cmd_frame, sizeof frame)`).
+  The fewest lines, but the layout then depends on the compiler's packing rules on
+  five platform packages, and variable length fields (paths, text) do not fit a
+  struct.
+- **A macro per handler (`NEED(n)`)** that returns `ILLEGAL_ARG` when the frame is
+  short. That is step 10d, a protocol change; in 10c the table's minimum is the
+  only length answer.
+- **Upstream's `ByteReader`.** meshcore-dev/MeshCore#2864 (OTA over LoRa, open,
+  12,000+ lines) brings `mesh::ota::ByteReader` in `src/helpers/ota/OtaByteIO.h`:
+  sticky `ok`, `u8()`, `u32()`, `take(n)`, `skip(n)`, little endian by shifting.
+  Close to this design, which takes the same method names where they mean the same
+  (`u8`, `u32`, `skip`, `ok`). Not reused: it is not merged, lives in the OTA
+  namespace, has no in place terminator and decodes by shifting (the same bytes on
+  the five platforms, all little endian, but a different expression than the
+  handlers' `memcpy`). If both land, merging them is one rename.
+- **Converting `updateContactFromFrame()` and `importContact()` too.** They parse
+  frames as well, but they are shared with the contact store and the advert path;
+  out of the scope of the handlers, a candidate for later.
+
+### Upstream overlap for 10c
+
+`upstream/dev` is `dec8ad6e` on 21 October 2026; since `428a95c6` it only adds WiFi
+to two variants and changes nothing in `examples/companion_radio`. Of 499 open
+pull requests, 74 change `examples/companion_radio/MyMesh.cpp`; 10 of them change
+lines that touch `cmd_frame`, and so do the handlers 10c rewrites: #2670 and #2843
+(each a new optional byte 5 in `SET_OTHER_PARAMS`), #2682 (`SEND_RAW_DATA`,
+`RUN_CLI_COMMAND`), #2717 and #1374 (new commands), #1923 (`SEND_TRACE_PATH`),
+#1551 (the timestamp of `SEND_TXT_MSG` and `SEND_CHANNEL_TXT_MSG`), #3523
+(`ADD_UPDATE_CONTACT`), #3643 (this fork's channel text fix, already in
+`integration`). Each would be re-applied as reader calls; the two optional byte 5
+proposals become one `if (r.has(1))`. None proposes a reader for the companion
+frames; #2864 is the only reader-like change and is discussed above.
+
 ## Verification of step 10a
 
 ### What the harness is
@@ -489,3 +711,218 @@ Not covered on hardware: the setters with new values, sends on air, `REBOOT`,
 `FACTORY_RESET`, private key import, contact and channel changes. Their handlers
 are moved text, pinned on the host by the sweep and the command tests. Only nRF52
 ran on hardware.
+
+## Verification of step 10c
+
+### What changed
+
+48 handlers start with `FrameReader r(cmd_frame, len, 1);` and read through it;
+the 11 that read nothing past the code byte are untouched. In `MyMesh.cpp` the
+file changes by 217 lines added and 171 removed (34 handlers in one commit, 14 in
+the next, the include and `pathByteLen()` among them). After the step,
+`tools/refactoring/cmd_frame_offsets.py` finds no constant offset, no running
+index and no length derived from `len` in any handler; the one remaining write
+into the frame is the `':'` that `SET_CUSTOM_VAR` replaces in its own text. The
+dispatcher, the table and every callee are unchanged.
+
+`SET_AUTOADD_CONFIG` reads its hop count into a local before `min()`, because
+`min()` is a macro on some cores and would read twice.
+
+### New tests
+
+All written and run on the unchanged handlers first (commit `29e35f06`), and run
+again against the handlers of `68e0fcdc` after the step (60 of 60 pass there too).
+
+- `test_frame_bounds.cpp`, `NoCommandReadsThePreviousFrame`: a catalog of 98
+  frames as an app sends them, each command at its minimum, both sides of every
+  optional field, the measured reads past the end (an announced path longer than
+  the frame in two hash sizes for `SEND_RAW_DATA` and `SEND_CHANNEL_DATA`, an
+  unterminated scope name, transport codes past the end in `SEND_RAW_PACKET`), and
+  the text commands. Each goes to a fresh node with a contact and a started
+  signing round, once as it is and once behind each of four tails a previous
+  frame leaves in `cmd_frame` (zeros, `0x5A`, `0xFF`, and a pattern with a zero
+  every eighth byte). Replies, queued packets, stored files (except the name tails
+  in `/channels2`, see 10a), calls to board, radio, clock and sensors, and what 12
+  more loops, a `GET_CHANNEL` and a channel flood show afterwards, must be
+  identical.
+- `OneByteBelowEachMinimum`: for each of the 44 rows with a minimum above 1, the
+  catalog frame at the minimum minus one byte answers `UNSUPPORTED`
+  (`SEND_CHANNEL_DATA`: `ILLEGAL_ARG`) behind every tail and queues nothing; and the
+  catalog has a frame of exactly each minimum.
+- `OnlyAnAnnouncedPathRunsOut`: every code 0 to 69 at every length with six
+  fills, and every catalog frame; the reader may run out only for an announced
+  path in `SEND_RAW_DATA` and `SEND_CHANNEL_DATA`.
+- `TheReadsPastTheEndThatStep10cRemoved`: the three handler cases of the
+  inventory (`SEND_CHANNEL_DATA` and `SEND_RAW_DATA` with a path length byte that
+  announces 8 bytes, `SET_DEFAULT_FLOOD_SCOPE` with 47 bytes and no zero), each
+  behind four tails chosen so that the stale bytes would complete the path and
+  payload or end the name early. Every time: `ILLEGAL_ARG`, nothing queued, no file
+  changed (the prefs file holds the default scope). Passes on the handlers of
+  `68e0fcdc` and on the converted ones; a mutation that accepts the 47 byte name
+  fails it.
+- `FloodScopeKeyNeedsAllSixteenBytes`: added after a mutation survived (below).
+  The key's effect only shows in the next flood, which carries a transport code
+  with 16 key bytes and none with 15.
+- `test_frame_reader.cpp`: six tests of the reader alone.
+
+One finding of writing the catalog: the upper bound of `SEND_TRACE_PATH`
+(`len - 10 >= MAX_PACKET_PAYLOAD - 5`, so 189 bytes) lies above `MAX_FRAME_SIZE`
+(176) and is never reached; its `return false` is dead code today. Kept as it is.
+
+### Mutation tests
+
+23 faults, each on its own against the converted code, the whole
+`native_companion` suite run, the file restored; 19 caught:
+
+| Mutation | Caught by |
+|---|---|
+| `SET_TUNING_PARAMS` reads `af` with `u16()` | sweep |
+| `SET_TUNING_PARAMS` reads `af` before `rx` | `TuningParamsRoundTrip` |
+| `RUN_CLI_COMMAND` text starts one byte late | `RunCliCommand` |
+| `SET_OTHER_PARAMS` reads the location policy without `has(1)` | `OnlyAnAnnouncedPathRunsOut` |
+| `SET_AUTOADD_CONFIG` hop count behind `has(0)` | `AutoAddConfig`, `OnlyAnAnnouncedPathRunsOut` |
+| `SET_CHANNEL` 256 bit test `has(64)` instead of `has(65)` | sweep |
+| `SET_FLOOD_SCOPE_KEY` key behind `has(17)` | `FloodScopeKeyNeedsAllSixteenBytes` (not caught before that test existed) |
+| `SET_FLOOD_SCOPE_KEY` key behind `has(15)` | crash (null pointer from `bytes(16)`) |
+| `SET_DEFAULT_FLOOD_SCOPE` behind `has(46)` | crash (null pointer from `bytes(16)`) |
+| `SEND_TELEMETRY_REQ` self form also at 5 bytes | `TelemetryHasTwoForms`, sweep |
+| `SEND_RAW_DATA` payload test `has(3)` | `SendRawData`, sweep |
+| `pathByteLen()` ignores the hash size | sweep |
+| `SEND_TRACE_PATH` reads `flags` before `auth` | `TracePath` |
+| `SET_ADVERT_LATLON` takes `lon` from `lat` | `SetAdvertLatLon` |
+| reader: `has()` off by one (`<` for `<=`) | crash |
+| reader: `has()` allows one byte past the end | 10 tests, among them the sweep and `NoCommandReadsThePreviousFrame` |
+| reader: terminator one byte late | `NoCommandReadsThePreviousFrame`, `RestAsCStringWritesTheTerminatorAtLen` |
+| reader: terminator not written | the same and the sweep |
+| reader: `ok()` not sticky | `AReadPastTheEndYieldsZeroAndStops`, sweep |
+
+Not caught (4), and why:
+
+- `SET_CHANNEL` with `has(48)` instead of `has(49)`: equivalent. The row's
+  minimum is 50, so the handler never sees 49 bytes; the handler's own test is
+  redundant with the table.
+- `SEND_RAW_DATA` and `SEND_CHANNEL_DATA` without `!r.ok()`: equivalent. Once a
+  read ran out, `has()` is false as well, so the `has()` test alone refuses the
+  frame. The `!r.ok()` stays because it says what is meant.
+- `SEND_CHANNEL_DATA` with the two `data_type` bytes swapped: not observable on the
+  host. The mock cipher leaves no plaintext in the queued packet, and
+  `sendGroupData()` is not virtual, so the harness cannot see the value. The code
+  reads low byte, then high byte, as the shift expression it replaces did; checked
+  by review only.
+
+### Host suites
+
+All 17 host environments on the committed tree, the environment list passed as a
+bash array:
+
+```
+native_companion                test_companion_frames         PASSED
+... (the other 26 suites in 16 environments)                  PASSED
+================ 588 test cases: 588 succeeded ================
+```
+
+577 before the step, 11 new: five in `test_frame_bounds.cpp`, six in
+`test_frame_reader.cpp`.
+
+### Builds
+
+19 environments built from `68e0fcdc` and from the code commit `90b5da2e`, each in
+its own worktree with the same toolchain. All build on both sides.
+
+| Environment | Flash before | Flash after | Delta | RAM delta |
+|---|---:|---:|---:|---:|
+| `Heltec_v3_companion_radio_ble` | 1,670,229 | 1,671,653 | +1,424 | +0 |
+| `Heltec_v3_companion_radio_wifi` | 1,106,381 | 1,107,821 | +1,440 | +0 |
+| `Heltec_v3_companion_radio_usb` | 656,829 | 658,193 | +1,364 | +0 |
+| `RAK_4631_companion_radio_ble` | 464,212 | 465,172 | +960 | +0 |
+| `RAK_4631_companion_radio_usb` | 455,188 | 456,148 | +960 | +0 |
+| `ProMicro_companion_radio_usb` | 358,836 | 359,796 | +960 | +0 |
+| `LilyGo_T-Echo_companion_radio_ble` | 375,680 | 376,640 | +960 | +0 |
+| `LilyGo_T-Echo_companion_radio_usb` | 368,288 | 369,248 | +960 | +0 |
+| `PicoW_companion_radio_ble` | 633,604 | 635,332 | +1,728 | +0 |
+| `PicoW_companion_radio_wifi` | 528,732 | 530,428 | +1,696 | +0 |
+| `PicoW_companion_radio_usb` | 495,284 | 497,012 | +1,728 | +0 |
+| `LilyGo_Tlora_C6_companion_radio_ble_` | 1,444,915 | 1,446,667 | +1,752 | +0 |
+| `M5Stack_Unit_C6L_companion_radio_usb` | 544,593 | 546,345 | +1,752 | +0 |
+| `wio-e5-mini_companion_radio_usb` | 209,016 | 211,296 | +2,280 | +0 |
+| `Xiao_C3_companion_radio_ble` | 1,255,482 | 1,256,962 | +1,480 | +0 |
+| `Xiao_C3_companion_radio_usb` | 543,422 | 544,902 | +1,480 | +0 |
+| `Xiao_C3_companion_radio_wifi` | 1,010,858 | 1,012,330 | +1,472 | +0 |
+| `Heltec_v3_repeater` | 1,175,021 | 1,175,021 | +0 | +0 |
+| `RAK_4631_repeater` | 441,944 | 441,944 | +0 | +0 |
+
+The seventeen companions cover the five platform packages that compile
+`MyMesh.cpp` and every interface each of them builds (ESP32-S3 BLE, USB and WiFi;
+ESP32-C3 BLE, USB and WiFi; ESP32-C6 BLE and USB; nRF52 BLE and USB; RP2040 BLE,
+USB and WiFi; STM32 USB). The repeaters do not compile the file and are the
+control.
+
+The design's bound, 1 kB on nRF52, holds: +960 bytes. The other cores pay more
+for the inlined bounds tests: about 1.4 kB on ESP32-S3 and C3, 1.7 kB on RP2040
+and C6, 2.3 kB on STM32, where `wio-e5-mini` goes from 79.7 % to 80.6 % of its
+256 kB. Making the reader's two checking functions `noinline` was tried and does
+not help (T-Echo +2,240 instead of +960, `wio-e5-mini` unchanged), so the reader
+stays inline. An unchecked variant for the reads inside the minimum, which the
+design kept in reserve, was not needed for the bound and would give back the
+guarantee the step is for.
+
+### Hardware
+
+LilyGo T-Echo `techo-3dcf` (claimed with `kb device claim`), a companion with its
+contacts and channels, normally on the official 1.18.0 BLE image. Two USB
+companion images built from `68e0fcdc` and from `90b5da2e`, marked `c10c-base` and
+`c10c-head` and confirmed by `ver` before each run.
+
+- `companion_session.py` once per image (39 accepted frames: every setter with the
+  value the board holds, declining sub commands, out of range values, stats, self
+  telemetry, a signing round, channels, CLI, the wrong reboot and reset words) and
+  compared: the only two differing lines are the build marker inside
+  `DEVICE_QUERY` and the reply to `ver`.
+- `companion_sweep.py` against the 10c image:
+
+  ```
+  6502 frames in 751 s: 6502 as on the host, 0 different, 0 without reply
+  (compared byte for byte: 4083, by reply code: 2419)
+  codes covered: 251
+  ```
+
+- State read through the protocol (`nodetool.py compinfo`) before the first run and
+  after the sweep: identical.
+- Afterwards the official image went back on
+  (`LilyGo_T-Echo_companion_radio_ble-v1.18.0-81dbae5.zip`, SHA-256 prefix
+  `6d602a54`); the DFU reported success and the board enumerated again. The phone
+  this board serves was not connected, so the BLE reconnect was not checked.
+
+Not covered on hardware: the setters with new values, sends on air, `REBOOT`,
+`FACTORY_RESET`, private key import, contact and channel changes, and the stale
+tail cases (a board cannot be made to hold a chosen tail without sending that
+frame first, which the host tests do). For those the host tests are the evidence.
+Only nRF52 ran on hardware.
+
+### Open findings, not changed in 10c
+
+Each needs its own fix and proposal; 10c leaves the code as it is.
+
+1. **`Dispatcher::tryParsePacket()` reads before its length test.** For a route
+   type with transport codes it reads the 4 code bytes and the path length byte
+   before it compares with `len`. Reached from `SEND_RAW_PACKET` with frames of 4
+   to 6 bytes, and on every received radio packet. The answer is unchanged
+   (`ILLEGAL_ARG`, the later test fails). Reproduce: apply
+   `tools/refactoring/companion_asan_probe.patch`, run it with `PROBE_SKIP=1`, and
+   `companion_asan_probe_summary.py` lists `MyMesh::cmdSendRawPacket` with
+   `mesh::Dispatcher::tryParsePacket` for code 65, fills `00` and `3f`, lengths 4
+   to 6 (see `tools/refactoring/README.md`).
+2. **The CLI parser compares prefixes past the terminator.**
+   `CommonRadioPrefs::handleCommand()`, `MyMesh::handleCommand()` and `isGet()` use
+   `memcmp()` with prefixes longer than the command text. The result is decided at
+   the terminator, so no reply changes. Reproduce: the same probe lists
+   `MyMesh::cmdRunCliCommand` with those three callers for code 66, lengths 3 to 22.
+3. **Packet digests under ASan (unchecked).** Built with ASan, the frame sweep's
+   packet digests differ for codes 2, 3, 26, 27 and 39. Guess, not verified: the encryption pads from an uninitialised stack
+   buffer that the sweep's stack scrub reaches only without ASan. Reproduce: apply
+   the probe patch and run `pio test -e native_companion` without a filter;
+   `FrameSweep.MatchesTheRecordedTranscript` fails; the differences it printed (it
+   prints at most ten) were all `packets` lines of those codes, with equal `files`
+   digests.
+4. **`SEND_TRACE_PATH`'s upper bound is dead code.** `len - 10 >= MAX_PACKET_PAYLOAD - 5`
+   needs 189 bytes; a frame has at most 176.
