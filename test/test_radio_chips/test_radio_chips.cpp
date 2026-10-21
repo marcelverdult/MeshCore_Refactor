@@ -254,6 +254,80 @@ TYPED_TEST(RadioChipTest, StartReceiveAsksForThePreambleIrq) {
   EXPECT_EQ(c.len, 0u);
 }
 
+// std_init() and getRxBoostedGainMode() of the three SX126x classes that have a
+// std_init(), built here without any of the board option macros
+// (SX126X_USE_REGULATOR_LDO, SX126X_REGISTER_PATCH, SX126X_CURRENT_LIMIT, ...),
+// without P_LORA_SCLK and without MESH_DEBUG. test_radio_chips_init builds the
+// same classes with all of them set.
+
+template <typename T>
+struct SX126xInitTest : public ::testing::Test {
+  Module mod;
+  T radio{&mod};
+  void SetUp() override { Serial.reset(); }
+};
+using SX126xChips = ::testing::Types<CustomSX1262, CustomSX1268, CustomLLCC68>;
+TYPED_TEST_SUITE(SX126xInitTest, SX126xChips);
+
+// LORA_FREQ, LORA_BW, LORA_SF and LORA_TX_POWER come from the environment's
+// build flags; coding rate 5, the private sync word (0x12 = 18), preamble 16,
+// TCXO 1.6 V and the DC-DC regulator are the defaults std_init() supplies.
+const std::string BEGIN_DEFAULT = "begin(869.525,250,11,5,18,22,16,1.6,0)";
+const std::string BEGIN_TCXO_OFF = "begin(869.525,250,11,5,18,22,16,0,0)";
+
+TYPED_TEST(SX126xInitTest, StdInitWithoutOptions) {
+  EXPECT_TRUE(this->radio.std_init());
+  std::vector<std::string> want = {BEGIN_DEFAULT, "setCRC(1)"};
+  EXPECT_EQ(this->radio.calls, want);
+  EXPECT_EQ(Serial.out, "");
+}
+
+TYPED_TEST(SX126xInitTest, StdInitWithSpiButNoPinsLeavesSpiAlone) {
+  SPIClass spi;
+  EXPECT_TRUE(this->radio.std_init(&spi));
+  EXPECT_TRUE(spi.calls.empty());
+}
+
+TYPED_TEST(SX126xInitTest, SpiCmdFailedRetriesWithTcxoOff) {
+  this->radio.begin_results = {RADIOLIB_ERR_SPI_CMD_FAILED};
+  EXPECT_TRUE(this->radio.std_init());
+  std::vector<std::string> want = {BEGIN_DEFAULT, BEGIN_TCXO_OFF, "setCRC(1)"};
+  EXPECT_EQ(this->radio.calls, want);
+  EXPECT_EQ(Serial.out, "");
+}
+
+TYPED_TEST(SX126xInitTest, SpiCmdInvalidRetriesWithTcxoOff) {
+  this->radio.begin_results = {RADIOLIB_ERR_SPI_CMD_INVALID};
+  EXPECT_TRUE(this->radio.std_init());
+  std::vector<std::string> want = {BEGIN_DEFAULT, BEGIN_TCXO_OFF, "setCRC(1)"};
+  EXPECT_EQ(this->radio.calls, want);
+}
+
+TYPED_TEST(SX126xInitTest, FailedRetryReportsTheSecondError) {
+  this->radio.begin_results = {RADIOLIB_ERR_SPI_CMD_FAILED, RADIOLIB_ERR_SPI_CMD_INVALID};
+  EXPECT_FALSE(this->radio.std_init());
+  std::vector<std::string> want = {BEGIN_DEFAULT, BEGIN_TCXO_OFF};
+  EXPECT_EQ(this->radio.calls, want);
+  EXPECT_EQ(Serial.out, "ERROR: radio init failed: -706\n");
+}
+
+TYPED_TEST(SX126xInitTest, OtherErrorIsNotRetried) {
+  this->radio.begin_results = {-2};
+  EXPECT_FALSE(this->radio.std_init());
+  std::vector<std::string> want = {BEGIN_DEFAULT};
+  EXPECT_EQ(this->radio.calls, want);
+  EXPECT_EQ(Serial.out, "ERROR: radio init failed: -2\n");
+}
+
+TYPED_TEST(SX126xInitTest, RxBoostedGainModeReadsTheGainRegister) {
+  this->radio.regs[RADIOLIB_SX126X_REG_RX_GAIN] = RADIOLIB_SX126X_RX_GAIN_BOOSTED;
+  EXPECT_TRUE(this->radio.getRxBoostedGainMode());
+  this->radio.regs[RADIOLIB_SX126X_REG_RX_GAIN] = 0x94;  // power saving gain
+  EXPECT_FALSE(this->radio.getRxBoostedGainMode());
+  std::vector<std::string> want = {"readRegister(2220,1)", "readRegister(2220,1)"};
+  EXPECT_EQ(this->radio.calls, want);
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
