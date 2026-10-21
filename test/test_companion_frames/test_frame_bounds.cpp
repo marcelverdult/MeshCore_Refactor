@@ -16,6 +16,7 @@
 // would change and step 10c must not.
 
 #include "CompanionHarness.h"
+#include <helpers/FrameReader.h>
 
 #include <functional>
 #include <sstream>
@@ -314,5 +315,40 @@ TEST(FrameBounds, OneByteBelowEachMinimum) {
     bool found = false;
     for (const Case& c : catalog()) found |= c.frame[0] == m.code && c.frame.size() == m.min;
     EXPECT_TRUE(found) << "no catalog frame at the minimum of code " << (int)m.code;
+  }
+}
+
+// Since step 10c the handlers read through FrameReader, which counts every read
+// that would have gone past the frame. Only the two commands whose path length
+// byte can announce more than the frame holds may run out, and they refuse the
+// frame when they do; every other command reads inside its frame at every length
+// and fill, and every catalog frame except those two kinds reads inside it.
+TEST(FrameBounds, OnlyAnAnnouncedPathRunsOut) {
+  Harness h;
+  const uint8_t fills[] = {0x00, 0x01, 0x3F, 0x43, 0x81, 0xFF};
+  for (int code = 0; code < 70; code++) {
+    int overruns = 0;
+    for (uint8_t fill : fills) {
+      for (size_t len = 1; len <= MAX_FRAME_SIZE; len++) {
+        h.reset();
+        h.boot();
+        Bytes f(1, (uint8_t)code);
+        putFill(f, len - 1, fill);
+        int before = frame_reader_overruns;
+        h.send(f);
+        overruns += frame_reader_overruns - before;
+      }
+    }
+    if (code != SEND_RAW_DATA && code != SEND_CHANNEL_DATA) {
+      EXPECT_EQ(overruns, 0) << "code " << code;
+    }
+  }
+  for (const Case& c : catalog()) {
+    prepare(h);
+    int before = frame_reader_overruns;
+    h.send(c.frame);
+    bool may_run_out = c.name.find("past end") != std::string::npos &&
+                       (c.frame[0] == SEND_RAW_DATA || c.frame[0] == SEND_CHANNEL_DATA);
+    if (!may_run_out) EXPECT_EQ(frame_reader_overruns, before) << c.name;
   }
 }

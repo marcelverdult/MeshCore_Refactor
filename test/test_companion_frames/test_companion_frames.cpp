@@ -8,6 +8,7 @@
 //   minimum length is
 // - test_frame_bounds.cpp: that no command reads the bytes a previous frame left
 //   above the end of the current one (step 10c)
+// - test_frame_reader.cpp: the bounded reader the handlers use since step 10c
 
 #include <gtest/gtest.h>
 
@@ -25,6 +26,9 @@ mesh::LocalIdentity radio_new_identity() {
   id.readFrom(keys, sizeof(keys));
   return id;
 }
+
+// FrameReader counts the reads that ran out (FRAME_READER_COUNT_OVERRUNS).
+int frame_reader_overruns = 0;
 
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
