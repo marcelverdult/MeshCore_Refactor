@@ -4,9 +4,6 @@
 
 R1NeoBoard board;
 
-RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, SPI);
-WRAPPER_CLASS radio_driver(radio, board);
-
 #ifdef DISPLAY_CLASS
   NullDisplayDriver display;
 #endif
@@ -14,9 +11,6 @@ WRAPPER_CLASS radio_driver(radio, board);
 #ifdef PIN_USER_BTN 
 MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
 #endif
-
-VolatileRTCClock fallback_clock;
-AutoDiscoverRTCClock rtc_clock(fallback_clock);
 
 #if ENV_INCLUDE_GPS
   #include <helpers/sensors/MicroNMEALocationProvider.h>
