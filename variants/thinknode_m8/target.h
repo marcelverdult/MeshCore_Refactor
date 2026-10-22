@@ -16,6 +16,7 @@
 #endif
 
 extern ThinkNodeM8Board board;
+#define RADIOLIB_TARGET_GLOBALS   // radio, radio_driver and rtc_clock come from RadioLibTarget.cpp
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
 extern EnvironmentSensorManager sensors;
@@ -23,6 +24,7 @@ extern EnvironmentSensorManager sensors;
 #ifdef DISPLAY_CLASS
   extern DISPLAY_CLASS display;
   extern MomentaryButton user_btn;
+  #define DISPLAY_TARGET_GLOBALS   // display and user_btn come from VariantTarget.cpp
   extern RotaryInputGPIO rotary_input;
 #endif
 

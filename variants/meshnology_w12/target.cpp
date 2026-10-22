@@ -23,11 +23,6 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
   EnvironmentSensorManager sensors;
 #endif
 
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display(NULL);
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-
 const uint32_t rfswitch_dios[] = {
   RADIOLIB_LR2021_DIO5,   // RFX2402E 2.4G_TX_EN
   RADIOLIB_LR2021_DIO6,   // RFX2402E 2.4G_RX_EN
