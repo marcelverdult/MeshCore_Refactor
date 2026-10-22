@@ -195,8 +195,8 @@ std::vector<Case> catalog() {
   // no zero anywhere in the frame: the name runs into the key and past the end
   add("SET_DEFAULT_FLOOD_SCOPE unterminated", cat({{SET_DEFAULT_FLOOD_SCOPE}, fill(47, 0x61)}));
   add("SEND_RAW_PACKET flood", {SEND_RAW_PACKET, 0, 0x11, 0, 0x55});
-  // route type 0 carries 4 transport code bytes, which tryParsePacket() reads
-  // before it tests the length
+  // route type 0 carries 4 transport code bytes, which tryParsePacket() read
+  // before it tested the length (docs/fixes/packet-parse-len.md)
   add("SEND_RAW_PACKET transport past end", {SEND_RAW_PACKET, 0, 0x00, 0});
   return c;
 }
