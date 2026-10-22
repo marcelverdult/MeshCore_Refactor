@@ -9,6 +9,13 @@
 // builds against, so a test that names a bit means the bit the chip reports.
 // Every call the chip classes make that the tests do not care about is accepted
 // by a catch-all template and does nothing.
+//
+// It also carries the PhysicalLayer that RadioLibWrapper talks to, so the chip
+// wrappers (Custom<chip>Wrapper.h) can be built over the real chip classes. The
+// calls a wrapper makes, on the chip class or on PhysicalLayer, go into one
+// ordered log. Unlike RadioLib, the PhysicalLayer members here are not virtual:
+// the log shows the call the wrapper code makes, not where RadioLib would
+// dispatch it.
 
 #include "Arduino.h"
 
@@ -20,6 +27,7 @@
 #include <vector>
 
 #define RADIOLIB_ERR_NONE             0
+#define RADIOLIB_CHANNEL_FREE         (-2)
 #define RADIOLIB_ERR_SPI_CMD_INVALID  (-706)
 #define RADIOLIB_ERR_SPI_CMD_FAILED   (-707)
 #define RADIOLIB_NC                   (0xFFFFFFFF)
@@ -51,6 +59,9 @@ enum {
 #define RADIOLIB_SX126X_SYNC_WORD_PRIVATE      0x12
 #define RADIOLIB_SX126X_REG_RX_GAIN            0x08AC
 #define RADIOLIB_SX126X_RX_GAIN_BOOSTED        0x96
+#define RADIOLIB_SX126X_CMD_CALIBRATE          0x89
+#define RADIOLIB_SX126X_STANDBY_RC             0x00
+#define RADIOLIB_SX126X_CALIBRATE_ALL          0b01111111
 
 // LR11x0 family (LR11x0_commands.h)
 #define RADIOLIB_LR11X0_IRQ_PREAMBLE_DETECTED       (0x01UL << 4)
@@ -58,6 +69,8 @@ enum {
 #define RADIOLIB_LR11X0_IRQ_HEADER_ERR              (0x01UL << 6)
 #define RADIOLIB_LR11X0_RX_TIMEOUT_INF              (0xFFFFFFUL)
 #define RADIOLIB_LR11X0_LORA_SYNC_WORD_PRIVATE      (0x12)
+#define RADIOLIB_LR11X0_CALIBRATE_ALL               (0x3FUL << 0)
+#define RADIOLIB_LR11X0_STANDBY_RC                  (0x00UL << 0)
 
 // LR2021 (LR2021_commands.h)
 #define RADIOLIB_LR2021_IRQ_PREAMBLE_DETECTED   (0x01UL << 5)
@@ -65,6 +78,14 @@ enum {
 #define RADIOLIB_LR2021_IRQ_LORA_HDR_CRC_ERROR  (0x01UL << 9)
 #define RADIOLIB_LR2021_RX_TIMEOUT_INF          (0xFFFFFFUL)
 #define RADIOLIB_LR2021_LORA_SYNC_WORD_PRIVATE  (0x12)
+
+// LR2021.h
+struct LR2021LoRaSideDetector_t {
+  uint8_t sf;
+  bool ldro;
+  bool invertIQ;
+  uint8_t syncWord;
+};
 
 // Formats a call and its arguments for the call logs below, so a test can pin
 // which calls a chip class makes, with which arguments, in which order.
@@ -86,19 +107,83 @@ public:
   template <typename... A> void setPins(A... a) { calls.push_back(stubCall("setPins", a...)); }
 };
 
+// The pins and SPI access sx126xResetAGC() and CustomSX1276::tryScanChannel()
+// reach through chip->mod. Logged on their own, since the module does not know
+// its chip.
+class StubHal {
+public:
+  std::vector<std::string> calls;
+  void delay(unsigned long ms) { calls.push_back(stubCall("delay", ms)); }
+  uint32_t digitalRead(uint32_t) { return 0; }
+  void yield() { }
+};
+
 class Module {
 public:
+  StubHal halStub;
+  StubHal* hal = &halStub;
   Module() { }
+  uint32_t getGpio() { return 4; }
+  uint32_t getIrq() { return 5; }
+  int16_t SPIwriteStream(uint16_t cmd, const uint8_t* data, size_t len, bool waitForGpio = true, bool verify = true) {
+    std::string c = stubCall("SPIwriteStream", cmd, len, waitForGpio, verify);
+    for (size_t i = 0; i < len; i++) c += ":" + std::to_string(data[i]);
+    hal->calls.push_back(c);
+    return RADIOLIB_ERR_NONE;
+  }
+};
+
+// The members of RadioLib's PhysicalLayer that RadioLibWrapper calls, as in
+// test/mocks/RadioLib.h, with the calls that change the radio logged.
+class PhysicalLayer {
+public:
+  virtual ~PhysicalLayer() = default;
+
+  // The configuration calls, in order, with their arguments: those std_init()
+  // makes on the chip class, and those a wrapper makes on either.
+  std::vector<std::string> calls;
+
+  float rssi = -100.0f;      // the last packet's RSSI
+  float snr = 0.0f;
+  uint32_t time_on_air = 1000;
+  size_t packet_length = 0;
+  int16_t scan_result = RADIOLIB_CHANNEL_FREE;
+  size_t preamble_length = 0;
+  int8_t output_power = 0;
+  uint8_t random_byte = 0x5A;
+
+  int16_t sleep() { calls.push_back("sleep()"); return RADIOLIB_ERR_NONE; }
+  int16_t standby() { calls.push_back("standby()"); return RADIOLIB_ERR_NONE; }
+  int16_t startReceive() { return RADIOLIB_ERR_NONE; }
+  int16_t startTransmit(uint8_t*, size_t) { return RADIOLIB_ERR_NONE; }
+  int16_t finishTransmit() { calls.push_back("finishTransmit()"); return RADIOLIB_ERR_NONE; }
+  size_t getPacketLength() { return packet_length; }
+  int16_t readData(uint8_t*, size_t) { return RADIOLIB_ERR_NONE; }
+  float getRSSI() { return rssi; }
+  float getSNR() { return snr; }
+  uint32_t getTimeOnAir(size_t) { return time_on_air; }
+  int16_t scanChannel() { return scan_result; }
+  int16_t setOutputPower(int8_t dbm) { output_power = dbm; return RADIOLIB_ERR_NONE; }
+  void setPacketReceivedAction(void (*)(void)) { }
+  int16_t setPreambleLength(size_t len) {
+    calls.push_back(stubCall("setPreambleLength", len));
+    preamble_length = len;
+    return RADIOLIB_ERR_NONE;
+  }
+  uint8_t randomByte() { return random_byte; }
+  int32_t random(int32_t upper) { return upper / 2; }
 };
 using STM32WLx_Module = Module;
 using SX1262_Module = Module;
 
 // One base for every chip: the IRQ register is a plain field a test sets, and
 // every clear the chip class asks for is recorded and applied to it.
-class StubChip {
+class StubChip : public PhysicalLayer {
 public:
-  explicit StubChip(Module*) { }
+  explicit StubChip(Module* m) : mod(m) { }
   virtual ~StubChip() = default;
+
+  Module* mod;
 
   uint32_t irq = 0;
   std::vector<uint32_t> clears;
@@ -125,12 +210,28 @@ public:
   virtual size_t getPacketLength(bool) { return 0; }
   virtual int16_t setOutputPower(int8_t) { return RADIOLIB_ERR_NONE; }
   int16_t setOutputPower(int8_t, bool) { return RADIOLIB_ERR_NONE; }
-  virtual int16_t setFrequency(float) { return RADIOLIB_ERR_NONE; }
+  virtual int16_t setFrequency(float freq) { calls.push_back(stubCall("setFrequency", freq)); return RADIOLIB_ERR_NONE; }
 
   template <typename... A> int16_t begin(A...) { return RADIOLIB_ERR_NONE; }
-  template <typename... A> int16_t standby(A...) { return RADIOLIB_ERR_NONE; }
-  // The configuration calls std_init() makes, in order, with their arguments.
-  std::vector<std::string> calls;
+  template <typename... A> int16_t standby(A... a) { calls.push_back(stubCall("standby", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> int16_t sleep(A... a) { calls.push_back(stubCall("sleep", a...)); return RADIOLIB_ERR_NONE; }
+
+  // What the wrappers read and set.
+  float rssi_now = -111.5f;  // getRSSI(false), the SX126x and SX127x instant RSSI
+  float rssi_inst = -97.5f;  // what getRssiInst() reports on the LR chips
+  bool rssi_inst_written = true;  // whether getRssiInst() writes its result
+  float getRSSI(bool packet = true) { return packet ? rssi : rssi_now; }
+  int16_t getRssiInst(float* out) {
+    if (rssi_inst_written) *out = rssi_inst;
+    return RADIOLIB_ERR_NONE;
+  }
+  template <typename... A> int16_t setSpreadingFactor(A... a) { calls.push_back(stubCall("setSpreadingFactor", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> int16_t setBandwidth(A... a) { calls.push_back(stubCall("setBandwidth", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> int16_t setCodingRate(A... a) { calls.push_back(stubCall("setCodingRate", a...)); return RADIOLIB_ERR_NONE; }
+  // The calls of the two reset helpers.
+  template <typename... A> int16_t calibrateImage(A... a) { calls.push_back(stubCall("calibrateImage", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> int16_t calibrate(A... a) { calls.push_back(stubCall("calibrate", a...)); return RADIOLIB_ERR_NONE; }
+  template <typename... A> int16_t calibrateImageRejection(A... a) { calls.push_back(stubCall("calibrateImageRejection", a...)); return RADIOLIB_ERR_NONE; }
   // Register contents readRegister() returns and writeRegister() changes.
   std::map<uint16_t, uint8_t> regs;
 
@@ -186,4 +287,20 @@ class LR2021 : public StubChip {
 public:
   using StubChip::StubChip;
   uint8_t irqDioNum = 0;
+  int16_t setSideDetector(LR2021LoRaSideDetector_t* det, uint8_t num) {
+    std::string c = stubCall("setSideDetector", num);
+    for (uint8_t i = 0; i < num; i++) c += ":" + std::to_string(det[i].sf);
+    calls.push_back(c);
+    return RADIOLIB_ERR_NONE;
+  }
 };
+// SX127x family: the modem status register stands in for the IRQ flags.
+class SX127x : public StubChip {
+public:
+  using StubChip::StubChip;
+  uint8_t modem_status = 0;
+  uint8_t getModemStatus() { return modem_status; }
+  template <typename... A> int16_t startChannelScan(A...) { return RADIOLIB_ERR_NONE; }
+};
+class SX1278 : public SX127x { public: using SX127x::SX127x; };
+class SX1276 : public SX1278 { public: using SX1278::SX1278; };

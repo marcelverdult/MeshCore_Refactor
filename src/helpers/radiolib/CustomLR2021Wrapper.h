@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CustomLR2021.h"
-#include "RadioLibWrappers.h"
+#include "CustomChipWrapper.h"
 
 #ifndef USE_LR2021
 #define USE_LR2021
@@ -11,21 +11,14 @@
 #define LR2021_RX_BOOST_LEVEL 7
 #endif
 
-class CustomLR2021Wrapper : public RadioLibWrapper {
+class CustomLR2021Wrapper : public CustomChipWrapper<CustomLR2021> {
 public:
-  CustomLR2021Wrapper(CustomLR2021& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
+  CustomLR2021Wrapper(CustomLR2021& radio, mesh::MainBoard& board) : CustomChipWrapper(radio, board) { }
 
   void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
-    ((CustomLR2021 *)_radio)->setFrequency(freq);
-    ((CustomLR2021 *)_radio)->setSpreadingFactor(sf);
-    ((CustomLR2021 *)_radio)->setBandwidth(bw);
-    ((CustomLR2021 *)_radio)->setCodingRate(cr);
-    updatePreamble(sf);
+    setModemParams(freq, bw, sf, cr);
     applySideDetectorConfig();
-    PacketMillis pm = calcMaxPacketMillis(sf, bw, cr, preambleLengthForSF(sf));
-    ((CustomLR2021 *)_radio)->setPreambleMillis(pm.preambleMillis);
-    ((CustomLR2021 *)_radio)->setMaxPayloadMillis(pm.payloadMillis);
-
+    setRxDeadlines(bw, sf, cr);
   }
 
   bool configSideDetectors(const uint8_t* sideDetSFs, uint8_t num, float bw) override {
@@ -48,7 +41,7 @@ public:
       tmp[i].invertIQ = false;
       tmp[i].syncWord = 0x12;
     }
-    int16_t status = ((CustomLR2021 *)_radio)->setSideDetector(tmp, num);
+    int16_t status = chip()->setSideDetector(tmp, num);
     RadioLibWrapper::idle(); // trigger startReceive()
     MESH_DEBUG_PRINTLN("setSideDetector() returned %d", status);
 
@@ -63,7 +56,7 @@ public:
   }
 
   int16_t applySideDetectorConfig() {
-    int16_t status = ((CustomLR2021 *)_radio)->setSideDetector(_sideDet, _numSideDet);
+    int16_t status = chip()->setSideDetector(_sideDet, _numSideDet);
     RadioLibWrapper::idle(); // trigger startReceive()
     return status;
   }
@@ -73,13 +66,9 @@ public:
     return tSym;
   }
 
-  bool isReceivingPacket() override {
-    return ((CustomLR2021 *)_radio)->isReceiving();
-  }
-
   float getCurrentRSSI() override {
     float rssi = -110;
-    ((CustomLR2021 *)_radio)->getRssiInst(&rssi);
+    chip()->getRssiInst(&rssi);
     return rssi;
   }
 
@@ -88,20 +77,17 @@ public:
     _radio->setPreambleLength(preambleLengthForSF(getSpreadingFactor())); // overcomes weird issues with small and big pkts
   }
 
-  float getLastRSSI() const override { return ((CustomLR2021 *)_radio)->getRSSI(); }
-  float getLastSNR() const override { return ((CustomLR2021 *)_radio)->getSNR(); }
-
-  uint8_t getSpreadingFactor() const override { return ((CustomLR2021 *)_radio)->getSpreadingFactor(); }
+  uint8_t getSpreadingFactor() const override { return chip()->getSpreadingFactor(); }
   
   bool setRxBoostedGainMode(bool en) override {
-    ((CustomLR2021 *)_radio)->standby(); // LR2021 must be in standby to accept setRxBoostedGainMode
-    int16_t status = ((CustomLR2021 *)_radio)->setRxBoostedGainMode(en ? LR2021_RX_BOOST_LEVEL: 0);
+    chip()->standby(); // LR2021 must be in standby to accept setRxBoostedGainMode
+    int16_t status = chip()->setRxBoostedGainMode(en ? LR2021_RX_BOOST_LEVEL: 0);
     RadioLibWrapper::idle(); // trigger startReceive()
     return status == RADIOLIB_ERR_NONE;
   }
 
   bool getRxBoostedGainMode() const override {
-    return ((CustomLR2021 *)_radio)->getRxBoostedGainMode();
+    return chip()->getRxBoostedGainMode();
   }
 
   protected:
