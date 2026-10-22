@@ -489,6 +489,47 @@ TEST_F(CommandTest, ExportSelfThenSendItAsRawPacket) {
   EXPECT_EQ(h.reply(withKey(EXPORT_CONTACT, peerKey())), err(ERR_NOT_FOUND));
 }
 
+// Short raw packets of every route type: a packet is taken exactly when its header,
+// path length byte and path are inside the frame, and goes out byte for byte as it
+// came in. Whatever an earlier frame left in the buffer behind it does not matter
+// (docs/fixes/packet-parse-len.md).
+TEST_F(CommandTest, SendRawPacketShortFramesOfEveryRouteType) {
+  for (uint8_t route = 0; route < 4; route++) {
+    bool transport = route == 0 || route == 3;
+    size_t head = transport ? 5 : 1;               // header, transport codes
+    for (uint8_t path_byte : {0x00, 0x01, 0x42, 0xC0}) {
+      size_t path = path_byte == 0x42 ? 4 : (path_byte & 63);   // 0x42: 2 hashes of 2 bytes
+      for (size_t raw_len = 2; raw_len <= 10; raw_len++) {
+        for (int stale : {-1, 0x5A, 0xC0}) {
+          h.boot();
+          if (stale >= 0) {
+            Bytes before = {GET_DEVICE_TIME};
+            putFill(before, MAX_FRAME_SIZE - 1, (uint8_t)stale);
+            h.send(before);
+          }
+          Bytes raw;
+          for (size_t i = 0; i < raw_len; i++) raw.push_back((uint8_t)(0x21 + 3 * i));
+          raw[0] = (uint8_t)(PAYLOAD_TYPE_TXT_MSG << PH_TYPE_SHIFT | route);
+          if (head < raw_len) raw[head] = path_byte;
+          bool takes = head < raw_len && (path_byte >> 6) != 3 && head + 1 + path <= raw_len;
+
+          Bytes f = {SEND_RAW_PACKET, 1};
+          put(f, raw.data(), raw.size());
+          SCOPED_TRACE(testing::Message() << "route " << (int)route << " path " << (int)path_byte
+                                          << " raw_len " << raw_len << " stale " << stale);
+          if (takes) {
+            ASSERT_EQ(h.reply(f), OK);
+            ASSERT_EQ(h.mesh().outbound(), std::vector<Bytes>{raw});
+          } else {
+            ASSERT_EQ(h.reply(f), err(ERR_ILLEGAL_ARG));
+            ASSERT_EQ(h.mesh().outboundTotal(), 0);
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST_F(CommandTest, ExportAndImportAContact) {
   addPeer();
   Bytes r = h.reply(withKey(EXPORT_CONTACT, peerKey()));
