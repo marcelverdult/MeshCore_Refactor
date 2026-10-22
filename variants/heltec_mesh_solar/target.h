@@ -41,6 +41,7 @@ public:
 };
 
 extern MeshSolarBoard board;
+#define RADIOLIB_TARGET_GLOBALS   // radio, radio_driver and rtc_clock come from RadioLibTarget.cpp
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
 extern SolarSensorManager sensors;
