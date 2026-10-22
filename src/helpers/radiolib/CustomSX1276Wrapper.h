@@ -1,32 +1,24 @@
 #pragma once
 
 #include "CustomSX1276.h"
-#include "RadioLibWrappers.h"
+#include "CustomChipWrapper.h"
 
 #ifndef USE_SX1276
 #define USE_SX1276
 #endif
 
-class CustomSX1276Wrapper : public RadioLibWrapper {
+class CustomSX1276Wrapper : public CustomChipWrapper<CustomSX1276> {
 public:
-  CustomSX1276Wrapper(CustomSX1276& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
+  CustomSX1276Wrapper(CustomSX1276& radio, mesh::MainBoard& board) : CustomChipWrapper(radio, board) { }
 
+  // no receive deadlines: the chip class reads its modem status instead
   void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
-    ((CustomSX1276 *)_radio)->setFrequency(freq);
-    ((CustomSX1276 *)_radio)->setSpreadingFactor(sf);
-    ((CustomSX1276 *)_radio)->setBandwidth(bw);
-    ((CustomSX1276 *)_radio)->setCodingRate(cr);
-    updatePreamble(sf);
+    setModemParams(freq, bw, sf, cr);
   }
 
-  bool isReceivingPacket() override { 
-    return ((CustomSX1276 *)_radio)->isReceiving();
-  }
   float getCurrentRSSI() override {
-    return ((CustomSX1276 *)_radio)->getRSSI(false);
+    return chip()->getRSSI(false);
   }
-  float getLastRSSI() const override { return ((CustomSX1276 *)_radio)->getRSSI(); }
-  float getLastSNR() const override { return ((CustomSX1276 *)_radio)->getSNR(); }
 
-  uint8_t getSpreadingFactor() const override { return ((CustomSX1276 *)_radio)->spreadingFactor; }
+  uint8_t getSpreadingFactor() const override { return chip()->spreadingFactor; }
 };
