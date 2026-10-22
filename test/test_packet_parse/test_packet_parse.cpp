@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <signal.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -226,9 +227,15 @@ struct Parser {
   RecordingDispatcher d{radio, clock, mgr};
 };
 
+// A read of the guard page ends the child with exit code 3 instead of a crash, so
+// the system crash reporter is not started for every failing case.
+void exitOnFault(int) { _exit(3); }
+
 // Runs every path length byte of one route and length through a parser on a
-// guarded buffer, then exits 0. A read at or above `len` ends it with a signal.
+// guarded buffer, then exits 0. A read at or above `len` ends it with code 3.
 void parseGuarded(uint8_t route, int len, bool read_from) {
+  signal(SIGSEGV, exitOnFault);
+  signal(SIGBUS, exitOnFault);
   uint8_t header = route | (PAYLOAD_TYPE_TXT_MSG << PH_TYPE_SHIFT);
   GuardedBuffer g;
   Parser p;
@@ -249,7 +256,6 @@ void parseGuarded(uint8_t route, int len, bool read_from) {
 // Every route type, every length up to past the longest path, the path length
 // bytes above: a read at or above `len` kills the child, which fails the case.
 TEST(PacketParseDeathTest, TryParsePacketReadsNothingPastLen) {
-  GTEST_FLAG_SET(death_test_style, "threadsafe");
   for (uint8_t route : kRoutes) {
     for (int len = 0; len <= kMaxGuardedLen; len++) {
       EXPECT_EXIT(parseGuarded(route, len, false), testing::ExitedWithCode(0), "")
@@ -259,7 +265,6 @@ TEST(PacketParseDeathTest, TryParsePacketReadsNothingPastLen) {
 }
 
 TEST(PacketParseDeathTest, ReadFromReadsNothingPastLen) {
-  GTEST_FLAG_SET(death_test_style, "threadsafe");
   for (uint8_t route : kRoutes) {
     for (int len = 0; len <= kMaxGuardedLen; len++) {
       EXPECT_EXIT(parseGuarded(route, len, true), testing::ExitedWithCode(0), "")
