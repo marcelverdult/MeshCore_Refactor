@@ -1522,7 +1522,9 @@ environments of the series' matrix.
   `radio_init()` becomes weak (`W`) and comes from `RadioLibTarget.cpp`, the
   construction moves from the variant's initializer to `_GLOBAL__sub_I_radio_driver`,
   and the destructor registration with it (`_GLOBAL__sub_D_radio_driver`;
-  `SPIClass` has a destructor; in 27 of the 29, not in the C3 and C6 builds). Besides those, up to 8 functions per environment change size; for each, the link map says which object file its code comes from:
+  `SPIClass` has a destructor; in 27 of the 29, not in the C3 and C6 builds).
+  Besides those, up to 8 functions per environment change size; for each, the link
+  map says which object file its code comes from:
   - from an unchanged object file (`Dispatcher.cpp`, `Mesh.cpp`, `Packet.cpp`,
     `main.cpp`'s `loop()`, `AutoDiscoverRTCClock.cpp`, `ESP32Board.cpp`,
     `SSD1306Display.cpp`, `RadioLibWrappers.cpp`, even the prebuilt `libesp_wifi.a`):
