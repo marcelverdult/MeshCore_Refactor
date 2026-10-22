@@ -744,7 +744,7 @@ again against the handlers of `68e0fcdc` after the step (60 of 60 pass there too
   more loops, a `GET_CHANNEL` and a channel flood show afterwards, must be
   identical. Encrypted packets are compared by header, route, path and payload
   length, since the host's cipher mock leaves their content undefined (open
-  finding 3).
+  finding 3; since the mock was fixed, every packet is compared byte for byte).
 - `OneByteBelowEachMinimum`: for each of the 44 rows with a minimum above 1, the
   catalog frame at the minimum minus one byte answers `UNSUPPORTED`
   (`SEND_CHANNEL_DATA`: `ILLEGAL_ARG`) behind every tail and queues nothing; and the
@@ -932,5 +932,24 @@ Each needs its own fix and proposal; 10c leaves the code as it is.
    giving the mock a deterministic output means regenerating the golden file, a
    change of its own. `test_frame_bounds.cpp` compares encrypted packets by
    header, route, path and payload length only.
+
+   **Fixed after 10c** (branch `test/deterministic-aes-mock`): the mock XORs
+   each block with the key, so the output depends only on key and input, and
+   `decryptBlock()` undoes `encryptBlock()`. Measured before the fix: with every
+   fresh `malloc` block prefilled (macOS: an interposed `malloc`, fill `a5` and
+   `3c`; Linux container, glibc 2.41: `MALLOC_PERTURB_=165` and `60`) the sweep
+   differs in 20 lines, all of them `packets` digests, for every sending command
+   that encrypts: codes 2, 3, 26, 27, 39 and also 50, 52, 57, 62 (`02 03 1a 1b
+   27 32 34 39 3e` in the golden file). Only two environments reach the mock at
+   run time (checked with an `abort()` in it): `native_companion` and
+   `native_chat`, whose group message test asserts payload lengths only. The
+   golden file was regenerated; its diff is exactly those 20 `packets` digests,
+   with code, pass and `files` digest unchanged and no reply line touched.
+   After the fix the sweep is identical under every fill on both systems, and
+   `test_frame_bounds.cpp` compares every packet byte for byte again
+   (`packetLine()` is gone), on macOS and Linux and under every fill. That
+   comparison does see the leftovers: with the old mock it fails
+   `NoCommandReadsThePreviousFrame` in the Linux container, as the first CI run
+   of 10c did. All 17 host environments: 616 of 616 on macOS and on Linux.
 4. **`SEND_TRACE_PATH`'s upper bound is dead code.** `len - 10 >= MAX_PACKET_PAYLOAD - 5`
    needs 189 bytes; a frame has at most 176.
