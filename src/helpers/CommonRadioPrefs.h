@@ -1,66 +1,81 @@
 #pragma once
 #include "ConfigSerializer.h"
 #include "KeyValueStore.h"
+#include <RadioPrefsFields.h>
 
+/**
+ * \brief  The "radio" object of /prefs.json, the radio commands of the CLI and the
+ *         key/value access boards use, all bound to one RadioPrefsFields.
+ *
+ * NodePrefs owns the fields and an instance of this class bound to them. Setters
+ * mark this object dirty, which NodePrefs::isDirty() reports, so the owner knows
+ * the prefs need saving.
+ */
 class CommonRadioPrefs : public ConfigSerializer, public KeyValueStore {
+  RadioPrefsFields* _f;
   bool _is_dirty = false;
+
 protected:
-  CommonRadioPrefs() { }
+  void structure() override;   // the "radio" object of /prefs.json, see SETTINGS in CommonRadioPrefs.cpp
+
 public:
+  explicit CommonRadioPrefs(RadioPrefsFields& fields) : _f(&fields) { }
+
   void markDirty() { _is_dirty = true; }
-  void clearDirty() { _is_dirty = false; }
-  bool isDirty() const { return _is_dirty; }
+  void clearDirty() override { _is_dirty = false; }
+  bool isDirty() const override { return _is_dirty; }
 
-  virtual float getFreq() const = 0;
-  virtual void setFreq(float f) = 0;
+  float getFreq() const { return _f->freq; }
+  void setFreq(float f) { _f->freq = f; markDirty(); }
 
-  virtual float getBandwidth() const = 0;
-  virtual void setBandwidth(float bw) = 0;
+  float getBandwidth() const { return _f->bw; }
+  void setBandwidth(float bw) { _f->bw = bw; markDirty(); }
 
-  virtual uint8_t getSpreadFactor() const = 0;
-  virtual void setSpreadFactor(uint8_t sf) = 0;
+  uint8_t getSpreadFactor() const { return _f->sf; }
+  void setSpreadFactor(uint8_t sf) { _f->sf = sf; markDirty(); }
 
-  virtual uint8_t getCodingRate() const = 0;
-  virtual void setCodingRate(uint8_t cr) = 0;
+  uint8_t getCodingRate() const { return _f->cr; }
+  void setCodingRate(uint8_t cr) { _f->cr = cr; markDirty(); }
 
-  virtual float getAirtimeFactor() const = 0;
-  virtual void setAirtimeFactor(float af) = 0;
+  float getAirtimeFactor() const { return _f->airtime_factor; }
+  void setAirtimeFactor(float af) { _f->airtime_factor = af; markDirty(); }
 
-  virtual bool isCadEnabled() const = 0;
-  virtual void setCadEnabled(bool en) = 0;
+  bool isCadEnabled() const { return _f->cad_enabled; }
+  void setCadEnabled(bool en) { _f->cad_enabled = en; markDirty(); }
 
-  virtual uint8_t getIntThresh() const = 0;
-  virtual void setIntThresh(uint8_t t) = 0;
+  uint8_t getIntThresh() const { return _f->interference_threshold; }
+  void setIntThresh(uint8_t t) { _f->interference_threshold = t; markDirty(); }
 
-  virtual uint8_t getRxGain() const = 0;
-  virtual void setRxGain(uint8_t g) = 0;
+  uint8_t getRxGain() const { return _f->rx_boosted_gain; }
+  void setRxGain(uint8_t g) { _f->rx_boosted_gain = g; markDirty(); }
 
-  virtual uint8_t getTxPower() const = 0;
-  virtual void setTxPower(uint8_t dbm) = 0;
+  uint8_t getTxPower() const { return _f->tx_power_dbm; }
+  void setTxPower(uint8_t dbm) { _f->tx_power_dbm = dbm; markDirty(); }
 
-  virtual float getRxDelay() const = 0;
-  virtual void setRxDelay(float d) = 0;
+  float getRxDelay() const { return _f->rx_delay_base; }
+  void setRxDelay(float d) { _f->rx_delay_base = d; markDirty(); }
 
-  virtual uint16_t getAgcResetInt() const = 0;
-  virtual void setAgcResetInt(uint16_t secs) = 0;
+  // stored in units of 4 seconds
+  uint16_t getAgcResetInt() const { return _f->agc_reset_interval * 4; }
+  void setAgcResetInt(uint16_t secs) { _f->agc_reset_interval = secs / 4; markDirty(); }
 
-  virtual uint8_t getHashMode() const = 0;
-  virtual void setHashMode(uint8_t m) = 0;
+  uint8_t getHashMode() const { return _f->path_hash_mode; }
+  void setHashMode(uint8_t m) { _f->path_hash_mode = m; markDirty(); }
 
-  virtual uint8_t getMultiAcks() const = 0;
-  virtual void setMultiAcks(uint8_t m) = 0;
+  uint8_t getMultiAcks() const { return _f->multi_acks; }
+  void setMultiAcks(uint8_t m) { _f->multi_acks = m; markDirty(); }
 
-  virtual float getFloodTxDelay() const = 0;
-  virtual void setFloodTxDelay(float d) = 0;
+  float getFloodTxDelay() const { return _f->tx_delay_factor; }
+  void setFloodTxDelay(float d) { _f->tx_delay_factor = d; markDirty(); }
 
-  virtual float getDirectTxDelay() const = 0;
-  virtual void setDirectTxDelay(float d) = 0;
+  float getDirectTxDelay() const { return _f->direct_tx_delay_factor; }
+  void setDirectTxDelay(float d) { _f->direct_tx_delay_factor = d; markDirty(); }
 
-  virtual uint8_t getFEMRxGain() const = 0;
-  virtual void setFEMRxGain(uint8_t g) = 0;
+  uint8_t getFEMRxGain() const { return _f->radio_fem_rxgain; }
+  void setFEMRxGain(uint8_t g) { _f->radio_fem_rxgain = g; markDirty(); }
 
-  virtual uint8_t getFEMTxGain() const = 0;
-  virtual void setFEMTxGain(uint8_t g) = 0;
+  uint8_t getFEMTxGain() const { return _f->radio_fem_txgain; }
+  void setFEMTxGain(uint8_t g) { _f->radio_fem_txgain = g; markDirty(); }
 
   bool handleCommand(const char* command, uint32_t sender_timestamp, char* reply);
 

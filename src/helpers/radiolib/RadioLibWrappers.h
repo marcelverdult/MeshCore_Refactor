@@ -12,6 +12,8 @@ struct PacketMillis {
 };
 
 class RadioLibWrapper : public mesh::Radio {
+  friend class RadioNoiseListener;  // listens on _radio, without a public accessor for it
+  friend struct RadioLibTargetAccess;  // RadioLibTarget.cpp starts _radio in the default radio_init()
 protected:
   PhysicalLayer* _radio;
   mesh::MainBoard* _board;
@@ -73,7 +75,11 @@ public:
   virtual float getLastRSSI() const override;
   virtual float getLastSNR() const override;
 
-  float packetScore(float snr, int packet_len) override { return packetScoreInt(snr, 10, packet_len); }  // assume sf=10
+  // The score depends on the spreading factor, because the SNR a packet needs
+  // to be decodable rises as the spreading factor falls. Ask the driver for it
+  // rather than assume one: a guess here is wrong on every radio that does not
+  // happen to run at that factor, and it silently stays wrong.
+  float packetScore(float snr, int packet_len) override { return packetScoreInt(snr, getSpreadingFactor(), packet_len); }
 
   virtual bool setRxBoostedGainMode(bool) { return false; }
   virtual bool getRxBoostedGainMode() const { return false; }
@@ -89,6 +95,9 @@ class RadioNoiseListener : public mesh::RNG {
   PhysicalLayer* _radio;
 public:
   RadioNoiseListener(PhysicalLayer& radio): _radio(&radio) { }
+  // The radio a driver wraps, for code that has only the driver (radio_driver),
+  // not the variant's global radio object.
+  explicit RadioNoiseListener(RadioLibWrapper& driver): _radio(driver._radio) { }
 
   void random(uint8_t* dest, size_t sz) override {
 #ifdef USE_CC310_HW_CRYPTO

@@ -23,15 +23,3 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager();
   DISPLAY_CLASS display;
   MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
 #endif
-
-bool radio_init() {
-  rtc_clock.begin(Wire);
-
-  return radio.std_init(&SPI);
-}
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-

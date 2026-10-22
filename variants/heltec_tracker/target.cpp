@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "target.h"
 
+#include <helpers/MillisDeadline.h>
 #include <helpers/sensors/MicroNMEALocationProvider.h>
 
 HeltecV3Board board;
@@ -37,11 +38,6 @@ bool radio_init() {
 
 }
 
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-
 void HWTSensorManager::start_gps() {
   if (!gps_active) {
     _location->begin();  // Claims periph_power via RefCountedDigitalPin
@@ -71,11 +67,11 @@ bool HWTSensorManager::querySensors(uint8_t requester_permissions, CayenneLPP& t
 }
 
 void HWTSensorManager::loop() {
-  static long next_gps_update = 0;
+  static uint32_t next_gps_update = 0;
 
   _location->loop();
 
-  if (millis() > next_gps_update) {
+  if (mesh::millisHasPassed(millis(), next_gps_update)) {
     if (gps_active && _location->isValid()) {
       node_lat = ((double)_location->getLatitude())/1000000.;
       node_lon = ((double)_location->getLongitude())/1000000.;

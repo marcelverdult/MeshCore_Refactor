@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "target.h"
 #include <helpers/ArduinoHelpers.h>
+#include <helpers/MillisDeadline.h>
 #include <helpers/sensors/MicroNMEALocationProvider.h>
 
 MeshSolarBoard board;
@@ -18,16 +19,6 @@ SolarExternalWatchdog external_watchdog;
 #ifdef DISPLAY_CLASS
   DISPLAY_CLASS display;
 #endif
-
-bool radio_init() {
-  rtc_clock.begin(Wire);
-  return radio.std_init(&SPI);
-}
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
 
 void SolarSensorManager::start_gps() {
   if (!gps_active) {
@@ -66,11 +57,11 @@ bool SolarSensorManager::querySensors(uint8_t requester_permissions, CayenneLPP&
 }
 
 void SolarSensorManager::loop() {
-  static long next_gps_update = 0;
+  static uint32_t next_gps_update = 0;
 
   _location->loop();
 
-  if (millis() > next_gps_update) {
+  if (mesh::millisHasPassed(millis(), next_gps_update)) {
     if (_location->isValid()) {
       node_lat = ((double)_location->getLatitude())/1000000.;
       node_lon = ((double)_location->getLongitude())/1000000.;

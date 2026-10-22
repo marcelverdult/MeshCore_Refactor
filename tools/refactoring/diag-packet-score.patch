@@ -1,0 +1,25 @@
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 99a9aa30..eeec4e39 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -2077,6 +2077,20 @@ void MyMesh::enterCLIRescue() {
+ }
+ 
+ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char* reply) {
++  if (strcmp(command, "diag score") == 0) {   // diagnostic build only, not part of any commit
++    // cfg = spreading factor the prefs ask for, rep = what the radio reports.
++    // sNNN = packetScore at that SNR for a 64 byte packet, scaled by 1000.
++    // rx5 = flood rebroadcast delay at SNR -5 dB and 500 ms airtime.
++    sprintf(reply, "> cfg=%d rep=%d s0=%d s5=%d s10=%d s15=%d rx5=%d",
++      (int)_prefs.sf,
++      (int)radio_driver.getSpreadingFactor(),
++      (int)(radio_driver.packetScore(0.0f, 64) * 1000),
++      (int)(radio_driver.packetScore(-5.0f, 64) * 1000),
++      (int)(radio_driver.packetScore(-10.0f, 64) * 1000),
++      (int)(radio_driver.packetScore(-15.0f, 64) * 1000),
++      calcRxDelay(radio_driver.packetScore(-5.0f, 64), 500));
++    return true;
++  }
+   while (*command == ' ') command++; // skip leading spaces
+ 
+   if (strlen(command) > 4 && command[2] == '|') { // optional prefix (for companion radio CLI)

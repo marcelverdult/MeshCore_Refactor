@@ -1,0 +1,13 @@
+set tx 18
+set af 1.5
+set rxdelay 2.25
+set txdelay 0.6
+set direct.txdelay 0.15
+set int.thresh 7
+set agc.reset.interval 24
+set multi.acks 0
+set path.hash.mode 0
+set cad off
+set radio.rxgain on
+set flood.max 48
+set owner.info set-by-B

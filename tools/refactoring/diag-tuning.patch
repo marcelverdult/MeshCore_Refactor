@@ -1,0 +1,34 @@
+diff --git a/examples/companion_radio/MyMesh.cpp b/examples/companion_radio/MyMesh.cpp
+index 5b14e7d0..56befd36 100644
+--- a/examples/companion_radio/MyMesh.cpp
++++ b/examples/companion_radio/MyMesh.cpp
+@@ -2050,6 +2050,12 @@ void MyMesh::enterCLIRescue() {
+ }
+ 
+ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char* reply) {
++  if (strcmp(command, "diag tuning") == 0) {   // diagnostic build only, not part of any commit
++    sprintf(reply, "> af100=%d rx=%d thr=%d cad=%d agc=%d acks=%d", (int)(getAirtimeBudgetFactor() * 100),
++      calcRxDelay(0.3f, 1000), getInterferenceThreshold(), (int)getCADEnabled(), getAGCResetInterval(),
++      (int)getExtraAckTransmitCount());
++    return true;
++  }
+   while (*command == ' ') command++; // skip leading spaces
+ 
+   if (strlen(command) > 4 && command[2] == '|') { // optional prefix (for companion radio CLI)
+diff --git a/examples/simple_room_server/MyMesh.cpp b/examples/simple_room_server/MyMesh.cpp
+index 10cca41c..1efd7eae 100644
+--- a/examples/simple_room_server/MyMesh.cpp
++++ b/examples/simple_room_server/MyMesh.cpp
+@@ -885,6 +885,12 @@ void MyMesh::formatPacketStatsReply(char *reply) {
+ }
+ 
+ void MyMesh::handleCommand(uint32_t sender_timestamp, char *command, char *reply) {
++  if (strcmp(command, "diag tuning") == 0) {   // diagnostic build only, not part of any commit
++    sprintf(reply, "> af100=%d rx=%d thr=%d cad=%d agc=%d acks=%d", (int)(getAirtimeBudgetFactor() * 100),
++      calcRxDelay(0.3f, 1000), getInterferenceThreshold(), (int)getCADEnabled(), getAGCResetInterval(),
++      (int)getExtraAckTransmitCount());
++    return;
++  }
+   if (region_load_active) {
+     if (StrHelper::isBlank(command)) {  // empty/blank line, signal to terminate 'load' operation
+       region_map = temp_map;  // copy over the temp instance as new current map

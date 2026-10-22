@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "target.h"
+#include <helpers/MillisDeadline.h>
 #include <helpers/sensors/MicroNMEALocationProvider.h>
 #include <helpers/sensors/AirohaSleep.h>
 
@@ -19,11 +20,6 @@ MeshTrackerX1SensorManager sensors = MeshTrackerX1SensorManager(nmea);
 
 bool radio_init() {
   return radio.std_init(&SPI);
-}
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
 }
 
 void MeshTrackerX1SensorManager::start_gps() {
@@ -75,12 +71,12 @@ bool MeshTrackerX1SensorManager::querySensors(uint8_t requester_permissions, Cay
 }
 
 void MeshTrackerX1SensorManager::loop() {
-  static long next_gps_update = 0;
+  static uint32_t next_gps_update = 0;
 
 
   _nmea->loop();
 
-  if (millis() > next_gps_update) {
+  if (mesh::millisHasPassed(millis(), next_gps_update)) {
     if (gps_active && _nmea->isValid()) {
       node_lat = ((double)_nmea->getLatitude())/1000000.;
       node_lon = ((double)_nmea->getLongitude())/1000000.;

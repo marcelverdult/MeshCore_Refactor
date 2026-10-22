@@ -58,16 +58,19 @@ protected:
 
   /**
    * \returns  number of milliseconds delay to apply to retransmitting the given packet.
+   *           With radio settings attached (useRadioPrefs()), random up to 5 x airtime x tx_delay_factor.
    */
   virtual uint32_t getRetransmitDelay(const Packet* packet);
 
   /**
    * \returns  number of milliseconds delay to apply to retransmitting the given packet, for DIRECT mode.
+   *           With radio settings attached, as above with direct_tx_delay_factor; otherwise no delay.
    */
   virtual uint32_t getDirectRetransmitDelay(const Packet* packet);
 
   /**
    * \returns  number of extra (Direct) ACK transmissions wanted.
+   *           With radio settings attached, their multi_acks; otherwise none.
    */
   virtual uint8_t getExtraAckTransmitCount() const;
 

@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <helpers/ArduinoHelpers.h>
+#include <helpers/MillisDeadline.h>
 #include <helpers/sensors/MicroNMEALocationProvider.h>
 
 NanoG2Ultra board;
@@ -19,11 +20,6 @@ NanoG2UltraSensorManager sensors = NanoG2UltraSensorManager(nmea);
 DISPLAY_CLASS display;
 MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
 #endif
-
-bool radio_init() {
-  rtc_clock.begin(Wire);
-  return radio.std_init(&SPI);
-}
 
 void NanoG2UltraSensorManager::start_gps() {
   MESH_DEBUG_PRINTLN("Starting GPS");
@@ -73,7 +69,7 @@ bool NanoG2UltraSensorManager::querySensors(uint8_t requester_permissions, Cayen
 }
 
 void NanoG2UltraSensorManager::loop() {
-  static long next_gps_update = 0;
+  static uint32_t next_gps_update = 0;
 
   if (!gps_active) {
     return; // GPS is not active, skip further processing
@@ -81,7 +77,7 @@ void NanoG2UltraSensorManager::loop() {
 
   _location->loop();
 
-  if (millis() > next_gps_update) {
+  if (mesh::millisHasPassed(millis(), next_gps_update)) {
     if (_location->isValid()) {
       node_lat = ((double)_location->getLatitude()) / 1000000.;
       node_lon = ((double)_location->getLongitude()) / 1000000.;
@@ -120,9 +116,4 @@ bool NanoG2UltraSensorManager::setSettingValue(const char *name, const char *val
     return true;
   }
   return false; // not supported
-}
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng); // create new random identity
 }

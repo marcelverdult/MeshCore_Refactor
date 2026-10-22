@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "target.h"
 
+#include <helpers/MillisDeadline.h>
 #include <helpers/sensors/MicroNMEALocationProvider.h>
 
 MeshadventurerBoard board;
@@ -28,11 +29,6 @@ bool radio_init() {
 #else
   return radio.std_init();
 #endif
-}
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
 }
 
 
@@ -65,9 +61,9 @@ bool MASensorManager::querySensors(uint8_t requester_permissions, CayenneLPP& te
 }
 
 void MASensorManager::loop() {
-  static long next_gps_update = 0;
+  static uint32_t next_gps_update = 0;
   _location->loop();
-  if(millis() > next_gps_update && gps_active) {
+  if(mesh::millisHasPassed(millis(), next_gps_update) && gps_active) {
     if(_location->isValid()) {
       node_lat = ((double)_location->getLatitude()) / 1000000.;
       node_lon = ((double)_location->getLongitude()) / 1000000.;

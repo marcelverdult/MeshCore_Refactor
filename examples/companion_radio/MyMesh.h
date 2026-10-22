@@ -127,16 +127,6 @@ public:
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
 
 protected:
-  float getAirtimeBudgetFactor() const override;
-  int getInterferenceThreshold() const override;
-  bool getCADEnabled() const override;
-  int getAGCResetInterval() const override {
-    return ((int)_prefs.agc_reset_interval) * 4000;   // milliseconds
-  }
-  int calcRxDelay(float score, uint32_t air_time) const override;
-  uint32_t getRetransmitDelay(const mesh::Packet *packet) override;
-  uint32_t getDirectRetransmitDelay(const mesh::Packet *packet) override;
-  uint8_t getExtraAckTransmitCount() const override;
   bool filterRecvFloodPacket(mesh::Packet* packet) override;
   bool allowPacketForward(const mesh::Packet* packet) override;
 
@@ -229,6 +219,73 @@ private:
   bool putBlobByKey(const uint8_t key[], int key_len, const uint8_t src_buf[], int len) override {
     return _store->putBlobByKey(key, key_len, src_buf, len);
   }
+
+  // The companion protocol, see CMD_TABLE in MyMesh.cpp: one handler per command.
+  struct CmdHandler {
+    uint8_t code;
+    uint8_t min_len;                       // whole frame, the code byte included
+    bool (MyMesh::*handle)(size_t len);    // false: not this command after all
+  };
+  static const CmdHandler CMD_TABLE[];
+  bool cmdDeviceQuery(size_t len);
+  bool cmdAppStart(size_t len);
+  bool cmdRunCliCommand(size_t len);
+  bool cmdSendTxtMsg(size_t len);
+  bool cmdSendChannelTxtMsg(size_t len);
+  bool cmdSendChannelData(size_t len);
+  bool cmdGetContacts(size_t len);
+  bool cmdSetAdvertName(size_t len);
+  bool cmdSetAdvertLatlon(size_t len);
+  bool cmdGetDeviceTime(size_t len);
+  bool cmdSetDeviceTime(size_t len);
+  bool cmdSendSelfAdvert(size_t len);
+  bool cmdResetPath(size_t len);
+  bool cmdAddUpdateContact(size_t len);
+  bool cmdRemoveContact(size_t len);
+  bool cmdShareContact(size_t len);
+  bool cmdGetContactByKey(size_t len);
+  bool cmdExportContact(size_t len);
+  bool cmdImportContact(size_t len);
+  bool cmdSyncNextMessage(size_t len);
+  bool cmdSetRadioParams(size_t len);
+  bool cmdSetRadioTxPower(size_t len);
+  bool cmdSetTuningParams(size_t len);
+  bool cmdGetTuningParams(size_t len);
+  bool cmdSetOtherParams(size_t len);
+  bool cmdSetPathHashMode(size_t len);
+  bool cmdReboot(size_t len);
+  bool cmdGetBattAndStorage(size_t len);
+  bool cmdExportPrivateKey(size_t len);
+  bool cmdImportPrivateKey(size_t len);
+  bool cmdSendRawData(size_t len);
+  bool cmdSendLogin(size_t len);
+  bool cmdSendAnonReq(size_t len);
+  bool cmdSendStatusReq(size_t len);
+  bool cmdSendPathDiscoveryReq(size_t len);
+  bool cmdSendTelemetryReq(size_t len);
+  bool cmdSendBinaryReq(size_t len);
+  bool cmdHasConnection(size_t len);
+  bool cmdLogout(size_t len);
+  bool cmdGetChannel(size_t len);
+  bool cmdSetChannel(size_t len);
+  bool cmdSignStart(size_t len);
+  bool cmdSignData(size_t len);
+  bool cmdSignFinish(size_t len);
+  bool cmdSendTracePath(size_t len);
+  bool cmdSetDevicePin(size_t len);
+  bool cmdGetCustomVars(size_t len);
+  bool cmdSetCustomVar(size_t len);
+  bool cmdGetAdvertPath(size_t len);
+  bool cmdGetStats(size_t len);
+  bool cmdFactoryReset(size_t len);
+  bool cmdSetFloodScopeKey(size_t len);
+  bool cmdSetDefaultFloodScope(size_t len);
+  bool cmdGetDefaultFloodScope(size_t len);
+  bool cmdSendControlData(size_t len);
+  bool cmdSetAutoaddConfig(size_t len);
+  bool cmdGetAutoaddConfig(size_t len);
+  bool cmdGetAllowedRepeatFreq(size_t len);
+  bool cmdSendRawPacket(size_t len);
 
   void checkCLIRescueCmd();
   bool handleCommand(const char* text, uint32_t sender_timestamp, char* reply);

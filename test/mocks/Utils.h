@@ -10,6 +10,11 @@
 #define SIGNATURE_SIZE 64
 #define CIPHER_MAC_SIZE 16
 
+// Stands in for the same no-op definitions in src/MeshCore.h, which is the
+// header the real Utils.h pulls these constants from.
+#define MESH_DEBUG_PRINT(...) {}
+#define MESH_DEBUG_PRINTLN(...) {}
+
 namespace mesh {
 
 class RNG {

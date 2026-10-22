@@ -16,4 +16,6 @@ cmake-*
 compile_commands.json
 .venv/
 venv/
+__pycache__/
+*.pyc
 platformio.local.ini

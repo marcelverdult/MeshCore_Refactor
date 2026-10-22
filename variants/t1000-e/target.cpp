@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include "t1000e_sensors.h"
 #include "target.h"
+#include <helpers/MillisDeadline.h>
 #include <helpers/sensors/MicroNMEALocationProvider.h>
 #include <helpers/sensors/AirohaSleep.h>
 
@@ -75,11 +76,6 @@ bool radio_init() {
   return true;  // success
 }
 
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}
-
 void T1000SensorManager::start_gps() {
   gps_active = true;
   digitalWrite(GPS_EN, HIGH);
@@ -120,11 +116,11 @@ bool T1000SensorManager::querySensors(uint8_t requester_permissions, CayenneLPP&
 }
 
 void T1000SensorManager::loop() {
-  static long next_gps_update = 0;
+  static uint32_t next_gps_update = 0;
 
   _nmea->loop();
 
-  if (millis() > next_gps_update) {
+  if (mesh::millisHasPassed(millis(), next_gps_update)) {
     if (gps_active && _nmea->isValid()) {
       node_lat = ((double)_nmea->getLatitude())/1000000.;
       node_lon = ((double)_nmea->getLongitude())/1000000.;

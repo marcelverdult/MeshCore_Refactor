@@ -1,0 +1,16 @@
+ver
+get radio
+get freq
+get tx
+get af
+get dutycycle
+get rxdelay
+get txdelay
+get direct.txdelay
+get int.thresh
+get agc.reset.interval
+get multi.acks
+get path.hash.mode
+get cad
+get radio.rxgain
+get tz.offset

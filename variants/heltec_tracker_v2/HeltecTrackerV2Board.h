@@ -3,10 +3,12 @@
 #include <Arduino.h>
 #include <helpers/RefCountedDigitalPin.h>
 #include <helpers/ESP32Board.h>
+#include <helpers/FemRxGain.h>
 #include "LoRaFEMControl.h"
 
 class HeltecTrackerV2Board : public ESP32Board {
-  KeyValueStore* _prefs = NULL;
+  friend class FemRxGain<HeltecTrackerV2Board>;
+  FemRxGain<HeltecTrackerV2Board> fem_rxgain;
 
   bool setLoRaFemLnaEnabled(bool enable);
   bool isLoRaFemLnaEnabled() const;

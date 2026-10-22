@@ -74,6 +74,17 @@ class TestStruct : public ConfigSerializer {
     uint8_t flags;
 };
 
+class TestNumbers : public ConfigSerializer {
+  protected:
+    void structure() override {
+        def("ratio", ratio);
+        def("lat", lat);
+    }
+  public:
+    float  ratio = 1.5f;
+    double lat   = 2.5;
+};
+
 // ── saveSerial: basic ───────────────────────────────────────────────────────
 
 TEST(ConfigSerializer, SaveSerial_Basic) {
@@ -312,6 +323,64 @@ TEST(DynamicConfigSerializer, LoadCustom_Basic) {
 }
 
 // ── main ───────────────────────────────────────────────────────
+
+// ── loadSerial: numbers that are not finite ────────────────────────────────
+
+// The values a node runs on are set up before /prefs.json is read, so a token
+// that is not a finite number has to leave the value that is already there.
+// Clamping it into range is no help: there is no sensible nearest value for a
+// NaN, and for a frequency the nearest bound would put the radio on 150 MHz.
+
+TEST(ConfigSerializer, LoadSerial_KeepsDefaultOnNotANumber) {
+    MockInputStream s("{ratio:nan,lat:nan}");
+
+    TestNumbers data;
+    EXPECT_TRUE(data.loadSerial(s));
+
+    EXPECT_FLOAT_EQ(1.5f, data.ratio);
+    EXPECT_DOUBLE_EQ(2.5, data.lat);
+}
+
+TEST(ConfigSerializer, LoadSerial_KeepsDefaultOnInfinity) {
+    MockInputStream s("{ratio:inf,lat:-inf}");
+
+    TestNumbers data;
+    EXPECT_TRUE(data.loadSerial(s));
+
+    EXPECT_FLOAT_EQ(1.5f, data.ratio);
+    EXPECT_DOUBLE_EQ(2.5, data.lat);
+}
+
+// 1e40 is finite as a double and overflows to infinity as a float, so the
+// check has to look at the value that is about to be stored.
+TEST(ConfigSerializer, LoadSerial_KeepsDefaultWhenFloatOverflows) {
+    MockInputStream s("{ratio:1e40}");
+
+    TestNumbers data;
+    EXPECT_TRUE(data.loadSerial(s));
+
+    EXPECT_FLOAT_EQ(1.5f, data.ratio);
+}
+
+TEST(ConfigSerializer, LoadSerial_AcceptsFiniteNumbers) {
+    MockInputStream s("{ratio:-6.125,lat:12.5}");
+
+    TestNumbers data;
+    EXPECT_TRUE(data.loadSerial(s));
+
+    EXPECT_FLOAT_EQ(-6.125f, data.ratio);
+    EXPECT_DOUBLE_EQ(12.5, data.lat);
+}
+
+// Garbage parses as zero and is stored, which is what the old code did.
+TEST(ConfigSerializer, LoadSerial_StoresZeroForGarbage) {
+    MockInputStream s("{ratio:abc}");
+
+    TestNumbers data;
+    EXPECT_TRUE(data.loadSerial(s));
+
+    EXPECT_FLOAT_EQ(0.0f, data.ratio);
+}
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

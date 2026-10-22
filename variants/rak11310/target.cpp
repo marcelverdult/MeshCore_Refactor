@@ -21,8 +21,3 @@ bool radio_init() {
 void radio_set_tx_power(int8_t dbm) {
   radio.setOutputPower(dbm);
 }
-
-mesh::LocalIdentity radio_new_identity() {
-  RadioNoiseListener rng(radio);
-  return mesh::LocalIdentity(&rng);  // create new random identity
-}

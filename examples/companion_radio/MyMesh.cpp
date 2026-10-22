@@ -1,4 +1,5 @@
 #include "MyMesh.h"
+#include <helpers/FrameReader.h>
 
 #include <Arduino.h> // needed for PlatformIO
 #ifdef ENABLE_WIFI_INTERFACE
@@ -259,34 +260,6 @@ int MyMesh::getFromOfflineQueue(uint8_t frame[]) {
   return 0; // queue is empty
 }
 
-float MyMesh::getAirtimeBudgetFactor() const {
-  return _prefs.airtime_factor;
-}
-
-int MyMesh::getInterferenceThreshold() const {
-  return _prefs.interference_threshold;
-}
-bool MyMesh::getCADEnabled() const {
-  return _prefs.cad_enabled;
-}
-
-int MyMesh::calcRxDelay(float score, uint32_t air_time) const {
-  if (_prefs.rx_delay_base <= 0.0f) return 0;
-  return (int)((pow(_prefs.rx_delay_base, 0.85f - score) - 1.0) * air_time);
-}
-
-uint32_t MyMesh::getRetransmitDelay(const mesh::Packet *packet) {
-  uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.tx_delay_factor);
-  return getRNG()->nextInt(0, 5*t + 1);
-}
-uint32_t MyMesh::getDirectRetransmitDelay(const mesh::Packet *packet) {
-  uint32_t t = (_radio->getEstAirtimeFor(packet->getPathByteLen() + packet->payload_len + 2) * _prefs.direct_tx_delay_factor);
-  return getRNG()->nextInt(0, 5*t + 1);
-}
-
-uint8_t MyMesh::getExtraAckTransmitCount() const {
-  return _prefs.multi_acks;
-}
 
 void MyMesh::logRxRaw(float snr, float rssi, const uint8_t raw[], int len) {
   if (_serial->isConnected() && len + 3 <= MAX_FRAME_SIZE) {
@@ -900,6 +873,7 @@ void MyMesh::onSendTimeout() {}
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _listener(NULL), _iter(0) {
+  useRadioPrefs(&_prefs);   // the core reads its tuning (delays, duty cycle, CAD, AGC, extra ACKs) from these settings
   _iter_started = false;
   _cli_rescue = false;
   cli_command[0] = 0;
@@ -1052,249 +1026,484 @@ void MyMesh::startInterface(BaseSerialInterface &serial) {
   serial.enable();
 }
 
+// The bytes a path length byte announces; Packet::writePath() copies as many.
+static size_t pathByteLen(uint8_t path_len) {
+  return (path_len & 63) * ((path_len >> 6) + 1);
+}
+
+// One row per command: the code, the shortest frame the command accepts (code byte
+// included), and its handler. A frame below the minimum, a code without a row, and
+// a handler that returns false ("not this command") all get the answer the if chain
+// this table replaced gave them: ERR_CODE_UNSUPPORTED_CMD.
+const MyMesh::CmdHandler MyMesh::CMD_TABLE[] = {
+  { CMD_DEVICE_QUERY,            2,                                                 &MyMesh::cmdDeviceQuery },
+  { CMD_APP_START,               8,                                                 &MyMesh::cmdAppStart },
+  { CMD_RUN_CLI_COMMAND,         3,                                                 &MyMesh::cmdRunCliCommand },
+  { CMD_SEND_TXT_MSG,            14,                                                &MyMesh::cmdSendTxtMsg },
+  { CMD_SEND_CHANNEL_TXT_MSG,    7,                                                 &MyMesh::cmdSendChannelTxtMsg },
+  { CMD_SEND_CHANNEL_DATA,       1,                                                 &MyMesh::cmdSendChannelData },
+  { CMD_GET_CONTACTS,            1,                                                 &MyMesh::cmdGetContacts },
+  { CMD_SET_ADVERT_NAME,         2,                                                 &MyMesh::cmdSetAdvertName },
+  { CMD_SET_ADVERT_LATLON,       9,                                                 &MyMesh::cmdSetAdvertLatlon },
+  { CMD_GET_DEVICE_TIME,         1,                                                 &MyMesh::cmdGetDeviceTime },
+  { CMD_SET_DEVICE_TIME,         5,                                                 &MyMesh::cmdSetDeviceTime },
+  { CMD_SEND_SELF_ADVERT,        1,                                                 &MyMesh::cmdSendSelfAdvert },
+  { CMD_RESET_PATH,              1 + 32,                                            &MyMesh::cmdResetPath },
+  { CMD_ADD_UPDATE_CONTACT,      1 + PUB_KEY_SIZE + 3 + MAX_PATH_SIZE + 32 + 4,     &MyMesh::cmdAddUpdateContact },
+  { CMD_REMOVE_CONTACT,          1 + PUB_KEY_SIZE,                                  &MyMesh::cmdRemoveContact },
+  { CMD_SHARE_CONTACT,           1 + PUB_KEY_SIZE,                                  &MyMesh::cmdShareContact },
+  { CMD_GET_CONTACT_BY_KEY,      1 + PUB_KEY_SIZE,                                  &MyMesh::cmdGetContactByKey },
+  { CMD_EXPORT_CONTACT,          1,                                                 &MyMesh::cmdExportContact },
+  { CMD_IMPORT_CONTACT,          2 + 32 + 64 + 1,                                   &MyMesh::cmdImportContact },
+  { CMD_SYNC_NEXT_MESSAGE,       1,                                                 &MyMesh::cmdSyncNextMessage },
+  { CMD_SET_RADIO_PARAMS,        11,                                                &MyMesh::cmdSetRadioParams },
+  { CMD_SET_RADIO_TX_POWER,      2,                                                 &MyMesh::cmdSetRadioTxPower },
+  { CMD_SET_TUNING_PARAMS,       9,                                                 &MyMesh::cmdSetTuningParams },
+  { CMD_GET_TUNING_PARAMS,       1,                                                 &MyMesh::cmdGetTuningParams },
+  { CMD_SET_OTHER_PARAMS,        2,                                                 &MyMesh::cmdSetOtherParams },
+  { CMD_SET_PATH_HASH_MODE,      3,                                                 &MyMesh::cmdSetPathHashMode },
+  { CMD_REBOOT,                  7,                                                 &MyMesh::cmdReboot },
+  { CMD_GET_BATT_AND_STORAGE,    1,                                                 &MyMesh::cmdGetBattAndStorage },
+  { CMD_EXPORT_PRIVATE_KEY,      1,                                                 &MyMesh::cmdExportPrivateKey },
+  { CMD_IMPORT_PRIVATE_KEY,      65,                                                &MyMesh::cmdImportPrivateKey },
+  { CMD_SEND_RAW_DATA,           6,                                                 &MyMesh::cmdSendRawData },
+  { CMD_SEND_LOGIN,              1 + PUB_KEY_SIZE,                                  &MyMesh::cmdSendLogin },
+  { CMD_SEND_ANON_REQ,           1 + PUB_KEY_SIZE + 1,                              &MyMesh::cmdSendAnonReq },
+  { CMD_SEND_STATUS_REQ,         1 + PUB_KEY_SIZE,                                  &MyMesh::cmdSendStatusReq },
+  { CMD_SEND_PATH_DISCOVERY_REQ, 2 + PUB_KEY_SIZE,                                  &MyMesh::cmdSendPathDiscoveryReq },
+  { CMD_SEND_TELEMETRY_REQ,      4,                                                 &MyMesh::cmdSendTelemetryReq },
+  { CMD_SEND_BINARY_REQ,         2 + PUB_KEY_SIZE,                                  &MyMesh::cmdSendBinaryReq },
+  { CMD_HAS_CONNECTION,          1 + PUB_KEY_SIZE,                                  &MyMesh::cmdHasConnection },
+  { CMD_LOGOUT,                  1 + PUB_KEY_SIZE,                                  &MyMesh::cmdLogout },
+  { CMD_GET_CHANNEL,             2,                                                 &MyMesh::cmdGetChannel },
+  { CMD_SET_CHANNEL,             2 + 32 + 16,                                       &MyMesh::cmdSetChannel },
+  { CMD_SIGN_START,              1,                                                 &MyMesh::cmdSignStart },
+  { CMD_SIGN_DATA,               1 + 1,                                             &MyMesh::cmdSignData },
+  { CMD_SIGN_FINISH,             1,                                                 &MyMesh::cmdSignFinish },
+  { CMD_SEND_TRACE_PATH,         10 + 1,                                            &MyMesh::cmdSendTracePath },
+  { CMD_SET_DEVICE_PIN,          5,                                                 &MyMesh::cmdSetDevicePin },
+  { CMD_GET_CUSTOM_VARS,         1,                                                 &MyMesh::cmdGetCustomVars },
+  { CMD_SET_CUSTOM_VAR,          4,                                                 &MyMesh::cmdSetCustomVar },
+  { CMD_GET_ADVERT_PATH,         PUB_KEY_SIZE+2,                                    &MyMesh::cmdGetAdvertPath },
+  { CMD_GET_STATS,               2,                                                 &MyMesh::cmdGetStats },
+  { CMD_FACTORY_RESET,           6,                                                 &MyMesh::cmdFactoryReset },
+  { CMD_SET_FLOOD_SCOPE_KEY,     2,                                                 &MyMesh::cmdSetFloodScopeKey },
+  { CMD_SET_DEFAULT_FLOOD_SCOPE, 1,                                                 &MyMesh::cmdSetDefaultFloodScope },
+  { CMD_GET_DEFAULT_FLOOD_SCOPE, 1,                                                 &MyMesh::cmdGetDefaultFloodScope },
+  { CMD_SEND_CONTROL_DATA,       2,                                                 &MyMesh::cmdSendControlData },
+  { CMD_SET_AUTOADD_CONFIG,      2,                                                 &MyMesh::cmdSetAutoaddConfig },
+  { CMD_GET_AUTOADD_CONFIG,      1,                                                 &MyMesh::cmdGetAutoaddConfig },
+  { CMD_GET_ALLOWED_REPEAT_FREQ, 1,                                                 &MyMesh::cmdGetAllowedRepeatFreq },
+  { CMD_SEND_RAW_PACKET,         4,                                                 &MyMesh::cmdSendRawPacket },
+};
+
 void MyMesh::handleCmdFrame(size_t len) {
-  if (cmd_frame[0] == CMD_DEVICE_QUERY && len >= 2) { // sent when app establishes connection
-    app_target_ver = cmd_frame[1];                    // which version of protocol does app understand
+  for (const CmdHandler& c : CMD_TABLE) {
+    if (c.code != cmd_frame[0]) continue;
+    if (len >= c.min_len && (this->*c.handle)(len)) return;
+    break;
+  }
+  writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+  MESH_DEBUG_PRINTLN("ERROR: unknown command: %02X", cmd_frame[0]);
+}
 
-    int i = 0;
-    out_frame[i++] = RESP_CODE_DEVICE_INFO;
-    out_frame[i++] = FIRMWARE_VER_CODE;
-    out_frame[i++] = MAX_CONTACTS / 2;   // v3+
-    out_frame[i++] = MAX_GROUP_CHANNELS; // v3+
-    memcpy(&out_frame[i], &_prefs.ble_pin, 4);
-    i += 4;
-    memset(&out_frame[i], 0, 12);
-    strcpy((char *)&out_frame[i], FIRMWARE_BUILD_DATE);
-    i += 12;
-    StrHelper::strzcpy((char *)&out_frame[i], board.getManufacturerName(), 40);
-    i += 40;
-    StrHelper::strzcpy((char *)&out_frame[i], FIRMWARE_VERSION, 20);
-    i += 20;
-    out_frame[i++] = _prefs.isRepeatEn() ? 1 : 0;   // v9+
-    out_frame[i++] = _prefs.path_hash_mode;  // v10+
-    _serial->writeFrame(out_frame, i);
-  } else if (cmd_frame[0] == CMD_APP_START &&
-             len >= 8) { // sent when app establishes connection, respond with node ID
-    //  cmd_frame[1..7]  reserved future
-    char *app_name = (char *)&cmd_frame[8];
-    cmd_frame[len] = 0; // make app_name null terminated
-    MESH_DEBUG_PRINTLN("App %s connected", app_name);
+// sent when app establishes connection
+bool MyMesh::cmdDeviceQuery(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  app_target_ver = r.u8();                    // which version of protocol does app understand
 
-    _iter_started = false; // stop any left-over ContactsIterator
-    int i = 0;
-    out_frame[i++] = RESP_CODE_SELF_INFO;
-    out_frame[i++] = ADV_TYPE_CHAT; // what this node Advert identifies as (maybe node's pronouns too?? :-)
-    out_frame[i++] = _prefs.tx_power_dbm;
-    out_frame[i++] = MAX_LORA_TX_POWER;
-    memcpy(&out_frame[i], self_id.pub_key, PUB_KEY_SIZE);
-    i += PUB_KEY_SIZE;
+  int i = 0;
+  out_frame[i++] = RESP_CODE_DEVICE_INFO;
+  out_frame[i++] = FIRMWARE_VER_CODE;
+  out_frame[i++] = MAX_CONTACTS / 2;   // v3+
+  out_frame[i++] = MAX_GROUP_CHANNELS; // v3+
+  memcpy(&out_frame[i], &_prefs.ble_pin, 4);
+  i += 4;
+  memset(&out_frame[i], 0, 12);
+  strcpy((char *)&out_frame[i], FIRMWARE_BUILD_DATE);
+  i += 12;
+  StrHelper::strzcpy((char *)&out_frame[i], board.getManufacturerName(), 40);
+  i += 40;
+  StrHelper::strzcpy((char *)&out_frame[i], FIRMWARE_VERSION, 20);
+  i += 20;
+  out_frame[i++] = _prefs.isRepeatEn() ? 1 : 0;   // v9+
+  out_frame[i++] = _prefs.path_hash_mode;  // v10+
+  _serial->writeFrame(out_frame, i);
+  return true;
+}
 
-    int32_t lat, lon;
-    lat = (sensors.node_lat * 1000000.0);
-    lon = (sensors.node_lon * 1000000.0);
-    memcpy(&out_frame[i], &lat, 4);
-    i += 4;
-    memcpy(&out_frame[i], &lon, 4);
-    i += 4;
-    out_frame[i++] = _prefs.multi_acks; // new v7+
-    out_frame[i++] = _prefs.advert_loc_policy;
-    out_frame[i++] = (_prefs.telemetry_mode_env << 4) | (_prefs.telemetry_mode_loc << 2) |
-                     (_prefs.telemetry_mode_base); // v5+
-    out_frame[i++] = _prefs.manual_add_contacts;
+// sent when app establishes connection, respond with node ID
+bool MyMesh::cmdAppStart(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  r.skip(7);  // reserved future
+  char *app_name = r.restAsCString();
+  MESH_DEBUG_PRINTLN("App %s connected", app_name);
 
-    uint32_t freq = _prefs.freq * 1000;
-    memcpy(&out_frame[i], &freq, 4);
-    i += 4;
-    uint32_t bw = _prefs.bw * 1000;
-    memcpy(&out_frame[i], &bw, 4);
-    i += 4;
-    out_frame[i++] = _prefs.sf;
-    out_frame[i++] = _prefs.cr;
+  _iter_started = false; // stop any left-over ContactsIterator
+  int i = 0;
+  out_frame[i++] = RESP_CODE_SELF_INFO;
+  out_frame[i++] = ADV_TYPE_CHAT; // what this node Advert identifies as (maybe node's pronouns too?? :-)
+  out_frame[i++] = _prefs.tx_power_dbm;
+  out_frame[i++] = MAX_LORA_TX_POWER;
+  memcpy(&out_frame[i], self_id.pub_key, PUB_KEY_SIZE);
+  i += PUB_KEY_SIZE;
 
-    int tlen = strlen(_prefs.node_name); // revisit: UTF_8 ??
-    memcpy(&out_frame[i], _prefs.node_name, tlen);
-    i += tlen;
-    _serial->writeFrame(out_frame, i);
-  } else if (cmd_frame[0] == CMD_RUN_CLI_COMMAND && len >= 3) { // V14+
-    int i = 1;
-    char *text = (char *)&cmd_frame[i];
-    int tlen = len - i;
-    text[tlen] = 0; // ensure null
+  int32_t lat, lon;
+  lat = (sensors.node_lat * 1000000.0);
+  lon = (sensors.node_lon * 1000000.0);
+  memcpy(&out_frame[i], &lat, 4);
+  i += 4;
+  memcpy(&out_frame[i], &lon, 4);
+  i += 4;
+  out_frame[i++] = _prefs.multi_acks; // new v7+
+  out_frame[i++] = _prefs.advert_loc_policy;
+  out_frame[i++] = (_prefs.telemetry_mode_env << 4) | (_prefs.telemetry_mode_loc << 2) |
+                   (_prefs.telemetry_mode_base); // v5+
+  out_frame[i++] = _prefs.manual_add_contacts;
 
-    reply_buf[0] = 0;
-    if (!handleCommand(text, 0, reply_buf)) {
-      strcat(reply_buf, "Unknown command");   // reply_buf may have cmd prefix from 'text'
-    }
-    out_frame[0] = RESP_CODE_CLI_REPLY;
-    int rlen = strlen(reply_buf);
-    memcpy(&out_frame[1], reply_buf, rlen);
-    _serial->writeFrame(out_frame, 1 + rlen);
-  } else if (cmd_frame[0] == CMD_SEND_TXT_MSG && len >= 14) {
-    int i = 1;
-    uint8_t txt_type = cmd_frame[i++];
-    uint8_t attempt = cmd_frame[i++];
-    uint32_t msg_timestamp;
-    memcpy(&msg_timestamp, &cmd_frame[i], 4);
-    i += 4;
-    uint8_t *pub_key_prefix = &cmd_frame[i];
-    i += 6;
-    ContactInfo *recipient = lookupContactByPubKey(pub_key_prefix, 6);
-    if (recipient && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND)) {
-      char *text = (char *)&cmd_frame[i];
-      int tlen = len - i;
-      uint32_t est_timeout;
-      text[tlen] = 0; // ensure null
-      int result;
-      uint32_t expected_ack;
-      if (txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND) {
-        msg_timestamp = getRTCClock()->getCurrentTimeUnique(); // Use node's RTC instead of app timestamp to avoid tripping replay protection
-        result = sendCommandData(*recipient, msg_timestamp, attempt, txt_type, text, est_timeout);
-        expected_ack = 0; // no Ack expected
-      } else {
-        result = sendMessage(*recipient, msg_timestamp, attempt, text, expected_ack, est_timeout);
-      }
-      // TODO: add expected ACK to table
-      if (result == MSG_SEND_FAILED) {
-        writeErrFrame(ERR_CODE_TABLE_FULL);
-      } else {
-        if (expected_ack) {
-          expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis(); // add to circular table
-          expected_ack_table[next_ack_idx].ack = expected_ack;
-          expected_ack_table[next_ack_idx].contact = recipient;
-          next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
-        }
+  uint32_t freq = _prefs.freq * 1000;
+  memcpy(&out_frame[i], &freq, 4);
+  i += 4;
+  uint32_t bw = _prefs.bw * 1000;
+  memcpy(&out_frame[i], &bw, 4);
+  i += 4;
+  out_frame[i++] = _prefs.sf;
+  out_frame[i++] = _prefs.cr;
 
-        out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
-        memcpy(&out_frame[2], &expected_ack, 4);
-        memcpy(&out_frame[6], &est_timeout, 4);
-        _serial->writeFrame(out_frame, 10);
-      }
+  int tlen = strlen(_prefs.node_name); // revisit: UTF_8 ??
+  memcpy(&out_frame[i], _prefs.node_name, tlen);
+  i += tlen;
+  _serial->writeFrame(out_frame, i);
+  return true;
+}
+
+// V14+
+bool MyMesh::cmdRunCliCommand(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  char *text = r.restAsCString();
+
+  reply_buf[0] = 0;
+  if (!handleCommand(text, 0, reply_buf)) {
+    strcat(reply_buf, "Unknown command");   // reply_buf may have cmd prefix from 'text'
+  }
+  out_frame[0] = RESP_CODE_CLI_REPLY;
+  int rlen = strlen(reply_buf);
+  memcpy(&out_frame[1], reply_buf, rlen);
+  _serial->writeFrame(out_frame, 1 + rlen);
+  return true;
+}
+
+bool MyMesh::cmdSendTxtMsg(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t txt_type = r.u8();
+  uint8_t attempt = r.u8();
+  uint32_t msg_timestamp = r.u32();
+  uint8_t *pub_key_prefix = r.bytes(6);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key_prefix, 6);
+  if (recipient && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND)) {
+    char *text = r.restAsCString();
+    uint32_t est_timeout;
+    int result;
+    uint32_t expected_ack;
+    if (txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND) {
+      msg_timestamp = getRTCClock()->getCurrentTimeUnique(); // Use node's RTC instead of app timestamp to avoid tripping replay protection
+      result = sendCommandData(*recipient, msg_timestamp, attempt, txt_type, text, est_timeout);
+      expected_ack = 0; // no Ack expected
     } else {
-      writeErrFrame(recipient == NULL
-                        ? ERR_CODE_NOT_FOUND
-                        : ERR_CODE_UNSUPPORTED_CMD); // unknown recipient, or unsupported TXT_TYPE_*
+      result = sendMessage(*recipient, msg_timestamp, attempt, text, expected_ack, est_timeout);
     }
-  } else if (cmd_frame[0] == CMD_SEND_CHANNEL_TXT_MSG) { // send GroupChannel text msg
-    int i = 1;
-    uint8_t txt_type = cmd_frame[i++]; // should be TXT_TYPE_PLAIN
-    uint8_t channel_idx = cmd_frame[i++];
-    uint32_t msg_timestamp;
-    memcpy(&msg_timestamp, &cmd_frame[i], 4);
-    i += 4;
-    const char *text = (char *)&cmd_frame[i];
-
-    if (txt_type != TXT_TYPE_PLAIN) {
-      writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+    // TODO: add expected ACK to table
+    if (result == MSG_SEND_FAILED) {
+      writeErrFrame(ERR_CODE_TABLE_FULL);
     } else {
-      ChannelDetails channel;
-      bool success = getChannel(channel_idx, channel);
-      if (success && sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text, len - i)) {
-        writeOKFrame();
-      } else {
-        writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
+      if (expected_ack) {
+        expected_ack_table[next_ack_idx].msg_sent = _ms->getMillis(); // add to circular table
+        expected_ack_table[next_ack_idx].ack = expected_ack;
+        expected_ack_table[next_ack_idx].contact = recipient;
+        next_ack_idx = (next_ack_idx + 1) % EXPECTED_ACK_TABLE_SIZE;
       }
-    }
-  } else if (cmd_frame[0] == CMD_SEND_CHANNEL_DATA) { // send GroupChannel datagram
-    if (len < 4) {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      return;
-    }
-    int i = 1;
-    uint8_t channel_idx = cmd_frame[i++];
-    uint8_t path_len = cmd_frame[i++];
 
-    // validate path len, allowing 0xFF for flood
-    if (!mesh::Packet::isValidPathLen(path_len) && path_len != OUT_PATH_UNKNOWN) {
-      MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA invalid path size: %d", path_len);
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      return;
+      out_frame[0] = RESP_CODE_SENT;
+      out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+      memcpy(&out_frame[2], &expected_ack, 4);
+      memcpy(&out_frame[6], &est_timeout, 4);
+      _serial->writeFrame(out_frame, 10);
     }
+  } else {
+    writeErrFrame(recipient == NULL
+                      ? ERR_CODE_NOT_FOUND
+                      : ERR_CODE_UNSUPPORTED_CMD); // unknown recipient, or unsupported TXT_TYPE_*
+  }
+  return true;
+}
 
-    // parse provided path if not flood
-    uint8_t path[MAX_PATH_SIZE];
-    if (path_len != OUT_PATH_UNKNOWN) {
-      i += mesh::Packet::writePath(path, &cmd_frame[i], path_len);
-    }
+// send GroupChannel text msg
+bool MyMesh::cmdSendChannelTxtMsg(size_t len) {
+  // 7 = code, txt_type, channel_idx and the 4 byte timestamp; the text may be empty.
+  // Without this the text length below is computed as len - 7 and turns negative.
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t txt_type = r.u8(); // should be TXT_TYPE_PLAIN
+  uint8_t channel_idx = r.u8();
+  uint32_t msg_timestamp = r.u32();
+  int text_len = r.remaining();
+  const char *text = (char *)r.bytes(text_len);
 
-    uint16_t data_type = ((uint16_t)cmd_frame[i]) | (((uint16_t)cmd_frame[i + 1]) << 8);
-    i += 2;
-    const uint8_t *payload = &cmd_frame[i];
-    int payload_len = (len > (size_t)i) ? (int)(len - i) : 0;
-
+  if (txt_type != TXT_TYPE_PLAIN) {
+    writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+  } else {
     ChannelDetails channel;
-    if (!getChannel(channel_idx, channel)) {
+    bool success = getChannel(channel_idx, channel);
+    if (success && sendGroupMessage(msg_timestamp, channel.channel, _prefs.node_name, text, text_len)) {
+      writeOKFrame();
+    } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
-    } else if (data_type == DATA_TYPE_RESERVED) {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (payload_len > MAX_GROUP_DATA_LENGTH) {
-      MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA payload too long: %d > %d", payload_len, MAX_GROUP_DATA_LENGTH);
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (sendGroupData(channel.channel, path, path_len, data_type, payload, payload_len)) {
+    }
+  }
+  return true;
+}
+
+// send GroupChannel datagram
+bool MyMesh::cmdSendChannelData(size_t len) {
+  if (len < 4) {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    return true;
+  }
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t channel_idx = r.u8();
+  uint8_t path_len = r.u8();
+
+  // validate path len, allowing 0xFF for flood
+  if (!mesh::Packet::isValidPathLen(path_len) && path_len != OUT_PATH_UNKNOWN) {
+    MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA invalid path size: %d", path_len);
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    return true;
+  }
+
+  // parse provided path if not flood
+  uint8_t path[MAX_PATH_SIZE];
+  if (path_len != OUT_PATH_UNKNOWN) {
+    const uint8_t *src = r.bytes(pathByteLen(path_len));
+    if (src) mesh::Packet::writePath(path, src, path_len);
+  }
+
+  if (!r.ok() || !r.has(2)) {   // the path and the 2 byte data_type must be inside the frame
+    MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA frame too short for data_type: %d", (uint32_t)len);
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    return true;
+  }
+
+  uint16_t data_type = r.u8();
+  data_type |= ((uint16_t)r.u8()) << 8;
+  int payload_len = r.remaining();
+  const uint8_t *payload = r.bytes(payload_len);
+
+  ChannelDetails channel;
+  if (!getChannel(channel_idx, channel)) {
+    writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
+  } else if (data_type == DATA_TYPE_RESERVED) {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  } else if (payload_len > MAX_GROUP_DATA_LENGTH) {
+    MESH_DEBUG_PRINTLN("CMD_SEND_CHANNEL_DATA payload too long: %d > %d", payload_len, MAX_GROUP_DATA_LENGTH);
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  } else if (sendGroupData(channel.channel, path, path_len, data_type, payload, payload_len)) {
+    writeOKFrame();
+  } else {
+    writeErrFrame(ERR_CODE_TABLE_FULL);
+  }
+  return true;
+}
+
+// get Contact list
+bool MyMesh::cmdGetContacts(size_t len) {
+  if (_iter_started) {
+    writeErrFrame(ERR_CODE_BAD_STATE); // iterator is currently busy
+  } else {
+    FrameReader r(cmd_frame, len, 1);
+    if (r.has(4)) { // has optional 'since' param
+      _iter_filter_since = r.u32();
+    } else {
+      _iter_filter_since = 0;
+    }
+
+    uint8_t reply[5];
+    reply[0] = RESP_CODE_CONTACTS_START;
+    uint32_t count = getNumContacts(); // total, NOT filtered count
+    memcpy(&reply[1], &count, 4);
+    _serial->writeFrame(reply, 5);
+
+    // start iterator
+    _iter = startContactsIterator();
+    _iter_started = true;
+    _most_recent_lastmod = 0;
+  }
+  return true;
+}
+
+bool MyMesh::cmdSetAdvertName(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  int nlen = r.remaining();
+  if (nlen > sizeof(_prefs.node_name) - 1) nlen = sizeof(_prefs.node_name) - 1; // max len
+  memcpy(_prefs.node_name, r.bytes(nlen), nlen);
+  _prefs.node_name[nlen] = 0; // null terminator
+  savePrefs();
+  writeOKFrame();
+  return true;
+}
+
+bool MyMesh::cmdSetAdvertLatlon(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  int32_t lat = r.i32();
+  int32_t lon = r.i32();
+  int32_t alt = 0;
+  if (r.has(4)) {
+    alt = r.i32(); // for FUTURE support
+  }
+  if (lat <= 90 * 1E6 && lat >= -90 * 1E6 && lon <= 180 * 1E6 && lon >= -180 * 1E6) {
+    sensors.node_lat = ((double)lat) / 1000000.0;
+    sensors.node_lon = ((double)lon) / 1000000.0;
+    savePrefs();
+    writeOKFrame();
+  } else {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid geo coordinate
+  }
+  return true;
+}
+
+bool MyMesh::cmdGetDeviceTime(size_t) {
+  uint8_t reply[5];
+  reply[0] = RESP_CODE_CURR_TIME;
+  uint32_t now = getRTCClock()->getCurrentTime();
+  memcpy(&reply[1], &now, 4);
+  _serial->writeFrame(reply, 5);
+  return true;
+}
+
+bool MyMesh::cmdSetDeviceTime(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint32_t secs = r.u32();
+  uint32_t curr = getRTCClock()->getCurrentTime();
+  if (secs >= curr) {
+    getRTCClock()->setCurrentTime(secs);
+    writeOKFrame();
+  } else {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  }
+  return true;
+}
+
+bool MyMesh::cmdSendSelfAdvert(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  mesh::Packet* pkt;
+  if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+    pkt = createSelfAdvert(_prefs.node_name);
+  } else {
+    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+  }
+  if (pkt) {
+    if (r.has(1) && r.u8() == 1) { // optional param (1 = flood, 0 = zero hop)
+      unsigned long delay_millis = 0;
+      TransportKey default_scope;
+      memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
+      sendFloodScoped(default_scope, pkt, delay_millis);
+    } else {
+      sendZeroHop(pkt);
+    }
+    writeOKFrame();
+  } else {
+    writeErrFrame(ERR_CODE_TABLE_FULL);
+  }
+  return true;
+}
+
+bool MyMesh::cmdResetPath(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (recipient) {
+    recipient->out_path_len = OUT_PATH_UNKNOWN;
+    // recipient->lastmod = ??   shouldn't be needed, app already has this version of contact
+    dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+    writeOKFrame();
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND); // unknown contact
+  }
+  return true;
+}
+
+bool MyMesh::cmdAddUpdateContact(size_t len) {
+  // updateContactFromFrame() reads every field up to last_advert_timestamp without
+  // testing len; only the trailing lat/lon and lastmod are optional. The reverse
+  // direction (writeContactRespFrame) writes the same fields in the same order.
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  uint32_t last_mod = getRTCClock()->getCurrentTime();  // fallback value if not present in cmd_frame
+  if (recipient) {
+    updateContactFromFrame(*recipient, last_mod, cmd_frame, len);
+    recipient->lastmod = last_mod;
+    dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+    writeOKFrame();
+  } else {
+    ContactInfo contact;
+    updateContactFromFrame(contact, last_mod, cmd_frame, len);
+    contact.lastmod = last_mod;
+    contact.sync_since = 0;
+    if (addContact(contact)) {
+      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
       writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_TABLE_FULL);
     }
-  } else if (cmd_frame[0] == CMD_GET_CONTACTS) { // get Contact list
-    if (_iter_started) {
-      writeErrFrame(ERR_CODE_BAD_STATE); // iterator is currently busy
-    } else {
-      if (len >= 5) { // has optional 'since' param
-        memcpy(&_iter_filter_since, &cmd_frame[1], 4);
-      } else {
-        _iter_filter_since = 0;
-      }
+  }
+  return true;
+}
 
-      uint8_t reply[5];
-      reply[0] = RESP_CODE_CONTACTS_START;
-      uint32_t count = getNumContacts(); // total, NOT filtered count
-      memcpy(&reply[1], &count, 4);
-      _serial->writeFrame(reply, 5);
-
-      // start iterator
-      _iter = startContactsIterator();
-      _iter_started = true;
-      _most_recent_lastmod = 0;
-    }
-  } else if (cmd_frame[0] == CMD_SET_ADVERT_NAME && len >= 2) {
-    int nlen = len - 1;
-    if (nlen > sizeof(_prefs.node_name) - 1) nlen = sizeof(_prefs.node_name) - 1; // max len
-    memcpy(_prefs.node_name, &cmd_frame[1], nlen);
-    _prefs.node_name[nlen] = 0; // null terminator
-    savePrefs();
+bool MyMesh::cmdRemoveContact(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (recipient && removeContact(*recipient)) {
+    _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE);
+    dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
     writeOKFrame();
-  } else if (cmd_frame[0] == CMD_SET_ADVERT_LATLON && len >= 9) {
-    int32_t lat, lon, alt = 0;
-    memcpy(&lat, &cmd_frame[1], 4);
-    memcpy(&lon, &cmd_frame[5], 4);
-    if (len >= 13) {
-      memcpy(&alt, &cmd_frame[9], 4); // for FUTURE support
-    }
-    if (lat <= 90 * 1E6 && lat >= -90 * 1E6 && lon <= 180 * 1E6 && lon >= -180 * 1E6) {
-      sensors.node_lat = ((double)lat) / 1000000.0;
-      sensors.node_lon = ((double)lon) / 1000000.0;
-      savePrefs();
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND); // not found, or unable to remove
+  }
+  return true;
+}
+
+bool MyMesh::cmdShareContact(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (recipient) {
+    if (shareContactZeroHop(*recipient)) {
       writeOKFrame();
     } else {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid geo coordinate
+      writeErrFrame(ERR_CODE_TABLE_FULL); // unable to send
     }
-  } else if (cmd_frame[0] == CMD_GET_DEVICE_TIME) {
-    uint8_t reply[5];
-    reply[0] = RESP_CODE_CURR_TIME;
-    uint32_t now = getRTCClock()->getCurrentTime();
-    memcpy(&reply[1], &now, 4);
-    _serial->writeFrame(reply, 5);
-  } else if (cmd_frame[0] == CMD_SET_DEVICE_TIME && len >= 5) {
-    uint32_t secs;
-    memcpy(&secs, &cmd_frame[1], 4);
-    uint32_t curr = getRTCClock()->getCurrentTime();
-    if (secs >= curr) {
-      getRTCClock()->setCurrentTime(secs);
-      writeOKFrame();
-    } else {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    }
-  } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND);
+  }
+  return true;
+}
+
+bool MyMesh::cmdGetContactByKey(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *contact = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (contact) {
+    writeContactRespFrame(RESP_CODE_CONTACT, *contact);
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND); // not found
+  }
+  return true;
+}
+
+bool MyMesh::cmdExportContact(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  if (!r.has(PUB_KEY_SIZE)) {
+    // export SELF
     mesh::Packet* pkt;
     if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
       pkt = createSelfAdvert(_prefs.node_name);
@@ -1302,383 +1511,371 @@ void MyMesh::handleCmdFrame(size_t len) {
       pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
     }
     if (pkt) {
-      if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
-        unsigned long delay_millis = 0;
-        TransportKey default_scope;
-        memcpy(&default_scope.key, _prefs.default_scope_key, sizeof(default_scope.key));
-        sendFloodScoped(default_scope, pkt, delay_millis);
-      } else {
-        sendZeroHop(pkt);
-      }
-      writeOKFrame();
+      pkt->header |= ROUTE_TYPE_FLOOD; // would normally be sent in this mode
+
+      out_frame[0] = RESP_CODE_EXPORT_CONTACT;
+      uint8_t out_len = pkt->writeTo(&out_frame[1]);
+      releasePacket(pkt); // undo the obtainNewPacket()
+      _serial->writeFrame(out_frame, out_len + 1);
     } else {
-      writeErrFrame(ERR_CODE_TABLE_FULL);
+      writeErrFrame(ERR_CODE_TABLE_FULL); // Error
     }
-  } else if (cmd_frame[0] == CMD_RESET_PATH && len >= 1 + 32) {
-    uint8_t *pub_key = &cmd_frame[1];
+  } else {
+    uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    if (recipient) {
-      recipient->out_path_len = OUT_PATH_UNKNOWN;
-      // recipient->lastmod = ??   shouldn't be needed, app already has this version of contact
-      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
-      writeOKFrame();
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND); // unknown contact
-    }
-  } else if (cmd_frame[0] == CMD_ADD_UPDATE_CONTACT && len >= 1 + 32 + 2 + 1) {
-    uint8_t *pub_key = &cmd_frame[1];
-    ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    uint32_t last_mod = getRTCClock()->getCurrentTime();  // fallback value if not present in cmd_frame
-    if (recipient) {
-      updateContactFromFrame(*recipient, last_mod, cmd_frame, len);
-      recipient->lastmod = last_mod;
-      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
-      writeOKFrame();
-    } else {
-      ContactInfo contact;
-      updateContactFromFrame(contact, last_mod, cmd_frame, len);
-      contact.lastmod = last_mod;
-      contact.sync_since = 0;
-      if (addContact(contact)) {
-        dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
-        writeOKFrame();
-      } else {
-        writeErrFrame(ERR_CODE_TABLE_FULL);
-      }
-    }
-  } else if (cmd_frame[0] == CMD_REMOVE_CONTACT) {
-    uint8_t *pub_key = &cmd_frame[1];
-    ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    if (recipient && removeContact(*recipient)) {
-      _store->deleteBlobByKey(pub_key, PUB_KEY_SIZE);
-      dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
-      writeOKFrame();
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND); // not found, or unable to remove
-    }
-  } else if (cmd_frame[0] == CMD_SHARE_CONTACT) {
-    uint8_t *pub_key = &cmd_frame[1];
-    ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    if (recipient) {
-      if (shareContactZeroHop(*recipient)) {
-        writeOKFrame();
-      } else {
-        writeErrFrame(ERR_CODE_TABLE_FULL); // unable to send
-      }
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND);
-    }
-  } else if (cmd_frame[0] == CMD_GET_CONTACT_BY_KEY) {
-    uint8_t *pub_key = &cmd_frame[1];
-    ContactInfo *contact = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    if (contact) {
-      writeContactRespFrame(RESP_CODE_CONTACT, *contact);
+    uint8_t out_len;
+    if (recipient && (out_len = exportContact(*recipient, &out_frame[1])) > 0) {
+      out_frame[0] = RESP_CODE_EXPORT_CONTACT;
+      _serial->writeFrame(out_frame, out_len + 1);
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // not found
     }
-  } else if (cmd_frame[0] == CMD_EXPORT_CONTACT) {
-    if (len < 1 + PUB_KEY_SIZE) {
-      // export SELF
-      mesh::Packet* pkt;
-      if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
-        pkt = createSelfAdvert(_prefs.node_name);
-      } else {
-        pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
+  }
+  return true;
+}
+
+bool MyMesh::cmdImportContact(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  size_t n = r.remaining();
+  if (importContact(r.bytes(n), n)) {
+    writeOKFrame();
+  } else {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  }
+  return true;
+}
+
+bool MyMesh::cmdSyncNextMessage(size_t) {
+  int out_len;
+  if ((out_len = getFromOfflineQueue(out_frame)) > 0) {
+    _serial->writeFrame(out_frame, out_len);
+    if (_listener) _listener->onQueueSizeChanged(offline_queue_len);
+  } else {
+    out_frame[0] = RESP_CODE_NO_MORE_MESSAGES;
+    _serial->writeFrame(out_frame, 1);
+  }
+  return true;
+}
+
+// freq, bw, sf, cr; the repeat flag stays optional
+bool MyMesh::cmdSetRadioParams(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint32_t freq = r.u32();
+  uint32_t bw = r.u32();
+  uint8_t sf = r.u8();
+  uint8_t cr = r.u8();
+  uint8_t repeat = 0;  // default - false
+  if (r.has(1)) {
+    repeat = r.u8();   // FIRMWARE_VER_CODE  9+
+  }
+
+  if (repeat && !isValidClientRepeatFreq(freq)) {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  } else if (freq >= 150000 && freq <= 2500000 && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7000 &&
+      bw <= 500000) {
+    _prefs.sf = sf;
+    _prefs.cr = cr;
+    _prefs.freq = (float)freq / 1000.0;
+    _prefs.bw = (float)bw / 1000.0;
+    _prefs.setRepeatEn(repeat != 0);
+    savePrefs();
+
+    radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
+    MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
+                       (uint32_t)cr);
+
+    writeOKFrame();
+  } else {
+    MESH_DEBUG_PRINTLN("Error: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
+                       (uint32_t)cr);
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  }
+  return true;
+}
+
+bool MyMesh::cmdSetRadioTxPower(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  int8_t power = (int8_t)r.u8();
+  if (power < -9 || power > MAX_LORA_TX_POWER) {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  } else {
+    _prefs.tx_power_dbm = power;
+    savePrefs();
+    radio_driver.setTxPower(_prefs.tx_power_dbm);
+    writeOKFrame();
+  }
+  return true;
+}
+
+// two 32 bit values, neither range checked
+bool MyMesh::cmdSetTuningParams(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint32_t rx = r.u32();
+  uint32_t af = r.u32();
+  _prefs.rx_delay_base = ((float)rx) / 1000.0f;
+  _prefs.airtime_factor = ((float)af) / 1000.0f;
+  savePrefs();
+  writeOKFrame();
+  return true;
+}
+
+bool MyMesh::cmdGetTuningParams(size_t) {
+  uint32_t rx = _prefs.rx_delay_base * 1000, af = _prefs.airtime_factor * 1000;
+  int i = 0;
+  out_frame[i++] = RESP_CODE_TUNING_PARAMS;
+  memcpy(&out_frame[i], &rx, 4); i += 4;
+  memcpy(&out_frame[i], &af, 4); i += 4;
+  _serial->writeFrame(out_frame, i);
+  return true;
+}
+
+// the fields after manual_add stay optional
+bool MyMesh::cmdSetOtherParams(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  _prefs.manual_add_contacts = r.u8();
+  if (r.has(1)) {
+    uint8_t modes = r.u8();
+    _prefs.telemetry_mode_base = modes & 0x03; // v5+
+    _prefs.telemetry_mode_loc = (modes >> 2) & 0x03;
+    _prefs.telemetry_mode_env = (modes >> 4) & 0x03;
+
+    if (r.has(1)) {
+      _prefs.advert_loc_policy = r.u8();
+      if (r.has(1)) {
+        _prefs.multi_acks = r.u8();
       }
-      if (pkt) {
-        pkt->header |= ROUTE_TYPE_FLOOD; // would normally be sent in this mode
+    }
+  }
+  savePrefs();
+  writeOKFrame();
+  return true;
+}
 
-        out_frame[0] = RESP_CODE_EXPORT_CONTACT;
-        uint8_t out_len = pkt->writeTo(&out_frame[1]);
-        releasePacket(pkt); // undo the obtainNewPacket()
-        _serial->writeFrame(out_frame, out_len + 1);
-      } else {
-        writeErrFrame(ERR_CODE_TABLE_FULL); // Error
-      }
-    } else {
-      uint8_t *pub_key = &cmd_frame[1];
-      ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-      uint8_t out_len;
-      if (recipient && (out_len = exportContact(*recipient, &out_frame[1])) > 0) {
-        out_frame[0] = RESP_CODE_EXPORT_CONTACT;
-        _serial->writeFrame(out_frame, out_len + 1);
-      } else {
-        writeErrFrame(ERR_CODE_NOT_FOUND); // not found
-      }
-    }
-  } else if (cmd_frame[0] == CMD_IMPORT_CONTACT && len > 2 + 32 + 64) {
-    if (importContact(&cmd_frame[1], len - 1)) {
-      writeOKFrame();
-    } else {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    }
-  } else if (cmd_frame[0] == CMD_SYNC_NEXT_MESSAGE) {
-    int out_len;
-    if ((out_len = getFromOfflineQueue(out_frame)) > 0) {
-      _serial->writeFrame(out_frame, out_len);
-      if (_listener) _listener->onQueueSizeChanged(offline_queue_len);
-    } else {
-      out_frame[0] = RESP_CODE_NO_MORE_MESSAGES;
-      _serial->writeFrame(out_frame, 1);
-    }
-  } else if (cmd_frame[0] == CMD_SET_RADIO_PARAMS) {
-    int i = 1;
-    uint32_t freq;
-    memcpy(&freq, &cmd_frame[i], 4);
-    i += 4;
-    uint32_t bw;
-    memcpy(&bw, &cmd_frame[i], 4);
-    i += 4;
-    uint8_t sf = cmd_frame[i++];
-    uint8_t cr = cmd_frame[i++];
-    uint8_t repeat = 0;  // default - false
-    if (len > i) {
-      repeat = cmd_frame[i++];   // FIRMWARE_VER_CODE  9+
-    }
-
-    if (repeat && !isValidClientRepeatFreq(freq)) {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else if (freq >= 150000 && freq <= 2500000 && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7000 &&
-        bw <= 500000) {
-      _prefs.sf = sf;
-      _prefs.cr = cr;
-      _prefs.freq = (float)freq / 1000.0;
-      _prefs.bw = (float)bw / 1000.0;
-      _prefs.setRepeatEn(repeat != 0);
-      savePrefs();
-
-      radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
-      MESH_DEBUG_PRINTLN("OK: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
-                         (uint32_t)cr);
-
-      writeOKFrame();
-    } else {
-      MESH_DEBUG_PRINTLN("Error: CMD_SET_RADIO_PARAMS: f=%d, bw=%d, sf=%d, cr=%d", freq, bw, (uint32_t)sf,
-                         (uint32_t)cr);
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    }
-  } else if (cmd_frame[0] == CMD_SET_RADIO_TX_POWER) {
-    int8_t power = (int8_t)cmd_frame[1];
-    if (power < -9 || power > MAX_LORA_TX_POWER) {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else {
-      _prefs.tx_power_dbm = power;
-      savePrefs();
-      radio_driver.setTxPower(_prefs.tx_power_dbm);
-      writeOKFrame();
-    }
-  } else if (cmd_frame[0] == CMD_SET_TUNING_PARAMS) {
-    int i = 1;
-    uint32_t rx, af;
-    memcpy(&rx, &cmd_frame[i], 4);
-    i += 4;
-    memcpy(&af, &cmd_frame[i], 4);
-    i += 4;
-    _prefs.rx_delay_base = ((float)rx) / 1000.0f;
-    _prefs.airtime_factor = ((float)af) / 1000.0f;
+bool MyMesh::cmdSetPathHashMode(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  if (r.u8() != 0) return false;
+  uint8_t mode = r.u8();
+  if (mode >= 3) {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  } else {
+    _prefs.path_hash_mode = mode;
     savePrefs();
     writeOKFrame();
-  } else if (cmd_frame[0] == CMD_GET_TUNING_PARAMS) {
-    uint32_t rx = _prefs.rx_delay_base * 1000, af = _prefs.airtime_factor * 1000;
-    int i = 0;
-    out_frame[i++] = RESP_CODE_TUNING_PARAMS;
-    memcpy(&out_frame[i], &rx, 4); i += 4;
-    memcpy(&out_frame[i], &af, 4); i += 4;
-    _serial->writeFrame(out_frame, i);
-  } else if (cmd_frame[0] == CMD_SET_OTHER_PARAMS) {
-    _prefs.manual_add_contacts = cmd_frame[1];
-    if (len >= 3) {
-      _prefs.telemetry_mode_base = cmd_frame[2] & 0x03; // v5+
-      _prefs.telemetry_mode_loc = (cmd_frame[2] >> 2) & 0x03;
-      _prefs.telemetry_mode_env = (cmd_frame[2] >> 4) & 0x03;
+  }
+  return true;
+}
 
-      if (len >= 4) {
-        _prefs.advert_loc_policy = cmd_frame[3];
-        if (len >= 5) {
-          _prefs.multi_acks = cmd_frame[4];
-        }
-      }
-    }
-    savePrefs();
-    writeOKFrame();
-  } else if (cmd_frame[0] == CMD_SET_PATH_HASH_MODE && cmd_frame[1] == 0 && len >= 3) {
-    if (cmd_frame[2] >= 3) {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else {
-      _prefs.path_hash_mode = cmd_frame[2];
-      savePrefs();
-      writeOKFrame();
-    }
-  } else if (cmd_frame[0] == CMD_REBOOT && memcmp(&cmd_frame[1], "reboot", 6) == 0) {
-    if (dirty_contacts_expiry) { // is there are pending dirty contacts write needed?
-      saveContacts();
-    }
-    board.reboot();
-  } else if (cmd_frame[0] == CMD_GET_BATT_AND_STORAGE) {
-    uint8_t reply[11];
-    int i = 0;
-    reply[i++] = RESP_CODE_BATT_AND_STORAGE;
-    uint16_t battery_millivolts = board.getBattMilliVolts();
-    uint32_t used = _store->getStorageUsedKb();
-    uint32_t total = _store->getStorageTotalKb();
-    memcpy(&reply[i], &battery_millivolts, 2); i += 2;
-    memcpy(&reply[i], &used, 4); i += 4;
-    memcpy(&reply[i], &total, 4); i += 4;
-    _serial->writeFrame(reply, i);
-  } else if (cmd_frame[0] == CMD_EXPORT_PRIVATE_KEY) {
+bool MyMesh::cmdReboot(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  if (memcmp(r.bytes(6), "reboot", 6) != 0) return false;
+  if (dirty_contacts_expiry) { // is there are pending dirty contacts write needed?
+    saveContacts();
+  }
+  board.reboot();
+  return true;
+}
+
+bool MyMesh::cmdGetBattAndStorage(size_t) {
+  uint8_t reply[11];
+  int i = 0;
+  reply[i++] = RESP_CODE_BATT_AND_STORAGE;
+  uint16_t battery_millivolts = board.getBattMilliVolts();
+  uint32_t used = _store->getStorageUsedKb();
+  uint32_t total = _store->getStorageTotalKb();
+  memcpy(&reply[i], &battery_millivolts, 2); i += 2;
+  memcpy(&reply[i], &used, 4); i += 4;
+  memcpy(&reply[i], &total, 4); i += 4;
+  _serial->writeFrame(reply, i);
+  return true;
+}
+
+bool MyMesh::cmdExportPrivateKey(size_t) {
 #if ENABLE_PRIVATE_KEY_EXPORT
-    uint8_t reply[65];
-    reply[0] = RESP_CODE_PRIVATE_KEY;
-    self_id.writeTo(&reply[1], 64);
-    _serial->writeFrame(reply, 65);
+  uint8_t reply[65];
+  reply[0] = RESP_CODE_PRIVATE_KEY;
+  self_id.writeTo(&reply[1], 64);
+  _serial->writeFrame(reply, 65);
 #else
-    writeDisabledFrame();
+  writeDisabledFrame();
 #endif
-  } else if (cmd_frame[0] == CMD_IMPORT_PRIVATE_KEY && len >= 65) {
-#if ENABLE_PRIVATE_KEY_IMPORT
-    if (!mesh::LocalIdentity::validatePrivateKey(&cmd_frame[1])) {
-        writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid key
-    } else {
-        mesh::LocalIdentity identity;
-        identity.readFrom(&cmd_frame[1], 64);
-        if (_store->saveMainIdentity(identity)) {
-          self_id = identity;
-          writeOKFrame();
-          // re-load contacts, to invalidate ecdh shared_secrets
-          resetContacts();
-          _store->loadContacts(this);
-        } else {
-          writeErrFrame(ERR_CODE_FILE_IO_ERROR);
-        }
-    }
-#else
-    writeDisabledFrame();
-#endif
-  } else if (cmd_frame[0] == CMD_SEND_RAW_DATA && len >= 6) {
-    int i = 1;
-    uint8_t path_len = cmd_frame[i++];
-    if (path_len >= 0 && mesh::Packet::isValidPathLen(path_len)) {
-      uint8_t path[MAX_PATH_SIZE];
-      i += mesh::Packet::writePath(path, &cmd_frame[i], path_len);
-      if (i + 4 > len) {  // min payload 4 bytes
-        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      } else {
-        auto pkt = createRawData(&cmd_frame[i], len - i);
-        if (pkt) {
-          sendDirect(pkt, path, path_len);
-          writeOKFrame();
-        } else {
-          writeErrFrame(ERR_CODE_TABLE_FULL);
-        }
-      }
-    } else {
-      writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); // flood, not supported (yet)
-    }
-  } else if (cmd_frame[0] == CMD_SEND_LOGIN && len >= 1 + PUB_KEY_SIZE) {
-    uint8_t *pub_key = &cmd_frame[1];
-    ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    char *password = (char *)&cmd_frame[1 + PUB_KEY_SIZE];
-    cmd_frame[len] = 0; // ensure null terminator in password
-    if (recipient) {
-      uint32_t est_timeout;
-      int result = sendLogin(*recipient, password, est_timeout);
-      if (result == MSG_SEND_FAILED) {
-        writeErrFrame(ERR_CODE_TABLE_FULL);
-      } else {
-        clearPendingReqs();
-        memcpy(&pending_login, recipient->id.pub_key, 4); // match this to onContactResponse()
-        out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
-        memcpy(&out_frame[2], &pending_login, 4);
-        memcpy(&out_frame[6], &est_timeout, 4);
-        _serial->writeFrame(out_frame, 10);
-      }
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
-    }
-  } else if (cmd_frame[0] == CMD_SEND_ANON_REQ && len > 1 + PUB_KEY_SIZE) {
-    uint8_t *pub_key = &cmd_frame[1];
-    ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    ContactInfo anon;
-    if (recipient == NULL) { // FIRMWARE_VER_CODE 13+,  allow non-contact requests
-      memset(&anon, 0, sizeof(anon));
-      memcpy(anon.id.pub_key, pub_key, PUB_KEY_SIZE);
-      anon.out_path_len = 0;   // default to zero-hop direct
-      anon.type = ADV_TYPE_NONE;  // unknown
-      anon.lastmod = getRTCClock()->getCurrentTime();
+  return true;
+}
 
-      if (addContact(anon)) recipient = &anon;
-    }
-    uint8_t *data = &cmd_frame[1 + PUB_KEY_SIZE];
-    if (recipient) {
-      uint32_t tag, est_timeout;
-      int result = sendAnonReq(*recipient, data, len - (1 + PUB_KEY_SIZE), tag, est_timeout);
-      if (result == MSG_SEND_FAILED) {
-        writeErrFrame(ERR_CODE_TABLE_FULL);
+bool MyMesh::cmdImportPrivateKey(size_t len) {
+#if ENABLE_PRIVATE_KEY_IMPORT
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *key = r.bytes(64);
+  if (!mesh::LocalIdentity::validatePrivateKey(key)) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid key
+  } else {
+      mesh::LocalIdentity identity;
+      identity.readFrom(key, 64);
+      if (_store->saveMainIdentity(identity)) {
+        self_id = identity;
+        writeOKFrame();
+        // re-load contacts, to invalidate ecdh shared_secrets
+        resetContacts();
+        _store->loadContacts(this);
       } else {
-        clearPendingReqs();
-        pending_req = tag; // match this to onContactResponse()
-        out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
-        memcpy(&out_frame[2], &tag, 4);
-        memcpy(&out_frame[6], &est_timeout, 4);
-        _serial->writeFrame(out_frame, 10);
+        writeErrFrame(ERR_CODE_FILE_IO_ERROR);
       }
+  }
+#else
+  writeDisabledFrame();
+#endif
+  return true;
+}
+
+bool MyMesh::cmdSendRawData(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t path_len = r.u8();
+  if (path_len >= 0 && mesh::Packet::isValidPathLen(path_len)) {
+    uint8_t path[MAX_PATH_SIZE];
+    const uint8_t *src = r.bytes(pathByteLen(path_len));
+    if (src) mesh::Packet::writePath(path, src, path_len);
+    if (!r.ok() || !r.has(4)) {  // the path and a payload of at least 4 bytes
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     } else {
-      writeErrFrame(ERR_CODE_TABLE_FULL); // contacts full
-    }
-  } else if (cmd_frame[0] == CMD_SEND_STATUS_REQ && len >= 1 + PUB_KEY_SIZE) {
-    uint8_t *pub_key = &cmd_frame[1];
-    ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    if (recipient) {
-      uint32_t tag, est_timeout;
-      int result = sendRequest(*recipient, REQ_TYPE_GET_STATUS, tag, est_timeout);
-      if (result == MSG_SEND_FAILED) {
-        writeErrFrame(ERR_CODE_TABLE_FULL);
+      size_t n = r.remaining();
+      auto pkt = createRawData(r.bytes(n), n);
+      if (pkt) {
+        sendDirect(pkt, path, path_len);
+        writeOKFrame();
       } else {
-        clearPendingReqs();
-        // FUTURE:  pending_status = tag;  // match this in onContactResponse()
-        memcpy(&pending_status, recipient->id.pub_key, 4); // legacy matching scheme
-        out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
-        memcpy(&out_frame[2], &tag, 4);
-        memcpy(&out_frame[6], &est_timeout, 4);
-        _serial->writeFrame(out_frame, 10);
-      }
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
-    }
-  } else if (cmd_frame[0] == CMD_SEND_PATH_DISCOVERY_REQ && cmd_frame[1] == 0 && len >= 2 + PUB_KEY_SIZE) {
-    uint8_t *pub_key = &cmd_frame[2];
-    ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    if (recipient) {
-      uint32_t tag, est_timeout;
-      // 'Path Discovery' is just a special case of flood + Telemetry req
-      uint8_t req_data[9];
-      req_data[0] = REQ_TYPE_GET_TELEMETRY_DATA;
-      req_data[1] = ~(TELEM_PERM_BASE);  // NEW: inverse permissions mask (ie. we only want BASE telemetry)
-      memset(&req_data[2], 0, 3);  // reserved
-      getRNG()->random(&req_data[5], 4);   // random blob to help make packet-hash unique
-      auto save = recipient->out_path_len;    // temporarily force sendRequest() to flood
-      recipient->out_path_len = OUT_PATH_UNKNOWN;
-      int result = sendRequest(*recipient, req_data, sizeof(req_data), tag, est_timeout);
-      recipient->out_path_len = save;
-      if (result == MSG_SEND_FAILED) {
         writeErrFrame(ERR_CODE_TABLE_FULL);
-      } else {
-        clearPendingReqs();
-        pending_discovery = tag; // match this in onContactResponse()
-        out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
-        memcpy(&out_frame[2], &tag, 4);
-        memcpy(&out_frame[6], &est_timeout, 4);
-        _serial->writeFrame(out_frame, 10);
       }
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
     }
-  } else if (cmd_frame[0] == CMD_SEND_TELEMETRY_REQ && len >= 4 + PUB_KEY_SIZE) {  // can deprecate, in favour of CMD_SEND_BINARY_REQ
-    uint8_t *pub_key = &cmd_frame[4];
+  } else {
+    writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); // flood, not supported (yet)
+  }
+  return true;
+}
+
+bool MyMesh::cmdSendLogin(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  char *password = r.restAsCString();
+  if (recipient) {
+    uint32_t est_timeout;
+    int result = sendLogin(*recipient, password, est_timeout);
+    if (result == MSG_SEND_FAILED) {
+      writeErrFrame(ERR_CODE_TABLE_FULL);
+    } else {
+      clearPendingReqs();
+      memcpy(&pending_login, recipient->id.pub_key, 4); // match this to onContactResponse()
+      out_frame[0] = RESP_CODE_SENT;
+      out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+      memcpy(&out_frame[2], &pending_login, 4);
+      memcpy(&out_frame[6], &est_timeout, 4);
+      _serial->writeFrame(out_frame, 10);
+    }
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
+  }
+  return true;
+}
+
+bool MyMesh::cmdSendAnonReq(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  ContactInfo anon;
+  if (recipient == NULL) { // FIRMWARE_VER_CODE 13+,  allow non-contact requests
+    memset(&anon, 0, sizeof(anon));
+    memcpy(anon.id.pub_key, pub_key, PUB_KEY_SIZE);
+    anon.out_path_len = 0;   // default to zero-hop direct
+    anon.type = ADV_TYPE_NONE;  // unknown
+    anon.lastmod = getRTCClock()->getCurrentTime();
+
+    if (addContact(anon)) recipient = &anon;
+  }
+  size_t data_len = r.remaining();
+  uint8_t *data = r.bytes(data_len);
+  if (recipient) {
+    uint32_t tag, est_timeout;
+    int result = sendAnonReq(*recipient, data, data_len, tag, est_timeout);
+    if (result == MSG_SEND_FAILED) {
+      writeErrFrame(ERR_CODE_TABLE_FULL);
+    } else {
+      clearPendingReqs();
+      pending_req = tag; // match this to onContactResponse()
+      out_frame[0] = RESP_CODE_SENT;
+      out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+      memcpy(&out_frame[2], &tag, 4);
+      memcpy(&out_frame[6], &est_timeout, 4);
+      _serial->writeFrame(out_frame, 10);
+    }
+  } else {
+    writeErrFrame(ERR_CODE_TABLE_FULL); // contacts full
+  }
+  return true;
+}
+
+bool MyMesh::cmdSendStatusReq(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (recipient) {
+    uint32_t tag, est_timeout;
+    int result = sendRequest(*recipient, REQ_TYPE_GET_STATUS, tag, est_timeout);
+    if (result == MSG_SEND_FAILED) {
+      writeErrFrame(ERR_CODE_TABLE_FULL);
+    } else {
+      clearPendingReqs();
+      // FUTURE:  pending_status = tag;  // match this in onContactResponse()
+      memcpy(&pending_status, recipient->id.pub_key, 4); // legacy matching scheme
+      out_frame[0] = RESP_CODE_SENT;
+      out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+      memcpy(&out_frame[2], &tag, 4);
+      memcpy(&out_frame[6], &est_timeout, 4);
+      _serial->writeFrame(out_frame, 10);
+    }
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
+  }
+  return true;
+}
+
+bool MyMesh::cmdSendPathDiscoveryReq(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  if (r.u8() != 0) return false;
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (recipient) {
+    uint32_t tag, est_timeout;
+    // 'Path Discovery' is just a special case of flood + Telemetry req
+    uint8_t req_data[9];
+    req_data[0] = REQ_TYPE_GET_TELEMETRY_DATA;
+    req_data[1] = ~(TELEM_PERM_BASE);  // NEW: inverse permissions mask (ie. we only want BASE telemetry)
+    memset(&req_data[2], 0, 3);  // reserved
+    getRNG()->random(&req_data[5], 4);   // random blob to help make packet-hash unique
+    auto save = recipient->out_path_len;    // temporarily force sendRequest() to flood
+    recipient->out_path_len = OUT_PATH_UNKNOWN;
+    int result = sendRequest(*recipient, req_data, sizeof(req_data), tag, est_timeout);
+    recipient->out_path_len = save;
+    if (result == MSG_SEND_FAILED) {
+      writeErrFrame(ERR_CODE_TABLE_FULL);
+    } else {
+      clearPendingReqs();
+      pending_discovery = tag; // match this in onContactResponse()
+      out_frame[0] = RESP_CODE_SENT;
+      out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+      memcpy(&out_frame[2], &tag, 4);
+      memcpy(&out_frame[6], &est_timeout, 4);
+      _serial->writeFrame(out_frame, 10);
+    }
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
+  }
+  return true;
+}
+
+bool MyMesh::cmdSendTelemetryReq(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  r.skip(3);  // reserved
+  if (r.has(PUB_KEY_SIZE)) {  // can deprecate, in favour of CMD_SEND_BINARY_REQ
+    uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
     ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
     if (recipient) {
       uint32_t tag, est_timeout;
@@ -1697,7 +1894,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
     }
-  } else if (cmd_frame[0] == CMD_SEND_TELEMETRY_REQ && len == 4) {  // 'self' telemetry request
+    return true;
+  }
+  if (r.remaining() == 0) {  // 'self' telemetry request
     telemetry.reset();
     telemetry.addVoltage(TELEM_CHANNEL_SELF, (float)board.getBattMilliVolts() / 1000.0f);
     float temperature = board.getMCUTemperature();
@@ -1717,349 +1916,456 @@ void MyMesh::handleCmdFrame(size_t len) {
     memcpy(&out_frame[i], telemetry.getBuffer(), tlen);
     i += tlen;
     _serial->writeFrame(out_frame, i);
-  } else if (cmd_frame[0] == CMD_SEND_BINARY_REQ && len >= 2 + PUB_KEY_SIZE) {
-    uint8_t *pub_key = &cmd_frame[1];
-    ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
-    if (recipient) {
-      uint8_t *req_data = &cmd_frame[1 + PUB_KEY_SIZE];
-      uint32_t tag, est_timeout;
-      int result = sendRequest(*recipient, req_data, len - (1 + PUB_KEY_SIZE), tag, est_timeout);
-      if (result == MSG_SEND_FAILED) {
-        writeErrFrame(ERR_CODE_TABLE_FULL);
-      } else {
-        clearPendingReqs();
-        pending_req = tag; // match this in onContactResponse()
-        out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
-        memcpy(&out_frame[2], &tag, 4);
-        memcpy(&out_frame[6], &est_timeout, 4);
-        _serial->writeFrame(out_frame, 10);
-      }
+    return true;
+  }
+  return false;
+}
+
+bool MyMesh::cmdSendBinaryReq(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  ContactInfo *recipient = lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (recipient) {
+    size_t req_len = r.remaining();
+    uint8_t *req_data = r.bytes(req_len);
+    uint32_t tag, est_timeout;
+    int result = sendRequest(*recipient, req_data, req_len, tag, est_timeout);
+    if (result == MSG_SEND_FAILED) {
+      writeErrFrame(ERR_CODE_TABLE_FULL);
     } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
+      clearPendingReqs();
+      pending_req = tag; // match this in onContactResponse()
+      out_frame[0] = RESP_CODE_SENT;
+      out_frame[1] = (result == MSG_SEND_SENT_FLOOD) ? 1 : 0;
+      memcpy(&out_frame[2], &tag, 4);
+      memcpy(&out_frame[6], &est_timeout, 4);
+      _serial->writeFrame(out_frame, 10);
     }
-  } else if (cmd_frame[0] == CMD_HAS_CONNECTION && len >= 1 + PUB_KEY_SIZE) {
-    uint8_t *pub_key = &cmd_frame[1];
-    if (hasConnectionTo(pub_key)) {
-      writeOKFrame();
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND);
-    }
-  } else if (cmd_frame[0] == CMD_LOGOUT && len >= 1 + PUB_KEY_SIZE) {
-    uint8_t *pub_key = &cmd_frame[1];
-    stopConnection(pub_key);
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND); // contact not found
+  }
+  return true;
+}
+
+bool MyMesh::cmdHasConnection(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  if (hasConnectionTo(pub_key)) {
     writeOKFrame();
-  } else if (cmd_frame[0] == CMD_GET_CHANNEL && len >= 2) {
-    uint8_t channel_idx = cmd_frame[1];
-    ChannelDetails channel;
-    if (getChannel(channel_idx, channel)) {
-      int i = 0;
-      out_frame[i++] = RESP_CODE_CHANNEL_INFO;
-      out_frame[i++] = channel_idx;
-      strcpy((char *)&out_frame[i], channel.name);
-      i += 32;
-      memcpy(&out_frame[i], channel.channel.secret, 16);
-      i += 16; // NOTE: only 128-bit supported
-      _serial->writeFrame(out_frame, i);
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND);
-    }
-  } else if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 32) {
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND);
+  }
+  return true;
+}
+
+bool MyMesh::cmdLogout(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  stopConnection(pub_key);
+  writeOKFrame();
+  return true;
+}
+
+bool MyMesh::cmdGetChannel(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t channel_idx = r.u8();
+  ChannelDetails channel;
+  if (getChannel(channel_idx, channel)) {
+    int i = 0;
+    out_frame[i++] = RESP_CODE_CHANNEL_INFO;
+    out_frame[i++] = channel_idx;
+    strcpy((char *)&out_frame[i], channel.name);
+    i += 32;
+    memcpy(&out_frame[i], channel.channel.secret, 16);
+    i += 16; // NOTE: only 128-bit supported
+    _serial->writeFrame(out_frame, i);
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND);
+  }
+  return true;
+}
+
+bool MyMesh::cmdSetChannel(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  if (r.has(1 + 32 + 32)) {
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD); // not supported (yet)
-  } else if (cmd_frame[0] == CMD_SET_CHANNEL && len >= 2 + 32 + 16) {
-    uint8_t channel_idx = cmd_frame[1];
+    return true;
+  }
+  if (r.has(1 + 32 + 16)) {
+    uint8_t channel_idx = r.u8();
     ChannelDetails channel;
-    StrHelper::strncpy(channel.name, (char *)&cmd_frame[2], 32);
+    StrHelper::strncpy(channel.name, (char *)r.bytes(32), 32);
     memset(channel.channel.secret, 0, sizeof(channel.channel.secret));
-    memcpy(channel.channel.secret, &cmd_frame[2 + 32], 16); // NOTE: only 128-bit supported
+    memcpy(channel.channel.secret, r.bytes(16), 16); // NOTE: only 128-bit supported
     if (setChannel(channel_idx, channel)) {
       saveChannels();
       writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_NOT_FOUND); // bad channel_idx
     }
-  } else if (cmd_frame[0] == CMD_SIGN_START) {
-    out_frame[0] = RESP_CODE_SIGN_START;
-    out_frame[1] = 0; // reserved
-    uint32_t len = MAX_SIGN_DATA_LEN;
-    memcpy(&out_frame[2], &len, 4);
-    _serial->writeFrame(out_frame, 6);
+    return true;
+  }
+  return false;
+}
 
-    if (sign_data) {
-      free(sign_data);
-    }
-    sign_data = (uint8_t *)malloc(MAX_SIGN_DATA_LEN);
-    sign_data_len = 0;
-  } else if (cmd_frame[0] == CMD_SIGN_DATA && len > 1) {
-    if (sign_data == NULL || sign_data_len + (len - 1) > MAX_SIGN_DATA_LEN) {
-      writeErrFrame(sign_data == NULL ? ERR_CODE_BAD_STATE : ERR_CODE_TABLE_FULL); // error: too long
-    } else {
-      memcpy(&sign_data[sign_data_len], &cmd_frame[1], len - 1);
-      sign_data_len += (len - 1);
-      writeOKFrame();
-    }
-  } else if (cmd_frame[0] == CMD_SIGN_FINISH) {
-    if (sign_data) {
-      self_id.sign(&out_frame[1], sign_data, sign_data_len);
+bool MyMesh::cmdSignStart(size_t) {
+  out_frame[0] = RESP_CODE_SIGN_START;
+  out_frame[1] = 0; // reserved
+  uint32_t len = MAX_SIGN_DATA_LEN;
+  memcpy(&out_frame[2], &len, 4);
+  _serial->writeFrame(out_frame, 6);
 
-      free(sign_data); // don't need sign_data now
-      sign_data = NULL;
+  if (sign_data) {
+    free(sign_data);
+  }
+  sign_data = (uint8_t *)malloc(MAX_SIGN_DATA_LEN);
+  sign_data_len = 0;
+  return true;
+}
 
-      out_frame[0] = RESP_CODE_SIGNATURE;
-      _serial->writeFrame(out_frame, 1 + SIGNATURE_SIZE);
-    } else {
-      writeErrFrame(ERR_CODE_BAD_STATE);
-    }
-  } else if (cmd_frame[0] == CMD_SEND_TRACE_PATH && len > 10 && len - 10 < MAX_PACKET_PAYLOAD-5) {
-    uint8_t path_len = len - 10;
-    uint8_t flags = cmd_frame[9];
-    uint8_t path_sz = flags & 0x03;  // NEW v1.11+
-    if ((path_len >> path_sz) > MAX_PATH_SIZE || (path_len % (1 << path_sz)) != 0) { // make sure is multiple of path_sz
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    } else {
-      uint32_t tag, auth;
-      memcpy(&tag, &cmd_frame[1], 4);
-      memcpy(&auth, &cmd_frame[5], 4);
-      auto pkt = createTrace(tag, auth, flags);
-      if (pkt) {
-        sendDirect(pkt, &cmd_frame[10], path_len);
+bool MyMesh::cmdSignData(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  size_t n = r.remaining();
+  if (sign_data == NULL || sign_data_len + n > MAX_SIGN_DATA_LEN) {
+    writeErrFrame(sign_data == NULL ? ERR_CODE_BAD_STATE : ERR_CODE_TABLE_FULL); // error: too long
+  } else {
+    memcpy(&sign_data[sign_data_len], r.bytes(n), n);
+    sign_data_len += n;
+    writeOKFrame();
+  }
+  return true;
+}
 
-        uint32_t t = _radio->getEstAirtimeFor(pkt->payload_len + pkt->path_len + 2);
-        uint32_t est_timeout = calcDirectTimeoutMillisFor(t, path_len >> path_sz);
+bool MyMesh::cmdSignFinish(size_t) {
+  if (sign_data) {
+    self_id.sign(&out_frame[1], sign_data, sign_data_len);
 
-        out_frame[0] = RESP_CODE_SENT;
-        out_frame[1] = 0;
-        memcpy(&out_frame[2], &tag, 4);
-        memcpy(&out_frame[6], &est_timeout, 4);
-        _serial->writeFrame(out_frame, 10);
-      } else {
-        writeErrFrame(ERR_CODE_TABLE_FULL);
-      }
-    }
-  } else if (cmd_frame[0] == CMD_SET_DEVICE_PIN && len >= 5) {
+    free(sign_data); // don't need sign_data now
+    sign_data = NULL;
 
-    // get pin from command frame
-    uint32_t pin;
-    memcpy(&pin, &cmd_frame[1], 4);
+    out_frame[0] = RESP_CODE_SIGNATURE;
+    _serial->writeFrame(out_frame, 1 + SIGNATURE_SIZE);
+  } else {
+    writeErrFrame(ERR_CODE_BAD_STATE);
+  }
+  return true;
+}
 
-    // ensure pin is zero, or a valid 6 digit pin
-    if (pin == 0 || (pin >= 100000 && pin <= 999999)) {
-      _prefs.ble_pin = pin;
-      savePrefs();
-      writeOKFrame();
+bool MyMesh::cmdSendTracePath(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint32_t tag = r.u32();
+  uint32_t auth = r.u32();
+  uint8_t flags = r.u8();
+  if (r.remaining() >= MAX_PACKET_PAYLOAD-5) return false;
+  uint8_t path_len = r.remaining();
+  uint8_t *path = r.bytes(path_len);
+  uint8_t path_sz = flags & 0x03;  // NEW v1.11+
+  if ((path_len >> path_sz) > MAX_PATH_SIZE || (path_len % (1 << path_sz)) != 0) { // make sure is multiple of path_sz
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  } else {
+    auto pkt = createTrace(tag, auth, flags);
+    if (pkt) {
+      sendDirect(pkt, path, path_len);
+
+      uint32_t t = _radio->getEstAirtimeFor(pkt->payload_len + pkt->path_len + 2);
+      uint32_t est_timeout = calcDirectTimeoutMillisFor(t, path_len >> path_sz);
+
+      out_frame[0] = RESP_CODE_SENT;
+      out_frame[1] = 0;
+      memcpy(&out_frame[2], &tag, 4);
+      memcpy(&out_frame[6], &est_timeout, 4);
+      _serial->writeFrame(out_frame, 10);
     } else {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+      writeErrFrame(ERR_CODE_TABLE_FULL);
     }
-  } else if (cmd_frame[0] == CMD_GET_CUSTOM_VARS) {
-    out_frame[0] = RESP_CODE_CUSTOM_VARS;
-    char *dp = (char *)&out_frame[1];
-    for (int i = 0; i < sensors.getNumSettings() && dp - (char *)&out_frame[1] < 140; i++) {
-      if (i > 0) {
-        *dp++ = ',';
-      }
-      strcpy(dp, sensors.getSettingName(i));
-      dp = strchr(dp, 0);
-      *dp++ = ':';
-      strcpy(dp, sensors.getSettingValue(i));
-      dp = strchr(dp, 0);
+  }
+  return true;
+}
+
+bool MyMesh::cmdSetDevicePin(size_t len) {
+
+  // get pin from command frame
+  FrameReader r(cmd_frame, len, 1);
+  uint32_t pin = r.u32();
+
+  // ensure pin is zero, or a valid 6 digit pin
+  if (pin == 0 || (pin >= 100000 && pin <= 999999)) {
+    _prefs.ble_pin = pin;
+    savePrefs();
+    writeOKFrame();
+  } else {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  }
+  return true;
+}
+
+bool MyMesh::cmdGetCustomVars(size_t) {
+  out_frame[0] = RESP_CODE_CUSTOM_VARS;
+  char *dp = (char *)&out_frame[1];
+  for (int i = 0; i < sensors.getNumSettings() && dp - (char *)&out_frame[1] < 140; i++) {
+    if (i > 0) {
+      *dp++ = ',';
     }
-    _serial->writeFrame(out_frame, dp - (char *)out_frame);
-  } else if (cmd_frame[0] == CMD_SET_CUSTOM_VAR && len >= 4) {
-    cmd_frame[len] = 0;
-    char *sp = (char *)&cmd_frame[1];
-    char *np = strchr(sp, ':'); // look for separator char
-    if (np) {
-      *np++ = 0; // modify 'cmd_frame', replace ':' with null
-      bool success = sensors.setSettingValue(sp, np);
-      if (success) {
-        #if ENV_INCLUDE_GPS == 1
-        // Update node preferences for GPS settings
-        if (strcmp(sp, "gps") == 0) {
-          _prefs.gps_enabled = (np[0] == '1') ? 1 : 0;
-          savePrefs();
-        } else if (strcmp(sp, "gps_interval") == 0) {
-          uint32_t interval_seconds = atoi(np);
-          _prefs.gps_interval = constrain(interval_seconds, 0, 86400);
-          savePrefs();
-        }
-        #endif
-        writeOKFrame();
-      } else {
-        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      }
-    } else {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-    }
-  } else if (cmd_frame[0] == CMD_GET_ADVERT_PATH && len >= PUB_KEY_SIZE+2) {
-    // FUTURE use:  uint8_t reserved = cmd_frame[1];
-    uint8_t *pub_key = &cmd_frame[2];
-    AdvertPath* found = NULL;
-    for (int i = 0; i < ADVERT_PATH_TABLE_SIZE; i++) {
-      auto p = &advert_paths[i];
-      if (memcmp(p->pubkey_prefix, pub_key, sizeof(p->pubkey_prefix)) == 0) {
-        found = p;
-        break;
-      }
-    }
-    if (found) {
-      int i = 0;
-      out_frame[i++] = RESP_CODE_ADVERT_PATH;
-      memcpy(&out_frame[i], &found->recv_timestamp, 4); i += 4;
-      out_frame[i++] = found->path_len;
-      i += mesh::Packet::writePath(&out_frame[i], found->path, found->path_len);
-      _serial->writeFrame(out_frame, i);
-    } else {
-      writeErrFrame(ERR_CODE_NOT_FOUND);
-    }
-  } else if (cmd_frame[0] == CMD_GET_STATS && len >= 2) {
-    uint8_t stats_type = cmd_frame[1];
-    if (stats_type == STATS_TYPE_CORE) {
-      int i = 0;
-      out_frame[i++] = RESP_CODE_STATS;
-      out_frame[i++] = STATS_TYPE_CORE;
-      uint16_t battery_mv = board.getBattMilliVolts();
-      uint32_t uptime_secs = _ms->getMillis() / 1000;
-      uint8_t queue_len = (uint8_t)_mgr->getOutboundTotal();
-      memcpy(&out_frame[i], &battery_mv, 2); i += 2;
-      memcpy(&out_frame[i], &uptime_secs, 4); i += 4;
-      memcpy(&out_frame[i], &_err_flags, 2); i += 2;
-      out_frame[i++] = queue_len;
-      _serial->writeFrame(out_frame, i);
-    } else if (stats_type == STATS_TYPE_RADIO) {
-      int i = 0;
-      out_frame[i++] = RESP_CODE_STATS;
-      out_frame[i++] = STATS_TYPE_RADIO;
-      int16_t noise_floor = (int16_t)_radio->getNoiseFloor();
-      int8_t last_rssi = (int8_t)radio_driver.getLastRSSI();
-      int8_t last_snr = (int8_t)(radio_driver.getLastSNR() * 4); // scaled by 4 for 0.25 dB precision
-      uint32_t tx_air_secs = getTotalAirTime() / 1000;
-      uint32_t rx_air_secs = getReceiveAirTime() / 1000;
-      memcpy(&out_frame[i], &noise_floor, 2); i += 2;
-      out_frame[i++] = last_rssi;
-      out_frame[i++] = last_snr;
-      memcpy(&out_frame[i], &tx_air_secs, 4); i += 4;
-      memcpy(&out_frame[i], &rx_air_secs, 4); i += 4;
-      _serial->writeFrame(out_frame, i);
-    } else if (stats_type == STATS_TYPE_PACKETS) {
-      int i = 0;
-      out_frame[i++] = RESP_CODE_STATS;
-      out_frame[i++] = STATS_TYPE_PACKETS;
-      uint32_t recv = radio_driver.getPacketsRecv();
-      uint32_t sent = radio_driver.getPacketsSent();
-      uint32_t n_sent_flood = getNumSentFlood();
-      uint32_t n_sent_direct = getNumSentDirect();
-      uint32_t n_recv_flood = getNumRecvFlood();
-      uint32_t n_recv_direct = getNumRecvDirect();
-      uint32_t n_recv_errors = radio_driver.getPacketsRecvErrors();
-      memcpy(&out_frame[i], &recv, 4); i += 4;
-      memcpy(&out_frame[i], &sent, 4); i += 4;
-      memcpy(&out_frame[i], &n_sent_flood, 4); i += 4;
-      memcpy(&out_frame[i], &n_sent_direct, 4); i += 4;
-      memcpy(&out_frame[i], &n_recv_flood, 4); i += 4;
-      memcpy(&out_frame[i], &n_recv_direct, 4); i += 4;
-      memcpy(&out_frame[i], &n_recv_errors, 4); i += 4;
-      _serial->writeFrame(out_frame, i);
-    } else {
-      writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid stats sub-type
-    }
-  } else if (cmd_frame[0] == CMD_FACTORY_RESET && memcmp(&cmd_frame[1], "reset", 5) == 0) {
-    if (_serial) {
-      MESH_DEBUG_PRINTLN("Factory reset: disabling serial interface to prevent reconnects (BLE/WiFi)");
-      _serial->disable(); // Phone app disconnects before we can send OK frame so it's safe here
-    }
-    bool success = _store->formatFileSystem();
+    strcpy(dp, sensors.getSettingName(i));
+    dp = strchr(dp, 0);
+    *dp++ = ':';
+    strcpy(dp, sensors.getSettingValue(i));
+    dp = strchr(dp, 0);
+  }
+  _serial->writeFrame(out_frame, dp - (char *)out_frame);
+  return true;
+}
+
+bool MyMesh::cmdSetCustomVar(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  char *sp = r.restAsCString();
+  char *np = strchr(sp, ':'); // look for separator char
+  if (np) {
+    *np++ = 0; // modify 'cmd_frame', replace ':' with null
+    bool success = sensors.setSettingValue(sp, np);
     if (success) {
+      #if ENV_INCLUDE_GPS == 1
+      // Update node preferences for GPS settings
+      if (strcmp(sp, "gps") == 0) {
+        _prefs.gps_enabled = (np[0] == '1') ? 1 : 0;
+        savePrefs();
+      } else if (strcmp(sp, "gps_interval") == 0) {
+        uint32_t interval_seconds = atoi(np);
+        _prefs.gps_interval = constrain(interval_seconds, 0, 86400);
+        savePrefs();
+      }
+      #endif
       writeOKFrame();
-      delay(1000);
-      board.reboot();  // doesn't return
     } else {
-      writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
-  } else if (cmd_frame[0] == CMD_SET_FLOOD_SCOPE_KEY && len >= 2 && cmd_frame[1] == 0) {
-    if (len >= 2 + 16) {
-      memcpy(send_scope.key, &cmd_frame[2], sizeof(send_scope.key));  // set scope override TransportKey
+  } else {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+  }
+  return true;
+}
+
+bool MyMesh::cmdGetAdvertPath(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  r.skip(1);  // FUTURE use: reserved
+  uint8_t *pub_key = r.bytes(PUB_KEY_SIZE);
+  AdvertPath* found = NULL;
+  for (int i = 0; i < ADVERT_PATH_TABLE_SIZE; i++) {
+    auto p = &advert_paths[i];
+    if (memcmp(p->pubkey_prefix, pub_key, sizeof(p->pubkey_prefix)) == 0) {
+      found = p;
+      break;
+    }
+  }
+  if (found) {
+    int i = 0;
+    out_frame[i++] = RESP_CODE_ADVERT_PATH;
+    memcpy(&out_frame[i], &found->recv_timestamp, 4); i += 4;
+    out_frame[i++] = found->path_len;
+    i += mesh::Packet::writePath(&out_frame[i], found->path, found->path_len);
+    _serial->writeFrame(out_frame, i);
+  } else {
+    writeErrFrame(ERR_CODE_NOT_FOUND);
+  }
+  return true;
+}
+
+bool MyMesh::cmdGetStats(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t stats_type = r.u8();
+  if (stats_type == STATS_TYPE_CORE) {
+    int i = 0;
+    out_frame[i++] = RESP_CODE_STATS;
+    out_frame[i++] = STATS_TYPE_CORE;
+    uint16_t battery_mv = board.getBattMilliVolts();
+    uint32_t uptime_secs = _ms->getMillis() / 1000;
+    uint8_t queue_len = (uint8_t)_mgr->getOutboundTotal();
+    memcpy(&out_frame[i], &battery_mv, 2); i += 2;
+    memcpy(&out_frame[i], &uptime_secs, 4); i += 4;
+    memcpy(&out_frame[i], &_err_flags, 2); i += 2;
+    out_frame[i++] = queue_len;
+    _serial->writeFrame(out_frame, i);
+  } else if (stats_type == STATS_TYPE_RADIO) {
+    int i = 0;
+    out_frame[i++] = RESP_CODE_STATS;
+    out_frame[i++] = STATS_TYPE_RADIO;
+    int16_t noise_floor = (int16_t)_radio->getNoiseFloor();
+    int8_t last_rssi = (int8_t)radio_driver.getLastRSSI();
+    int8_t last_snr = (int8_t)(radio_driver.getLastSNR() * 4); // scaled by 4 for 0.25 dB precision
+    uint32_t tx_air_secs = getTotalAirTime() / 1000;
+    uint32_t rx_air_secs = getReceiveAirTime() / 1000;
+    memcpy(&out_frame[i], &noise_floor, 2); i += 2;
+    out_frame[i++] = last_rssi;
+    out_frame[i++] = last_snr;
+    memcpy(&out_frame[i], &tx_air_secs, 4); i += 4;
+    memcpy(&out_frame[i], &rx_air_secs, 4); i += 4;
+    _serial->writeFrame(out_frame, i);
+  } else if (stats_type == STATS_TYPE_PACKETS) {
+    int i = 0;
+    out_frame[i++] = RESP_CODE_STATS;
+    out_frame[i++] = STATS_TYPE_PACKETS;
+    uint32_t recv = radio_driver.getPacketsRecv();
+    uint32_t sent = radio_driver.getPacketsSent();
+    uint32_t n_sent_flood = getNumSentFlood();
+    uint32_t n_sent_direct = getNumSentDirect();
+    uint32_t n_recv_flood = getNumRecvFlood();
+    uint32_t n_recv_direct = getNumRecvDirect();
+    uint32_t n_recv_errors = radio_driver.getPacketsRecvErrors();
+    memcpy(&out_frame[i], &recv, 4); i += 4;
+    memcpy(&out_frame[i], &sent, 4); i += 4;
+    memcpy(&out_frame[i], &n_sent_flood, 4); i += 4;
+    memcpy(&out_frame[i], &n_sent_direct, 4); i += 4;
+    memcpy(&out_frame[i], &n_recv_flood, 4); i += 4;
+    memcpy(&out_frame[i], &n_recv_direct, 4); i += 4;
+    memcpy(&out_frame[i], &n_recv_errors, 4); i += 4;
+    _serial->writeFrame(out_frame, i);
+  } else {
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG); // invalid stats sub-type
+  }
+  return true;
+}
+
+bool MyMesh::cmdFactoryReset(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  if (memcmp(r.bytes(5), "reset", 5) != 0) return false;
+  if (_serial) {
+    MESH_DEBUG_PRINTLN("Factory reset: disabling serial interface to prevent reconnects (BLE/WiFi)");
+    _serial->disable(); // Phone app disconnects before we can send OK frame so it's safe here
+  }
+  bool success = _store->formatFileSystem();
+  if (success) {
+    writeOKFrame();
+    delay(1000);
+    board.reboot();  // doesn't return
+  } else {
+    writeErrFrame(ERR_CODE_FILE_IO_ERROR);
+  }
+  return true;
+}
+
+bool MyMesh::cmdSetFloodScopeKey(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  uint8_t mode = r.u8();
+  if (mode == 0) {
+    if (r.has(16)) {
+      memcpy(send_scope.key, r.bytes(sizeof(send_scope.key)), sizeof(send_scope.key));  // set scope override TransportKey
     } else {
       memset(send_scope.key, 0, sizeof(send_scope.key));  // reset scope override
     }
     send_unscoped = false;
     writeOKFrame();
-  } else if (cmd_frame[0] == CMD_SET_FLOOD_SCOPE_KEY && len >= 2 && cmd_frame[1] == 1) {  // ver 12+
+    return true;
+  }
+  if (mode == 1) {  // ver 12+
     send_unscoped = true;
     writeOKFrame();
-  } else if (cmd_frame[0] == CMD_SET_DEFAULT_FLOOD_SCOPE && len >= 1) {
-    if (len >= 1+31+16) {
-      int n = strlen((char *) &cmd_frame[1]);
-      if (n > 0 && n < 31) {
-        strcpy(_prefs.default_scope_name, (char *) &cmd_frame[1]);
-        memcpy(_prefs.default_scope_key, &cmd_frame[1+31], 16);
-        savePrefs();
-        writeOKFrame();
-      } else {
-        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      }
-    } else {
-      memset(_prefs.default_scope_name, 0, sizeof(_prefs.default_scope_name));  // set default scope to null
-      memset(_prefs.default_scope_key, 0, sizeof(_prefs.default_scope_key));
+    return true;
+  }
+  return false;
+}
+
+bool MyMesh::cmdSetDefaultFloodScope(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  if (r.has(31 + 16)) {
+    size_t avail = r.remaining();
+    const char *name = (const char *) r.bytes(31);
+    const uint8_t *key = r.bytes(16);
+    int n = strnlen(name, avail);   // may run on into the key, never past the frame
+    if (n > 0 && n < 31) {
+      strcpy(_prefs.default_scope_name, name);
+      memcpy(_prefs.default_scope_key, key, 16);
       savePrefs();
       writeOKFrame();
-    }
-  } else if (cmd_frame[0] == CMD_GET_DEFAULT_FLOOD_SCOPE) {
-    out_frame[0] = RESP_CODE_DEFAULT_FLOOD_SCOPE;
-    if (strlen(_prefs.default_scope_name) > 0) {
-      memcpy(&out_frame[1], _prefs.default_scope_name, 31);
-      memcpy(&out_frame[1+31], _prefs.default_scope_key, 16);
-      _serial->writeFrame(out_frame, 1+31+16);
     } else {
-      _serial->writeFrame(out_frame, 1);   // no name or key means null
-    }
-  } else if (cmd_frame[0] == CMD_SEND_CONTROL_DATA && len >= 2 && (cmd_frame[1] & 0x80) != 0) {
-    auto resp = createControlData(&cmd_frame[1], len - 1);
-    if (resp) {
-      sendZeroHop(resp);
-      writeOKFrame();
-    } else {
-      writeErrFrame(ERR_CODE_TABLE_FULL);
-    }
-  } else if (cmd_frame[0] == CMD_SET_AUTOADD_CONFIG) {
-    _prefs.autoadd_config = cmd_frame[1];
-    if (len >= 3) {
-      _prefs.autoadd_max_hops = min(cmd_frame[2], (uint8_t)64);
-    }
-    savePrefs();
-    writeOKFrame();
-  } else if (cmd_frame[0] == CMD_GET_AUTOADD_CONFIG) {
-    int i = 0;
-    out_frame[i++] = RESP_CODE_AUTOADD_CONFIG;
-    out_frame[i++] = _prefs.autoadd_config;
-    out_frame[i++] = _prefs.autoadd_max_hops;
-    _serial->writeFrame(out_frame, i);
-  } else if (cmd_frame[0] == CMD_GET_ALLOWED_REPEAT_FREQ) {
-    int i = 0;
-    out_frame[i++] = RESP_ALLOWED_REPEAT_FREQ;
-    for (int k = 0; k < sizeof(repeat_freq_ranges)/sizeof(repeat_freq_ranges[0]) && i + 8 < sizeof(out_frame); k++) {
-      auto r = &repeat_freq_ranges[k];
-      memcpy(&out_frame[i], &r->lower_freq, 4); i += 4;
-      memcpy(&out_frame[i], &r->upper_freq, 4); i += 4;
-    }
-    _serial->writeFrame(out_frame, i);
-  } else if (cmd_frame[0] == CMD_SEND_RAW_PACKET && len >= 4) {
-    auto pkt = obtainNewPacket();
-    if (pkt) {
-      uint8_t priority = cmd_frame[1];
-      if (tryParsePacket(pkt, &cmd_frame[2], len - 2)) {
-        sendPacket(pkt, priority, 0);
-        writeOKFrame();
-      } else {
-        releasePacket(pkt);
-        writeErrFrame(ERR_CODE_ILLEGAL_ARG);
-      }
-    } else {
-      writeErrFrame(ERR_CODE_TABLE_FULL);
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else {
-    writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
-    MESH_DEBUG_PRINTLN("ERROR: unknown command: %02X", cmd_frame[0]);
+    memset(_prefs.default_scope_name, 0, sizeof(_prefs.default_scope_name));  // set default scope to null
+    memset(_prefs.default_scope_key, 0, sizeof(_prefs.default_scope_key));
+    savePrefs();
+    writeOKFrame();
   }
+  return true;
+}
+
+bool MyMesh::cmdGetDefaultFloodScope(size_t) {
+  out_frame[0] = RESP_CODE_DEFAULT_FLOOD_SCOPE;
+  if (strlen(_prefs.default_scope_name) > 0) {
+    memcpy(&out_frame[1], _prefs.default_scope_name, 31);
+    memcpy(&out_frame[1+31], _prefs.default_scope_key, 16);
+    _serial->writeFrame(out_frame, 1+31+16);
+  } else {
+    _serial->writeFrame(out_frame, 1);   // no name or key means null
+  }
+  return true;
+}
+
+bool MyMesh::cmdSendControlData(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  size_t n = r.remaining();
+  uint8_t *data = r.bytes(n);
+  if ((data[0] & 0x80) == 0) return false;
+  auto resp = createControlData(data, n);
+  if (resp) {
+    sendZeroHop(resp);
+    writeOKFrame();
+  } else {
+    writeErrFrame(ERR_CODE_TABLE_FULL);
+  }
+  return true;
+}
+
+// autoadd_max_hops stays optional
+bool MyMesh::cmdSetAutoaddConfig(size_t len) {
+  FrameReader r(cmd_frame, len, 1);
+  _prefs.autoadd_config = r.u8();
+  if (r.has(1)) {
+    uint8_t hops = r.u8();   // read once: min() may be a macro
+    _prefs.autoadd_max_hops = min(hops, (uint8_t)64);
+  }
+  savePrefs();
+  writeOKFrame();
+  return true;
+}
+
+bool MyMesh::cmdGetAutoaddConfig(size_t) {
+  int i = 0;
+  out_frame[i++] = RESP_CODE_AUTOADD_CONFIG;
+  out_frame[i++] = _prefs.autoadd_config;
+  out_frame[i++] = _prefs.autoadd_max_hops;
+  _serial->writeFrame(out_frame, i);
+  return true;
+}
+
+bool MyMesh::cmdGetAllowedRepeatFreq(size_t) {
+  int i = 0;
+  out_frame[i++] = RESP_ALLOWED_REPEAT_FREQ;
+  for (int k = 0; k < sizeof(repeat_freq_ranges)/sizeof(repeat_freq_ranges[0]) && i + 8 < sizeof(out_frame); k++) {
+    auto r = &repeat_freq_ranges[k];
+    memcpy(&out_frame[i], &r->lower_freq, 4); i += 4;
+    memcpy(&out_frame[i], &r->upper_freq, 4); i += 4;
+  }
+  _serial->writeFrame(out_frame, i);
+  return true;
+}
+
+bool MyMesh::cmdSendRawPacket(size_t len) {
+  auto pkt = obtainNewPacket();
+  if (pkt) {
+    FrameReader r(cmd_frame, len, 1);
+    uint8_t priority = r.u8();
+    int raw_len = r.remaining();
+    if (tryParsePacket(pkt, r.bytes(raw_len), raw_len)) {
+      sendPacket(pkt, priority, 0);
+      writeOKFrame();
+    } else {
+      releasePacket(pkt);
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    }
+  } else {
+    writeErrFrame(ERR_CODE_TABLE_FULL);
+  }
+  return true;
 }
 
 static bool save_filter(const ContactInfo& c) {
