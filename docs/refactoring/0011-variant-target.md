@@ -3,9 +3,9 @@
 Status: cut A (one shared `radio_new_identity()`) and cut B (one shared FEM RX gain
 handler) implemented, each its own pull request, B stacked on A. Cut C (one default
 `radio_init()` for 31 nRF52 variants) implemented, its own pull request, on top of
-A and B. Cut D (the radio, wrapper and RTC globals) is designed as two pull requests;
-D1 (31 nRF52 variants) is implemented, D2 (22 ESP32 variants) follows on top of it,
-see "Cut D". Cut E is planned. Behaviour change: none.
+A and B. Cut D (the radio, wrapper and RTC globals) is implemented as two pull requests,
+D1 (31 nRF52 variants) and D2 (22 ESP32 variants) on top of it, see "Cut D". Cut E is
+planned. Behaviour change: none.
 
 ## Context
 
@@ -89,7 +89,7 @@ weak" below).
 | A | one `radio_new_identity()` for all RadioLib variants | 87 `target.cpp`, 1 new source, 1 header | implemented, see "Cut A" |
 | B | one class for the FEM gain handlers of HeltecV4, HeltecV4R8, T096, HeltecTrackerV2 | 4 board classes, 1 new helper | implemented, see "Cut B" |
 | C | a shared default `radio_init()` for the bodies that need no new description (28 + 3 of 89, all nRF52) | 31 `target.cpp`, 1 source, 1 header | implemented, see "Cut C" |
-| D | the radio, wrapper and RTC globals from the board description (D1: 31 nRF52, D2: 22 ESP32 variants) | 53 `target.cpp` and `target.h`, 1 source | D1 implemented, D2 next, see "Cut D" |
+| D | the radio, wrapper and RTC globals from the board description (D1: 31 nRF52, D2: 22 ESP32 variants) | 53 `target.cpp` and `target.h`, 1 source | D1 and D2 implemented, see "Cut D" |
 | E | sensors, display and button from the board description | the rest | planned |
 
 Cut B in more detail: the four bodies are the same once the class name is replaced,
@@ -1439,6 +1439,192 @@ the same on both sides.
 | `waveshare_rp2040_lora_repeater_bridge_rs232` | 241,080 | 241,080 | +0 | 26,704 | 26,704 | +0 | identical |
 | `wio-e5-mini_repeater` | 204,136 | 204,136 | +0 | 17,172 | 17,172 | +0 | identical |
 | `wio-e5-mini_sensor` | 203,664 | 203,664 | +0 | 15,276 | 15,276 | +0 | identical |
+
+</details>
+
+### D2: host tests
+
+`native_variant_target_esp32` and three siblings (new) build `RadioLibTarget.cpp`
+against the target.h of an ESP32 variant (`test/mocks/radiolib_variant_esp32`,
+with a stand-in `helpers/ESP32Board.h` whose `ESP32RTCClock` records `begin()`),
+one environment per board description that occurs among the 22: SX1262 on an own
+bus on the default host; the same without `P_LORA_SCLK`; SX1276; own bus on
+`P_LORA_SPI_HOST=FSPI`. The SPI stand-in gets bus numbers, the radio stand-in tells
+"the module's own bus" apart from `SPI`.
+
+The first commit (`02978dd3`) has, per environment, the variants' block and
+`radio_init()` verbatim at file scope (heltec_v3 and the others with the plain
+block, heltec_v2 for the SX1276, heltec_e213 for the own host) and once more in a
+namespace as reference; where `P_LORA_SCLK` is set also the blocks written without
+the `#if` (lilygo_t3s3, meshadventurer, the nibble boards, lilygo_tlora_v2_1),
+the bus of lilygo_tlora_c6 (`spi(0)`) and the `radio_init()` body without the
+`#if`. Seven cases run on each:
+
+- the radio is built from a `Module`, with the pins in the chip's order
+  (SX1276: `P_LORA_DIO_0, P_LORA_RESET, P_LORA_DIO_1`),
+- on an own bus that is not `SPI`, on the variant's host or the default one, or
+  with no bus where `P_LORA_SCLK` is not set,
+- `radio_driver` wraps the board, `rtc_clock` falls back to `fallback_clock`,
+- `radio_init()` starts the fallback clock, then the RTC on `Wire`, then the radio
+  once on its own bus (or with none), and passes `false` through.
+
+The code commit deletes the file-scope block and `radio_init()` from the test and
+defines the macro in the stand-in `target.h`; the cases are unchanged.
+`test_variant_target_esp32_override` (new, in the first ESP32 environment) defines
+its own `radio_init()` with the shared globals and checks it wins. All 22 host
+environments pass: 706 test cases on the test commit, 707 on the code commit (the
+override case).
+
+Mutations of the shared code, each of which must fail:
+
+| mutation | result |
+|---|---|
+| M1: SX1276 pins in SX126x order | 1 test fails |
+| M2: `P_LORA_SPI_HOST` ignored | 1 test fails |
+| M3: own bus created but not passed to the `Module` | 6 tests fail |
+| M4: RTC started before the fallback clock | 4 tests fail |
+| M5: fallback clock not started | 8 tests fail |
+| M6: `std_init()` without the bus where there is one | 3 tests fail |
+| M7: `std_init()` result dropped | 3 tests fail |
+| M8: `radio_init()` not weak | the override suite does not link (`duplicate symbol 'radio_init()'`) |
+| M9: `rtc_clock` falls back to another clock | 4 tests fail |
+| M10: `SPI` passed where `P_LORA_SCLK` is not set | 1 test fails |
+
+### D2: what the code commit changes
+
+`67619b76`: `RadioLibTarget.cpp` describes the globals for ESP32 too (pins by chip,
+own `SPIClass` with `P_LORA_SCLK`, on `P_LORA_SPI_HOST` if set, `ESP32RTCClock`
+from `helpers/ESP32Board.h`) and gets the weak `radio_init()` for ESP32 with an
+SX1262, SX1268 or SX1276; the D1 `#error` for SX1276 goes, since the pin order is
+now described. In `variants/`: 22 `target.cpp`, deletions only (455 lines: block,
+`radio_init()`, blank lines); 22 `target.h` with the opt-in line and 5 of them with
+`#define P_LORA_SPI_HOST FSPI` (`heltec_e213`, `heltec_e290`, `heltec_rc32`,
+`heltec_t190`) or `0` (`lilygo_tlora_c6`), additions only. `nibble_screen_connect`
+uses CRLF, kept.
+
+`ESP32Board.h` defines `static RTC_NOINIT_ATTR uint32_t _rtc_backup_time` and
+`_rtc_backup_magic` in the header, used by the inline members of `ESP32RTCClock`,
+so every translation unit that uses those members gets its own copy. Moving
+`fallback_clock` and its `begin()` to `RadioLibTarget.cpp` must not leave two
+copies, or one that `begin()` reads and `setCurrentTime()` writes another. Checked
+with `objdump -t` in all 29 edited environments: exactly one copy of each before and
+after, before in `target.cpp`, after in `RadioLibTarget.cpp`, at the same address
+in `.rtc_noinit` (so a time saved by the old image is read by the new one).
+
+Initialization order, as designed: in the 53 `target.cpp` of D1 and D2, the only
+remaining globals that name a moved object are the 35 GPS providers
+(`MicroNMEALocationProvider(Serial1, &rtc_clock, ...)`), which store the pointer;
+the moved constructors store references (`board`, `fallback_clock`) and do not read
+any other global.
+
+### D2: builds
+
+50 environments, built from `02978dd3` (the test commit, firmware sources as on
+D1's code commit) and from `67619b76`, in the same worktree, with
+`SOURCE_DATE_EPOCH=1760000000`: one per edited variant (22, a repeater each), the
+SX1268 builds of `generic-e22` and `meshadventurer`, the other roles of
+`heltec_v3` and `RAK_3112`, ESP32 variants that keep their block (`heltec_ct62`,
+`thinknode_m9`, `station_g2`, `lilygo_teth_elite`, `xiao_c3`, `thinknode_m7`,
+`lilygo_tbeam_supreme_SX1262`), the two C6, and the nRF52, RP2040 and STM32
+environments of the series' matrix.
+
+- All 50 build on both commits.
+- **Every environment outside the 22 variants has the same image**: nRF52, RP2040
+  and STM32 byte for byte, ESP32 and C6 outside the 65 bytes that hash the ELF (as
+  for D1).
+- In the 29 environments of the 22 variants, flash changes by -100 to +76 bytes
+  (21 smaller, 3 equal, 5 larger), RAM by -16 to +8.
+- To tell what in those images differs, 9 of the environments (SX1262, SX1276,
+  own host, C3 and C6 on RISC-V) were built a second time from `02978dd3` in
+  another worktree; those images equal the first build's outside the ELF hash, and
+  their object files were compared with the code commit's, as disassembly with
+  relocations and without comments: **in all 9, only `RadioLibTarget.cpp.o` and the
+  variant's `target.cpp.o` differ**; the other 249 to 291 object files are the same.
+  So any other difference in the images comes from linking.
+- `nm` on all 29 (symbols as name, size and binding): `radio` becomes local,
+  `radio_init()` becomes weak (`W`) and comes from `RadioLibTarget.cpp`, the
+  construction moves from the variant's initializer to `_GLOBAL__sub_I_radio_driver`,
+  and the destructor registration with it (`_GLOBAL__sub_D_radio_driver`;
+  `SPIClass` has a destructor; in 27 of the 29, not in the C3 and C6 builds).
+  Besides those, up to 8 functions per environment change size; for each, the link
+  map says which object file its code comes from:
+  - from an unchanged object file (`Dispatcher.cpp`, `Mesh.cpp`, `Packet.cpp`,
+    `main.cpp`'s `loop()`, `AutoDiscoverRTCClock.cpp`, `ESP32Board.cpp`,
+    `SSD1306Display.cpp`, `RadioLibWrappers.cpp`, even the prebuilt `libesp_wifi.a`):
+    the code is the same before linking, the size changes with the linker's
+    relaxation on Xtensa and RISC-V, which picks shorter or longer instruction
+    forms depending on the final addresses (2 or 4 bytes on RISC-V);
+  - inline functions whose kept copy moved from `target.cpp.o` to
+    `RadioLibTarget.cpp.o` with the construction of the radio and the wrapper
+    (`sx126xResetAGC()`, `CustomSX126x::isReceiving()`, `CustomSX1276::std_init()`,
+    `ESP32RTCClock::begin()`, `CustomSX1262Wrapper::doResetAGC()` and
+    `isReceivingPacket()`), and `MicroNMEALocationProvider::waitFor()` and
+    `formatAge()`, which stay in the changed `target.cpp.o`: compared function by
+    function in the object files, the same instructions with the same relocation
+    targets; the differences are Xtensa's narrow and wide encodings of the same
+    instruction (`mov.n a11, a3` for `or a11, a3, a3`), alignment fill, and
+    offsets;
+  - `radio_init()` itself: the shared one equals each variant's in all 9, apart
+    from the relocation to `radio`, which is now a local symbol (on the C3 also the
+    numbering of its float constants, whose contents are the same).
+- No hardware evidence (without board). A board run would check the same as for
+  D1, plus on an ESP32 that the time survives a reset (the RTC backup above).
+
+<details>
+<summary>All 50 environments</summary>
+
+| Environment | Flash before | Flash after | Flash delta | RAM before | RAM after | RAM delta | image |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `Generic_E22_sx1262_repeater` | 1,143,573 | 1,143,573 | +0 | 60,620 | 60,620 | +0 | differs (bin) |
+| `Heltec_E213_repeater` | 1,162,233 | 1,162,241 | +8 | 71,932 | 71,940 | +8 | differs (bin) |
+| `Heltec_E290_repeater` | 1,160,185 | 1,160,261 | +76 | 72,116 | 72,124 | +8 | differs (bin) |
+| `heltec_rc32_without_display_repeater` | 1,162,169 | 1,162,121 | -48 | 62,176 | 62,176 | +0 | differs (bin) |
+| `Heltec_T190_repeater_` | 1,139,397 | 1,139,373 | -24 | 71,872 | 71,872 | +0 | differs (bin) |
+| `Heltec_Wireless_Tracker_repeater` | 1,157,621 | 1,157,521 | -100 | 61,088 | 61,088 | +0 | differs (bin) |
+| `heltec_tracker_v2_repeater` | 1,226,257 | 1,226,209 | -48 | 74,344 | 74,352 | +8 | differs (bin) |
+| `Heltec_v2_repeater` | 1,151,913 | 1,151,901 | -12 | 60,604 | 60,604 | +0 | differs (bin) |
+| `Heltec_v3_repeater` | 1,175,025 | 1,174,961 | -64 | 62,512 | 62,512 | +0 | differs (bin) |
+| `heltec_v4_repeater` | 1,173,137 | 1,173,089 | -48 | 62,476 | 62,484 | +8 | differs (bin) |
+| `heltec_v4_r8_repeater` | 1,176,629 | 1,176,589 | -40 | 62,400 | 62,400 | +0 | differs (bin) |
+| `Heltec_Wireless_Paper_repeater` | 1,121,873 | 1,121,873 | +0 | 60,376 | 60,376 | +0 | differs (bin) |
+| `LilyGo_T3S3_sx1262_repeater` | 1,108,533 | 1,108,537 | +4 | 60,500 | 60,500 | +0 | differs (bin) |
+| `Tbeam_SX1262_repeater` | 1,205,213 | 1,205,157 | -56 | 61,212 | 61,212 | +0 | differs (bin) |
+| `Tbeam_SX1276_repeater` | 1,201,181 | 1,201,113 | -68 | 61,092 | 61,092 | +0 | differs (bin) |
+| `LilyGo_Tlora_C6_repeater_` | 542,447 | 542,449 | +2 | 29,856 | 29,856 | +0 | differs (bin) |
+| `LilyGo_TLora_V2_1_1_6_repeater` | 1,663,989 | 1,663,977 | -12 | 62,472 | 62,472 | +0 | differs (bin) |
+| `Meshadventurer_sx1262_repeater` | 1,162,097 | 1,162,029 | -68 | 61,084 | 61,084 | +0 | differs (bin) |
+| `nibble_screen_connect_repeater_` | 1,103,205 | 1,103,209 | +4 | 60,216 | 60,216 | +0 | differs (bin) |
+| `nibble_zero_connect_repeater_` | 1,103,309 | 1,103,301 | -8 | 60,216 | 60,216 | +0 | differs (bin) |
+| `RAK_3112_repeater` | 1,165,829 | 1,165,765 | -64 | 62,416 | 62,424 | +8 | differs (bin) |
+| `Tenstar_C3_sx1262_repeater` | 1,152,392 | 1,152,378 | -14 | 53,812 | 53,796 | -16 | differs (bin) |
+| `Heltec_ct62_repeater` | 1,151,874 | 1,151,874 | +0 | 53,772 | 53,772 | +0 | differs (bin) |
+| `ThinkNode_M9_repeater_` | 1,182,977 | 1,182,977 | +0 | 62,144 | 62,144 | +0 | differs (bin) |
+| `Station_G2_repeater` | 1,207,885 | 1,207,885 | +0 | 74,712 | 74,712 | +0 | differs (bin) |
+| `LilyGo_TETH_Elite_sx1262_repeater` | 1,076,289 | 1,076,289 | +0 | 59,408 | 59,408 | +0 | differs (bin) |
+| `Xiao_C3_repeater` | 1,158,046 | 1,158,046 | +0 | 54,076 | 54,076 | +0 | differs (bin) |
+| `ThinkNode_M7_repeater` | 1,089,241 | 1,089,241 | +0 | 59,688 | 59,688 | +0 | differs (bin) |
+| `T_Beam_S3_Supreme_SX1262_repeater` | 1,155,517 | 1,155,517 | +0 | 61,072 | 61,072 | +0 | differs (bin) |
+| `RAK_4631_repeater` | 441,820 | 441,820 | +0 | 37,240 | 37,240 | +0 | identical |
+| `ProMicro_repeater` | 346,276 | 346,276 | +0 | 33,900 | 33,900 | +0 | identical |
+| `Heltec_v3_room_server` | 1,170,173 | 1,170,101 | -72 | 66,200 | 66,200 | +0 | differs (bin) |
+| `Heltec_v3_companion_radio_ble` | 1,671,657 | 1,671,593 | -64 | 194,844 | 194,844 | +0 | differs (bin) |
+| `Heltec_v3_companion_radio_wifi` | 1,107,825 | 1,107,797 | -28 | 172,384 | 172,384 | +0 | differs (bin) |
+| `Heltec_v3_sensor` | 1,181,561 | 1,181,489 | -72 | 60,600 | 60,600 | +0 | differs (bin) |
+| `RAK_4631_room_server` | 435,116 | 435,116 | +0 | 40,928 | 40,928 | +0 | identical |
+| `RAK_4631_companion_radio_ble` | 465,224 | 465,224 | +0 | 149,768 | 149,768 | +0 | identical |
+| `RAK_4631_sensor` | 438,812 | 438,812 | +0 | 35,328 | 35,328 | +0 | identical |
+| `PicoW_repeater` | 492,668 | 492,668 | +0 | 85,368 | 85,368 | +0 | identical |
+| `wio-e5-mini_repeater` | 204,136 | 204,136 | +0 | 17,172 | 17,172 | +0 | identical |
+| `wio-e5-mini_sensor` | 203,664 | 203,664 | +0 | 15,276 | 15,276 | +0 | identical |
+| `RAK_3112_repeater_bridge_espnow` | 1,176,333 | 1,176,269 | -64 | 64,072 | 64,072 | +0 | differs (bin) |
+| `waveshare_rp2040_lora_repeater_bridge_rs232` | 241,080 | 241,080 | +0 | 26,704 | 26,704 | +0 | identical |
+| `ProMicro_room_server` | 339,340 | 339,340 | +0 | 37,596 | 37,596 | +0 | identical |
+| `ProMicro_companion_radio_usb` | 359,816 | 359,816 | +0 | 99,468 | 99,468 | +0 | identical |
+| `ProMicro_sensor` | 343,008 | 343,008 | +0 | 31,996 | 31,996 | +0 | identical |
+| `Xiao_C6_repeater_` | 542,479 | 542,479 | +0 | 29,856 | 29,856 | +0 | differs (bin) |
+| `M5Stack_Unit_C6L_repeater` | 552,821 | 552,821 | +0 | 29,752 | 29,752 | +0 | differs (bin) |
+| `Generic_E22_sx1268_repeater` | 1,143,361 | 1,143,361 | +0 | 60,620 | 60,620 | +0 | differs (bin) |
+| `Meshadventurer_sx1268_repeater` | 1,161,869 | 1,161,797 | -72 | 61,084 | 61,084 | +0 | differs (bin) |
 
 </details>
 

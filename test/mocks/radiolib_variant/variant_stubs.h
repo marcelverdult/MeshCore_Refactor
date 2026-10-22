@@ -14,8 +14,7 @@
 #include <string>
 #include <vector>
 
-// What the stand-ins below were asked to do, in order, for the tests to compare.
-inline std::vector<std::string> target_calls;
+#include "target_calls.h"
 
 // Stand-in for RadioLib's Module, with its two Arduino constructors, which do
 // different things: without an SPI bus RadioLib starts the default bus itself,
@@ -41,7 +40,9 @@ public:
   int std_init_calls = 0;
 
   bool std_init(SPIClass* spi = nullptr) {
-    target_calls.push_back(spi == &SPI ? "std_init(&SPI)" : spi ? "std_init(other SPI)" : "std_init()");
+    target_calls.push_back(spi == &SPI ? "std_init(&SPI)"
+                           : spi && module && spi == module->spi ? "std_init(module bus)"
+                           : spi ? "std_init(other SPI)" : "std_init()");
     std_init_calls++;
     return std_init_result;
   }
@@ -57,8 +58,8 @@ public:
 };
 
 // What CustomSX1262Wrapper.h defines, which every target.h of an SX1262 variant
-// includes.
-#ifndef USE_SX1262
+// includes; an environment for an SX1276 variant sets USE_SX1276 instead.
+#if !defined(USE_SX1262) && !defined(USE_SX1276)
 #define USE_SX1262
 #endif
 
