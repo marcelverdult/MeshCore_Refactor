@@ -5,7 +5,7 @@ handler) implemented, each its own pull request, B stacked on A. Cut C (one defa
 `radio_init()` for 31 nRF52 variants) implemented, its own pull request, on top of
 A and B. Cut D (the radio, wrapper and RTC globals) is implemented as two pull requests,
 D1 (31 nRF52 variants) and D2 (22 ESP32 variants) on top of it, see "Cut D". Cut E is
-planned. Behaviour change: none.
+designed and recommended not to be built now, see "Cut E". Behaviour change: none.
 
 ## Context
 
@@ -90,7 +90,7 @@ weak" below).
 | B | one class for the FEM gain handlers of HeltecV4, HeltecV4R8, T096, HeltecTrackerV2 | 4 board classes, 1 new helper | implemented, see "Cut B" |
 | C | a shared default `radio_init()` for the bodies that need no new description (28 + 3 of 89, all nRF52) | 31 `target.cpp`, 1 source, 1 header | implemented, see "Cut C" |
 | D | the radio, wrapper and RTC globals from the board description (D1: 31 nRF52, D2: 22 ESP32 variants) | 53 `target.cpp` and `target.h`, 1 source | D1 and D2 implemented, see "Cut D" |
-| E | sensors, display and button from the board description | the rest | planned |
+| E | sensors, display and button from the board description (E1 display and button, E2 GPS and sensors) | 50 and 74 `target.cpp` and `target.h` | designed, not built (see "Cut E") |
 
 Cut B in more detail: the four bodies are the same once the class name is replaced,
 and they all read and write the `fem_rxgain` key through `_prefs`. The open upstream
@@ -1627,6 +1627,140 @@ environments of the series' matrix.
 | `Meshadventurer_sx1268_repeater` | 1,161,869 | 1,161,797 | -72 | 61,084 | 61,084 | +0 | differs (bin) |
 
 </details>
+
+## Cut E: display, buttons and sensors from the board description
+
+The design below was written and committed before any code of this cut. Its
+conclusion is a recommendation not to build cut E now; see "Recommendation".
+
+### Inventory
+
+Measured on `07fa9c5c` (`integration`, cuts A to D merged) with
+`tools/refactoring/variant_target_globals.py --peripherals` (extended in this cut).
+For every `target.cpp` it takes the lines outside function bodies that declare
+`display`, a `MomentaryButton`, a location provider or `sensors`, with the
+preprocessor line that guards the first of them, compares them normalized and
+groups them, with the environments of each group and the value of
+`DISPLAY_CLASS` or `ENV_INCLUDE_GPS` in them. 89 `target.cpp`.
+
+Display and buttons, 16 groups:
+
+| variants | envs | lines (all inside `#ifdef DISPLAY_CLASS`) |
+|---:|---:|---|
+| 36 | 277 | `DISPLAY_CLASS display;` `MomentaryButton user_btn(PIN_USER_BTN, 1000, true);` |
+| 17 | 87 | none (no display) |
+| 7 | 55 | `DISPLAY_CLASS display(&board.periph_power);` and the same button |
+| 5 | 31 | `DISPLAY_CLASS display;` `user_btn(PIN_USER_BTN, 1000, true, true)` (pull-up) |
+| 5 | 24 | `NullDisplayDriver display;` (type spelt out, no button) |
+| 4 | 22 | display, `user_btn(..., true, false, false)` and three more buttons (joystick and back) |
+| 4 | 33 | `DISPLAY_CLASS display;` and no button, although `PIN_USER_BTN` is defined on 3 of them |
+| 2 | 27 | `DISPLAY_CLASS display(NULL);` and the plain button |
+| 2 | 19 | display, pull-up button, `analog_btn` under `PIN_USER_BTN_ANA` |
+| 7 | 31 | one each: other button arguments, an encoder, a second button, the button under `#ifdef PIN_USER_BTN`, `muzi_base` with a power button outside the guard |
+
+GPS and sensor manager, 20 groups:
+
+| variants | envs | lines |
+|---:|---:|---|
+| 25 | 148 | `SensorManager sensors;` |
+| 22 | 175 | `#if ENV_INCLUDE_GPS`: `MicroNMEALocationProvider nmea(Serial1, &rtc_clock)`, `EnvironmentSensorManager sensors(nmea)`; else `EnvironmentSensorManager sensors;` |
+| 14 | 79 | the same under `#ifdef ENV_INCLUDE_GPS`, the else branch spelt `= EnvironmentSensorManager()` |
+| 9 | 74 | `EnvironmentSensorManager sensors;` |
+| 4 | 37 | as the 22, with `GPS_RESET, GPS_EN, &board.periph_power` for the provider |
+| 15 | 93 | one each: own sensor manager classes (9), other provider arguments, no guard, a `(mesh::RTCClock*)` cast |
+
+`#if` and `#ifdef ENV_INCLUDE_GPS` select the same branch in every environment
+today: `ENV_INCLUDE_GPS=0` occurs only in `minewsemi_me25ls01` and `wio_wm1110`,
+which use `#if` or no guard. The type of `sensors` is declared in each `target.h`
+and is one of 11 classes.
+
+### What a shared definition would need
+
+Like cut D, objects with a constructor cannot be weak (constructed twice, see "Why
+the globals cannot be weak"), so each variant would opt in with a macro in
+`target.h`, and the shared file (a sibling of `RadioLibTarget.cpp`, since none of
+this is RadioLib) would define the globals from the description.
+
+- **E1, display and user button** (they share the `#ifdef DISPLAY_CLASS`, and
+  `user_btn` is outside that guard in one variant only, so splitting display
+  and button into two pull requests would cut the same four lines twice): the
+  groups of 36, 7, 5 and 2, that is 50 variants and 390 environments. New
+  description: the opt-in, the display's constructor argument (`&board.periph_power`
+  or `NULL`) and the button's pull-up flag; the 2 with `analog_btn` keep that line.
+  Per variant: `target.cpp` loses 4 lines (`#ifdef`, two declarations, `#endif`),
+  `target.h` gains 1 or 2.
+- **E2, GPS and sensor manager**: the groups of 22, 14, 9, 4 and 25, 74 variants.
+  New description: the opt-in, the type of `sensors` (11 classes, today only in
+  the `extern` of `target.h`), the provider's extra arguments. Per variant 1 to 6
+  lines less.
+
+The constructors to read for the initialization order (as in cut D) are, for E1,
+those of the 10 display classes these 50 variants build (`DISPLAY_CLASS` in
+their environments) and of the library objects they hold (Adafruit, GxEPD2,
+ThingPulse OLEDDisplay, the Heltec e-ink drivers and others); `MomentaryButton`'s constructors
+only store their arguments (`src/helpers/ui/MomentaryButton.cpp:5`, `:20`).
+
+### What the lines cost so far
+
+All commits of `upstream/dev` that change these lines in an existing
+`target.cpp`, by number of files: `99774f10` (2025-05, the `sensors` stub
+introduced, 19 files), `67d22401` (2026-01, `&rtc_clock` passed to every
+`MicroNMEALocationProvider`, 18), `a73eb982` (2025-05, `display` moved into the
+variants, 15); every other commit 3 files or fewer, mostly new boards and UI ports.
+So one mass edit of the GPS lines in the last 17 months, none of the display and
+button lines since they were introduced.
+
+### Upstream collisions
+
+Checked on 22.10.2026 against meshcore-dev/MeshCore: the file lists of all 493
+open pull requests (`gh pr list`, the 4 with 100 or more files included), the
+diffs of the 90 that touch a `variants/*/target.*`, and in them the changed lines
+that name `display`, a button, a location provider, `sensors`, `DISPLAY_CLASS` or
+`ENV_INCLUDE_GPS` in a file that exists today. 21 pull requests do:
+
+- **#1799** (GPS management out of `EnvironmentSensorManager` into the
+  `LocationProvider` hierarchy, updated 2026-08-09) rewrites exactly the E2 lines
+  in 15 files (`sensors.registerLocationProvider(&nmea)` instead of the
+  constructor argument, `L76KLocationProvider`). It is a different design for the
+  same lines; E2 would have to follow it or replace it.
+- **#3051** (GPS on RAK boards, 2026-09-13) changes the `sensors` constructor in
+  `gat562_30s_mesh_kit`, `rak3401`, `rak4631` (`EnvironmentSensorManager(nmea,
+  &rtc_clock)`).
+- GPS for single boards: #1913, #2152, #2278, #2658, #2927, #3208, #3472, #3527.
+- **#3346** (ikoka, 2026-09-02) changes `user_btn`'s pull-up argument, **#2185**
+  (joystick rotation) and **#3659** (Elecrow e-ink refactor, 2026-10-21, 8 files)
+  add buttons next to `user_btn`; #3141, #3222, #3289, #3307, #2837, #1850, #2568,
+  #3638 change other lines of the same blocks.
+
+### Recommendation
+
+Not to build cut E now.
+
+- **E1** saves 4 lines in each of 50 `target.cpp` and adds 1 or 2 to each
+  `target.h`, for lines that have not had a mass edit since they exist. The
+  verification is larger than cut D's (the constructors of 10 display classes and
+  the library objects they hold, on ESP32 and nRF52), and three open pull requests
+  edit the same four lines. The benefit per changed file is small.
+- **E2** would be useful, since the GPS lines did have a mass edit, but upstream
+  has an open redesign of exactly these lines (#1799) and ten more pull requests on
+  them. A shared definition now would fix the shape #1799 wants to change.
+- Step 11 as built (cuts A to D) already covers what the review measured as the
+  cost: the radio lines (`radio_new_identity()`, `radio_init()`, the globals).
+
+What would change this: #1799 merged or closed (then E2 on top of the result), or
+a new mass edit of the display lines. Until then a new board copies these 4 to 8
+lines, as today.
+
+Alternatives considered:
+
+- **Weak globals**: rejected for the reason of cut D.
+- **E1 and E2 as one pull request**: two concerns with different upstream
+  situations; rejected.
+- **Display and button as two pull requests**: they share one guard, see above;
+  rejected.
+- **Only the largest group (36 variants) with no new macro**: the same small
+  benefit per file, and a description that covers only part of the boards with a
+  display; not chosen.
 
 ## Upstream
 
