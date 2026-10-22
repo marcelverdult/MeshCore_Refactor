@@ -1,7 +1,7 @@
 # 0009: One RadioLib adapter per chip family, part one: the receive detection
 
-Status: steps 9a and 9b implemented. Behaviour change: none. Steps 9c and 9d are
-planned below and need their own branches.
+Status: steps 9a, 9b and 9c implemented. Behaviour change: none. Step 9d is
+planned below and needs its own branch.
 
 ## Context
 
@@ -1092,3 +1092,988 @@ No board test for 9b. The release images of SX1262 and SX1268 boards run the sam
 `std_init()` calls in the same order as before (host suites), and differ in flash
 by the few bytes above; the debug build output is pinned on the host. LLCC68 has no
 firmware environment and is covered by the host suites only.
+
+## Step 9c: one wrapper template per chip family
+
+Status: implemented. Behaviour change: none.
+
+### Measured inventory
+
+`tools/refactoring/scripts/wrapper_inventory.py` cuts every member out of the
+eight `Custom<chip>Wrapper.h`, removes comments and white space, replaces the
+chip name with a placeholder and compares the copies. On `integration`
+e0d05fde (normalized lines per copy in brackets):
+
+| Member | Groups of identical copies |
+|--------|----------------------------|
+| constructor | all eight (1) |
+| `setParams()` | SX1262, SX1268, LLCC68, STM32WLx, LR1110, LR1121 (10) / LR2021 (11) / SX1276 (7) |
+| `isReceivingPacket()`, `getLastRSSI()`, `getLastSNR()` | all eight (3, 1, 1) |
+| `getCurrentRSSI()` | SX1262, SX1268, LLCC68, STM32WLx, SX1276 (3) / LR1110, LR1121, LR2021 (5) |
+| `getSpreadingFactor()` | SX1262, SX1268, LLCC68, STM32WLx, SX1276 (1) / LR1110, LR1121, LR2021 (1) |
+| `doResetAGC()` | SX1262, SX1268, LLCC68, STM32WLx (1) / LR1110, LR1121 (1) / LR2021, SX1276 absent |
+| `setRxBoostedGainMode()` | SX1262, SX1268, LLCC68, LR1110, LR1121 (3) / LR2021 (6) / STM32WLx, SX1276 absent |
+| `getRxBoostedGainMode()` | SX1262, SX1268, LLCC68, LR1110, LR1121, LR2021 (3) / STM32WLx, SX1276 absent |
+| `onSendFinished()` | LR1110, LR1121, LR2021 (4) / the rest absent |
+| `getEstAirtimeFor()` | LR1110, LR1121 (4) / the rest absent |
+| `powerOff()` | SX1262 (3) / the rest absent |
+| `configSideDetectors()`, `applySideDetectorConfig()`, `calcTsym()`, `_sideDet`, `_numSideDet` | LR2021 only |
+
+Whole wrappers, identical after normalization: SX1268 and LLCC68; LR1110 and
+LR1121. The setParams() differences: LR2021 calls `applySideDetectorConfig()`
+between `updatePreamble()` and the deadlines, SX1276 sets no deadlines (its chip
+class has no preamble IRQ, see 9a).
+
+Every cast is `(Custom<chip> *)_radio` on a `PhysicalLayer*`. In RadioLib 7.7.1
+every chip class reaches `PhysicalLayer` by single inheritance (`SX126x`,
+`SX127x` and `LRxxxx` derive from it directly; `SX1262`, `SX1268`, `LLCC68`,
+`STM32WLx`, `SX1276`, `LR1110`, `LR1121`, `LR2021` below those), and the
+`Custom` classes add no base, so the C cast is a `static_cast` without pointer
+adjustment. `doResetAGC()` casts to `SX126x*` or `LR11x0*` for the reset helper;
+both are bases of the chip, so the implicit upcast replaces that cast.
+
+No class in `src`, `variants` or `examples` derives from a wrapper; the variants
+name them as `WRAPPER_CLASS` (86 SX1262, 15 SX1268, 7 LR1110, 4 STM32WLx, 4
+SX1276, 2 LR1121, 2 LR2021 lines in the `.ini` files) and in `target.h`.
+
+### Template form
+
+Three templates, each in its own header next to the wrappers:
+
+```cpp
+// CustomChipWrapper.h: what all eight share
+template <class Chip>
+class CustomChipWrapper : public RadioLibWrapper {
+protected:
+  Chip* chip() const { return static_cast<Chip*>(_radio); }
+  // first half of every setParams(): the four modem setters, then the preamble
+  void setModemParams(float freq, float bw, uint8_t sf, uint8_t cr);
+  // second half for the chips with the receive tracker of 9a
+  void setRxDeadlines(float bw, uint8_t sf, uint8_t cr);
+public:
+  CustomChipWrapper(Chip& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
+  bool isReceivingPacket() override { return chip()->isReceiving(); }
+  float getLastRSSI() const override { return chip()->getRSSI(); }
+  float getLastSNR() const override { return chip()->getSNR(); }
+};
+
+// CustomSX126xWrapper.h: SX1262, SX1268, LLCC68, STM32WLx
+template <class Chip>
+class CustomSX126xWrapper : public CustomChipWrapper<Chip> {
+public:
+  void setParams(...) override;          // setModemParams + setRxDeadlines
+  float getCurrentRSSI() override;       // chip()->getRSSI(false)
+  uint8_t getSpreadingFactor() const override;   // chip()->spreadingFactor
+  void doResetAGC() override;            // sx126xResetAGC(chip(), getRxBoostedGainMode())
+};
+
+// CustomLR11x0Wrapper.h: LR1110, LR1121
+template <class Chip>
+class CustomLR11x0Wrapper : public CustomChipWrapper<Chip> {
+public:
+  void setParams(...) override;          // setModemParams + setRxDeadlines
+  float getCurrentRSSI() override;       // getRssiInst, -110 if it writes nothing
+  uint8_t getSpreadingFactor() const override;   // chip()->getSpreadingFactor()
+  void doResetAGC() override;            // lr11x0ResetAGC(chip(), chip()->getFreqMHz(), ...)
+  uint32_t getEstAirtimeFor(int) override;       // at least 200 ms
+  void onSendFinished() override;        // preamble length again
+  bool setRxBoostedGainMode(bool) override;
+  bool getRxBoostedGainMode() const override;
+};
+```
+
+`setModemParams()` and `setRxDeadlines()` are plain (not virtual) member
+functions of a class template, so they are only instantiated where a wrapper
+calls them: SX1276 never calls `setRxDeadlines()` and needs no
+`setPreambleMillis()`. Members of the dependent base are named through
+`this->`. Everything is C++11 (no `if constexpr`), as in 9b.
+
+The eight wrapper classes stay real classes with the same names, headers,
+constructors and `USE_<chip>` defines:
+
+| Wrapper | Derives from | Keeps in its own body |
+|---------|--------------|------------------------|
+| `CustomSX1262Wrapper` | `CustomSX126xWrapper<CustomSX1262>` | `powerOff()`, boosted gain set/get |
+| `CustomSX1268Wrapper` | `CustomSX126xWrapper<CustomSX1268>` | boosted gain set/get |
+| `CustomLLCC68Wrapper` | `CustomSX126xWrapper<CustomLLCC68>` | boosted gain set/get |
+| `CustomSTM32WLxWrapper` | `CustomSX126xWrapper<CustomSTM32WLx>` | nothing |
+| `CustomLR1110Wrapper` | `CustomLR11x0Wrapper<CustomLR1110>` | nothing |
+| `CustomLR1121Wrapper` | `CustomLR11x0Wrapper<CustomLR1121>` | nothing |
+| `CustomLR2021Wrapper` | `CustomChipWrapper<CustomLR2021>` | `setParams()` (with the side detectors), `getCurrentRSSI()`, `getSpreadingFactor()`, `onSendFinished()`, boosted gain, the side detector members |
+| `CustomSX1276Wrapper` | `CustomChipWrapper<CustomSX1276>` | `setParams()` (no deadlines), `getCurrentRSSI()`, `getSpreadingFactor()` |
+
+`LR2021::setParams()` becomes `setModemParams(); applySideDetectorConfig();
+setRxDeadlines();`, `SX1276::setParams()` becomes `setModemParams()`: same calls,
+same order. Every method keeps its virtual signature, so the vtables have the
+same slots; only the class that defines a slot changes.
+
+### Exceptions, kept as they are
+
+- **STM32WLx has no boosted gain override.** Its wrapper inherits
+  `RadioLibWrapper::getRxBoostedGainMode()`, which returns `false`, and passes
+  that to `sx126xResetAGC()`. Moving the SX1262 boosted gain pair into the SX126x
+  template would make `rxboost` start working on the 16 STM32WL environments:
+  a behaviour change. So the pair stays in the three SX126x subclasses (three
+  copies of six lines), and a host test pins that STM32WLx still reports `false`.
+- **LR2021 shares with LR11x0** `getCurrentRSSI()`, `getSpreadingFactor()` and
+  `onSendFinished()`, and **SX1276 shares with SX126x** `getCurrentRSSI()` and
+  `getSpreadingFactor()`. Each of these is one to five lines; a third template
+  level (an `LRxxxx` layer, an "RSSI by status" layer) for them would cost more
+  reading than the copies. They stay in the subclass.
+- **`powerOff()`** of SX1262 (`sleep(false)`) is SX1262 only and stays there.
+  Whether SX1268 and LLCC68 should do the same is a behaviour question.
+- **LR2021 boosted gain** goes through standby and a level, a different method.
+- `RadioLibWrapper`, `SX126xReset.h`, `LR11x0Reset.h` and the chip classes are
+  untouched.
+
+### Alternatives considered for 9c
+
+- **One template with a traits struct, as in 9b.** The family differences are
+  different calls (`getRSSI(false)` against `getRssiInst()`, a member against a
+  getter), not flags. Without `if constexpr`, both branches of `if
+  (Traits::x)` must compile for every chip, and `getRssiInst()` does not exist on
+  an SX126x. It would need tag dispatch per call, more machinery than two family
+  templates.
+- **Free functions overloaded on the RadioLib family base** (`rssiNow(SX126x&)`,
+  `rssiNow(LR11x0&)`), picked by derived to base conversion. Works, but which
+  overload a chip gets is implicit (LLCC68 and STM32WLx derive from SX1262 in
+  RadioLib), and a wrong pick compiles. The family templates say it in the class
+  head.
+- **Override in the subclass what differs, keep everything in one template.**
+  Virtual members of a class template are instantiated with the class, so a
+  `setParams()` calling `setPreambleMillis()` would not compile for SX1276 even
+  if the subclass overrides it.
+- **`using CustomSX1262Wrapper = CustomSX126xWrapper<CustomSX1262>;`** Breaks a
+  downstream forward declaration and leaves no place for SX1262 only members
+  (`powerOff()`, #3638's profile hooks). Rejected as in 9b.
+- **Storing a `Chip*` next to `_radio`.** Saves the cast at run time, which costs
+  nothing anyway (no pointer adjustment), and grows every wrapper object by a
+  pointer.
+- **Moving the boosted gain pair into the SX126x template and overriding it back
+  to `false` in STM32WLx.** Same behaviour, but reads as if STM32WLx turned a
+  feature off on purpose. The copies say what is true today.
+
+### Upstream collisions (checked 21 October 2026)
+
+All open pull requests on `meshcore-dev/MeshCore` (499) were listed with their
+files; these touch one of the eight wrapper headers:
+
+| PR | Touches | Collision with 9c |
+|----|---------|-------------------|
+| #3638 dual radio profiles | all eight wrappers (+7 to +22): `setParams()` becomes `bool applyParams()` with a check per setter; LR1110 uses `setLoRaModulationParams()`, LR1121 passes a high bandwidth flag; profile hooks and `minimumAirtimeMillis()` in LR1110 and LR1121; `getLastRSSI()`/`getLastSNR()` removed in all | Heavy, semantic. Its `applyParams()` differs per chip in the LR11x0 family, so on rebase LR1110 and LR1121 override it in their subclass, or the template grows a hook. Its removal of `getLastRSSI()`/`getLastSNR()` becomes one deletion in `CustomChipWrapper`. |
+| #3496 KISS gain control | `supportsRxBoostedGain()` in six wrappers, one line each | Textual; with 9c it lands in the three SX126x subclasses and once in `CustomLR11x0Wrapper`, plus LR2021. |
+| #2933 noise floor | `verifyRxChipMode()` in four SX126x wrappers | Textual; one method in `CustomSX126xWrapper` instead of four. |
+| #2670 repeated direct send | `verifyRxChipMode()` in four SX126x wrappers | As #2933. |
+| #2131 error aware receive hook | `tryReadRawWithMeta()` in four SX126x wrappers, 10 lines each | Textual; one method in `CustomSX126xWrapper`. |
+| #2842 RSSI and noise floor | removes `getLastRSSI()`/`getLastSNR()` from six wrappers | Textual; one deletion in `CustomChipWrapper`. |
+| #1923, #2367 coding rate | `setCodingRate()` in six wrappers | Textual; one method in `CustomChipWrapper`. |
+| #2916 dynamic CAD | `getCADDetPeakBase()`: SX126x formula in four, a table in LR1110 | Textual; one method per family template. |
+| #2986 sleep fails | `CustomSX1262Wrapper::powerOff()` +1 | Textual, stays in the SX1262 subclass. |
+| #2624 DX-LR20 | `CustomLLCC68Wrapper.h` +4 | Textual, LLCC68 subclass. |
+| #2999, #2696, #2682, #2198 LR1121 boards | create `CustomLR1121Wrapper.h` as a new file | Already conflict with the file the tree has; 9c changes nothing for them. |
+| #2944 LR2021 kit | creates `CustomLR2021Wrapper.h` | As above. |
+
+#3638 is the one with a semantic collision. The other ten add the same member to
+four to six wrappers by hand and would each shrink to one edit with 9c.
+
+### Verification plan
+
+- Characterization first, committed before the move and passing unchanged on
+  both sides: a third test program `test/test_radio_chip_wrappers` in the
+  `native_radio_chips` environment (no new environment, still 17) builds all
+  eight wrappers over the real chip classes and the chip stubs, which gain a
+  `PhysicalLayer` with a call log, `getRSSI(bool)`, `getRssiInst()`, a
+  `getSpreadingFactor()` that returns a value other than the `spreadingFactor`
+  member, the calls of both reset helpers, and the LR2021 side detector call.
+  Pinned per wrapper: the ordered calls of `setParams()` and the deadlines that
+  reach the chip, `isReceivingPacket()`, last and current RSSI including the
+  -110 default, SNR, which spreading factor is read, the calls of `doResetAGC()`
+  (with the boosted gain macros set, so the value passed is pinned, `false` for
+  STM32WLx), boosted gain set/get, `onSendFinished()`, the 200 ms floor of
+  `getEstAirtimeFor()`, `powerOff()`.
+- Mutation tests on the code commit.
+- Build matrix: every firmware environment whose `WRAPPER_CLASS` is one of the
+  eight, on the start commit and the code commit in the same worktree, flash
+  and RAM per environment; image comparison of a sample built with
+  `SOURCE_DATE_EPOCH` set.
+- All 17 host environments.
+
+### What changed
+
+`CustomChipWrapper.h`, `CustomSX126xWrapper.h` and `CustomLR11x0Wrapper.h` hold
+the three templates as designed above. The eight wrapper headers keep their
+class, now derived from them, with only the members listed under "Keeps in its
+own body". No `(Custom<chip> *)_radio` cast is left in `src/helpers/radiolib`.
+In `src`, 255 lines go and 153 come in. Callers, `RadioLibWrapper`, the reset
+helpers and the chip classes are unchanged.
+
+After the step, `wrapper_inventory.py` finds no member that is identical in two
+wrapper bodies except the constructors and the boosted gain pair of SX1262,
+SX1268 and LLCC68 (the exception above).
+
+The design held with one finding: moving the boosted gain getter into the SX126x
+template is not only a behaviour change for STM32WLx, it does not compile
+(`CustomSTM32WLx` has no `getRxBoostedGainMode()`; mutation M10b below).
+
+### Characterization tests
+
+Committed first (fb0003c2), passing unchanged on that commit and on the code
+commit 1234eb98: `test/test_radio_chip_wrappers`, a third test program in the
+`native_radio_chips` environment (header only wrappers, and it sets the boosted
+gain macros of the reset helpers, so it must not share a binary with
+`test_radio_chips`). The environment now also links `RadioLibWrappers.cpp`;
+`native` ignores the new program, as it does the other two. One typed suite of
+10 tests runs against all eight wrappers, 80 cases (one skipped: SX1276 has no
+receive deadlines):
+
+| Test | Pins |
+|------|------|
+| `SetParamsCallsTheChipInOrder` | frequency, spreading factor, bandwidth, coding rate, preamble length 32/16; LR2021 then side detectors and standby |
+| `IsReceivingPacketAsksTheChip` | IRQ flags, SX1276 the modem status |
+| `SetParamsGivesTheChipItsDeadlines` | both deadlines of the new parameters reach the chip (preamble and payload, at and one millisecond after) |
+| `SignalReadings` | last RSSI and SNR, instant RSSI `getRSSI(false)` or `getRssiInst()` with the -110 default |
+| `SpreadingFactorIsTheChips` | the chip's value, not `LORA_SF` |
+| `BoostedGain` | SX126x register 0x8AC, LR11x0 flag, LR2021 level 7/0 from standby, STM32WLx and SX1276 `false` without a chip call |
+| `ResetAGC` | the calls of `sx126xResetAGC()` and `lr11x0ResetAGC()` with the boosted gain value passed (`false` for STM32WLx), LR2021 and SX1276 warm sleep only |
+| `OnSendFinished` | LR chips set the preamble length again |
+| `EstimatedAirtime` | the 200 ms floor of LR1110 and LR1121 |
+| `PowerOff` | SX1262 `sleep(false)`, the others `sleep()` |
+
+For this the chip stubs in `test/test_radio_chips/stubs/RadioLib.h` gain a
+`PhysicalLayer` (as in `test/mocks`, with a call log shared with the chip calls),
+a module with a HAL for the SX126x reset, `getRSSI(bool)`, `getRssiInst()`, the
+modem setters, the calls of both reset helpers, `setSideDetector()` and the
+SX127x classes. The 140 existing chip cases pass unchanged with them.
+
+All 17 host environments pass, 696 cases (616 before, 80 new, one skipped), on
+fb0003c2 and on 1234eb98.
+
+### Mutation tests
+
+Each mutation was applied to the code commit, `test_radio_chip_wrappers` run,
+and the change reverted, one after the other by a script.
+
+| # | Mutation | Failing cases |
+|---|----------|---------------|
+| M1 | modem setters: bandwidth before spreading factor | 8, all eight |
+| M2 | preamble and payload deadline swapped | 7, all with deadlines |
+| M3 | SX126x `setParams()` without deadlines | 4, SX126x family |
+| M4 | SX126x instant RSSI reads the packet RSSI | 4, SX126x family |
+| M5 | LR11x0 instant RSSI default -100 | 2, LR1110, LR1121 |
+| M6 | LR11x0 air time floor 199 ms | 2, LR1110, LR1121 |
+| M7 | LR11x0 `onSendFinished()` without the preamble length | 2, LR1110, LR1121 |
+| M8 | SX126x reset passes `false` for boosted gain | 3, SX1262, SX1268, LLCC68 |
+| M9 | LR11x0 reset passes `false` for boosted gain | 2, LR1110, LR1121 |
+| M10 | STM32WLx gets the SX126x boosted gain setter | 1, STM32WLx |
+| M10b | STM32WLx gets the getter too | does not compile |
+| M11 | LR2021 `setParams()` without side detectors | 1, LR2021 |
+| M12 | last RSSI reads the instant RSSI | 8, all eight |
+| M13 | SX1276 without its spreading factor override | 1, SX1276 |
+| M14 | SX1262 powers off with `sleep(true)` | 1, SX1262 |
+| M15 | LR11x0 reset at 0 MHz instead of `getFreqMHz()` | 2, LR1110, LR1121 |
+| M16 | SX1276 `setParams()` sets the preamble length twice | 1, SX1276 |
+
+### Build matrix
+
+Every firmware environment whose `WRAPPER_CLASS` is one of the eight wrappers:
+612 (no environment uses `CustomLLCC68Wrapper`; it is covered by the host suite
+only). Each built in the same worktree on `integration` e0d05fde and on the code
+commit 1234eb98, same toolchain, with `SOURCE_DATE_EPOCH=1792540800` for every
+build, so that equal sources give equal images (see 9b).
+
+597 build on both sides. The same 15 fail on both sides, none in a radio header:
+the `setTxBufferSize` error of the ESP32 `kiss_modem` builds (`Heltec_E213`,
+`Heltec_E290`, `Heltec_T190`, `LilyGo_TBeam_1W`, `Station_G3_ESP32`,
+`heltec_tracker_v2`), the ESP-NOW callback signature on ESP32-C3
+(`Heltec_ct62`, `Tenstar_C3_sx1262`, `Tenstar_C3_sx1268`, each
+`_repeater_bridge_espnow`), image too large (`Station_G2_companion_radio_ble`,
+`Station_G3_ESP32_companion_radio_ble`), `D7` undeclared
+(`ThinkNode_M5_companion_radio_serial`) and the `EnvironmentSensorManager` link
+error (`ThinkNode_M8_repeater`, `_room_server`, `_kiss_modem`). The first error
+line of each log is the same on both sides.
+
+RAM is unchanged in all 597. Flash, after minus before, in bytes:
+
+| Platform | Wrapper | Environments | Flash difference (environments) |
+|----------|---------|--------------|---------------------------------|
+| ESP32 | SX1262 | 252 | +0 (171), -4 (22), +4 (14), +12 (11), -52 (8), +8 (8), -56 (4), -16 (4), -44 (2), -20 (2), -8 (2), -2 (2), -60 (1), -48 (1) |
+| RP2040 | SX1262 | 25 | +0 (24), +8 (1) |
+| nRF52 | SX1262 | 202 | -48 (107), -64 (95) |
+| ESP32 | SX1268 | 11 | +0 (8), -48 (1), +4 (1), +8 (1) |
+| STM32 | STM32WLx | 16 | +0 (14), +8 (2) |
+| ESP32 | SX1276 | 29 | +84 (6), +0 (5), +76 (3), +56 (1), +72 (1), +80 (1), +88 (1), +108 (1), +144 (1), +308 (1), +320 (1), +328 (1), +332 (1), +352 (1), +364 (1), +368 (1), +372 (1), +384 (1) |
+| ESP32 | LR1110 | 13 | +0 (6), +4 (5), -12 (2) |
+| nRF52 | LR1110 | 25 | +0 (20), -16 (5) |
+| ESP32 | LR1121 | 5 | +0 (3), -20 (2) |
+| nRF52 | LR1121 | 5 | +0 (4), -16 (1) |
+| ESP32 | LR2021 | 9 | +0 (7), -64 (1), +72 (1) |
+| nRF52 | LR2021 | 5 | +0 (3), -16 (2) |
+
+#### Image comparison and where the bytes go
+
+With `SOURCE_DATE_EPOCH` set for every build, no image of the 597 is byte
+identical: the template members have other symbol names, so the linker places
+them in another order even where nothing changes size. 20 environments were
+built again on both sides keeping the ELF files, at least one per wrapper and
+platform and the extremes of each group: `RAK_4631_repeater`,
+`GAT562_30S_Mesh_Kit_repeater` (-64), `Heltec_v3_repeater`,
+`heltec_v4_tft_companion_radio_usb` (+12), `Ebyte_EoRa-S3_Repeater`,
+`waveshare_rp2040_lora_repeater`, `Generic_E22_sx1268_repeater`,
+`Meshadventurer_sx1268_terminal_chat` (-48), `wio-e5-mini_repeater`,
+`Tiny_Relay_companion_radio_usb` (+8), `Heltec_v2_repeater`,
+`Heltec_v2_kiss_modem`, `LilyGo_TLora_V2_1_1_6_terminal_chat` (+384),
+`t1000e_repeater`, `ThinkNode_M9_companion_radio_wifi_` (+4),
+`Waveshare_S3_LR1121_repeater`, `Waveshare_S3_LR1121_companion_radio_ble` (-20),
+`meshnology_w12_repeater`, `meshnology_w12_kiss_modem` (+72),
+`MeshTracker_X1_repeater`. All 20 reproduce the image hash of the matrix on both
+sides. `nm -S -C` of both ELF files was compared symbol by symbol, with the
+template names folded back into the wrapper name and the numbers of compiler
+clones (`$isra$N`) folded:
+
+- **9 have no symbol of another size** (`Heltec_v3_repeater`,
+  `Ebyte_EoRa-S3_Repeater`, `waveshare_rp2040_lora_repeater`,
+  `Generic_E22_sx1268_repeater`, `wio-e5-mini_repeater`,
+  `Tiny_Relay_companion_radio_usb`, `Heltec_v2_kiss_modem`,
+  `Waveshare_S3_LR1121_repeater`, `meshnology_w12_repeater`; the +8 of
+  `Tiny_Relay` is section padding). Only the order changed.
+- **nRF52 SX1262 (-48, -64)**: `doResetAGC()` shrinks from 208 to 154 bytes,
+  and `ServerMesh::begin()` and `checkPendingRadioParams()` by 4 each.
+  Disassembled in `RAK_4631_repeater`: before, GCC speculatively devirtualized
+  `getRxBoostedGainMode()` (compare the vtable slot at offset 96 with
+  `CustomSX1262Wrapper::getRxBoostedGainMode`, then inline the read of register
+  0x8AC); after, it is a plain virtual call through the same slot (`ldr r3,
+  [r2, #96]; blx r3`), which reaches the same override. The calls that follow
+  (`sleep`, `standby`, `SPIwriteStream`, `calibrateImage`, `setDio2AsRfSwitch`,
+  `setRxBoostedGainMode`) are the same in the same order. The template does not
+  know the SX1262 override, so the guess is no longer offered.
+- **ESP32 SX1262, SX1268, LR chips (-64 to +12)**: only callers of
+  `setParams()` and the companion command handlers change by -6 to +4 bytes each
+  (`MyMesh::begin()`, `cmdSetRadioParams()`, `setup()` of the terminal chat
+  -76, `onSetRadio()` of the LR2021 KISS modem +94, where `setParams()` is now
+  inlined), plus padding. No wrapper method changes size.
+- **ESP32 SX1276 at `-Os` (+56 to +144, 19 environments)**: `setModemParams()`
+  is emitted out of line (78 bytes), and the code that used to inline the four
+  setters calls it.
+- **LilyGo T-Lora V2.1 1.6 (+308 to +384, 9 environments)**: these build
+  without optimization. The variant's `build_unflags = -Os` also removes the
+  `-Os` its own `build_flags` add; the DWARF producer string of the ELF shows no
+  `-O` option, so GCC's default `-O0` applies. Nothing is inlined there, so each
+  template level is a real function: `chip()` (17 bytes), the constructor of
+  `CustomChipWrapper<CustomSX1276>` and its vtable (112 bytes), and
+  `setModemParams()`. The same code at `-Os` costs the 56 to 144 bytes above.
+
+So the flash differences are inlining and devirtualization decisions and, on the
+one unoptimized board, the cost of the extra class level. No behaviour depends on
+them; the host suite pins the calls each wrapper makes.
+
+<details>
+<summary>Flash and RAM per environment (597)</summary>
+
+| Environment | Platform | Wrapper | Flash before | Flash after | Flash | RAM |
+|---|---|---|---|---|---|---|
+| Ebyte_EoRa-S3_Repeater | ESP32 | SX1262 | 1108433 | 1108433 | +0 | +0 |
+| Ebyte_EoRa-S3_companion_radio_ble | ESP32 | SX1262 | 1217029 | 1217021 | -8 | +0 |
+| Ebyte_EoRa-S3_companion_radio_usb | ESP32 | SX1262 | 591533 | 591529 | -4 | +0 |
+| Ebyte_EoRa-S3_kiss_modem | ESP32 | SX1262 | 507821 | 507821 | +0 | +0 |
+| Ebyte_EoRa-S3_room_server | ESP32 | SX1262 | 1103745 | 1103745 | +0 | +0 |
+| Ebyte_EoRa-S3_terminal_chat | ESP32 | SX1262 | 535737 | 535685 | -52 | +0 |
+| GAT562_30S_Mesh_Kit_companion_radio_ble | nRF52 | SX1262 | 437012 | 436964 | -48 | +0 |
+| GAT562_30S_Mesh_Kit_companion_radio_usb | nRF52 | SX1262 | 427988 | 427940 | -48 | +0 |
+| GAT562_30S_Mesh_Kit_kiss_modem | nRF52 | SX1262 | 341280 | 341232 | -48 | +0 |
+| GAT562_30S_Mesh_Kit_repeater | nRF52 | SX1262 | 411568 | 411504 | -64 | +0 |
+| GAT562_30S_Mesh_Kit_room_server | nRF52 | SX1262 | 404656 | 404592 | -64 | +0 |
+| GAT562_Mesh_EVB_Pro_kiss_modem | nRF52 | SX1262 | 310916 | 310868 | -48 | +0 |
+| GAT562_Mesh_EVB_Pro_repeater | nRF52 | SX1262 | 365764 | 365716 | -48 | +0 |
+| GAT562_Mesh_EVB_Pro_room_server | nRF52 | SX1262 | 359260 | 359196 | -64 | +0 |
+| GAT562_Mesh_Tracker_Pro_companion_radio_ble | nRF52 | SX1262 | 404184 | 404136 | -48 | +0 |
+| GAT562_Mesh_Tracker_Pro_companion_radio_usb | nRF52 | SX1262 | 395176 | 395128 | -48 | +0 |
+| GAT562_Mesh_Tracker_Pro_kiss_modem | nRF52 | SX1262 | 310900 | 310852 | -48 | +0 |
+| GAT562_Mesh_Tracker_Pro_repeater | nRF52 | SX1262 | 381276 | 381212 | -64 | +0 |
+| GAT562_Mesh_Tracker_Pro_room_server | nRF52 | SX1262 | 374364 | 374300 | -64 | +0 |
+| GAT562_Mesh_Watch13_companion_radio_ble | nRF52 | SX1262 | 400552 | 400504 | -48 | +0 |
+| GAT562_Mesh_Watch13_kiss_modem | nRF52 | SX1262 | 304048 | 304000 | -48 | +0 |
+| Generic_E22_sx1262_repeater | ESP32 | SX1262 | 1143573 | 1143573 | +0 | +0 |
+| Generic_E22_sx1262_repeater_bridge_espnow | ESP32 | SX1262 | 1154277 | 1154277 | +0 | +0 |
+| Generic_E22_sx1268_repeater | ESP32 | SX1268 | 1143361 | 1143361 | +0 | +0 |
+| Generic_E22_sx1268_repeater_bridge_espnow | ESP32 | SX1268 | 1154057 | 1154057 | +0 | +0 |
+| Heltec_E213_companion_radio_ble | ESP32 | SX1262 | 1274401 | 1274397 | -4 | +0 |
+| Heltec_E213_companion_radio_usb | ESP32 | SX1262 | 669857 | 669853 | -4 | +0 |
+| Heltec_E213_repeater | ESP32 | SX1262 | 1162233 | 1162233 | +0 | +0 |
+| Heltec_E213_repeater_bridge_espnow | ESP32 | SX1262 | 1172677 | 1172677 | +0 | +0 |
+| Heltec_E213_room_server | ESP32 | SX1262 | 1157477 | 1157477 | +0 | +0 |
+| Heltec_E290_companion_ble | ESP32 | SX1262 | 1272313 | 1272309 | -4 | +0 |
+| Heltec_E290_companion_usb | ESP32 | SX1262 | 667645 | 667641 | -4 | +0 |
+| Heltec_E290_repeater | ESP32 | SX1262 | 1160185 | 1160185 | +0 | +0 |
+| Heltec_E290_repeater_bridge_espnow | ESP32 | SX1262 | 1170613 | 1170613 | +0 | +0 |
+| Heltec_E290_room_server | ESP32 | SX1262 | 1155401 | 1155401 | +0 | +0 |
+| Heltec_T190_companion_radio_ble_ | ESP32 | SX1262 | 1251489 | 1251485 | -4 | +0 |
+| Heltec_T190_companion_radio_usb_ | ESP32 | SX1262 | 647581 | 647577 | -4 | +0 |
+| Heltec_T190_repeater_ | ESP32 | SX1262 | 1139397 | 1139397 | +0 | +0 |
+| Heltec_T190_repeater_bridge_espnow_ | ESP32 | SX1262 | 1149833 | 1149833 | +0 | +0 |
+| Heltec_T190_room_server_ | ESP32 | SX1262 | 1134653 | 1134653 | +0 | +0 |
+| Heltec_WSL3_companion_radio_ble | ESP32 | SX1262 | 1649165 | 1649161 | -4 | +0 |
+| Heltec_WSL3_companion_radio_usb | ESP32 | SX1262 | 638037 | 638041 | +4 | +0 |
+| Heltec_WSL3_companion_radio_wifi | ESP32 | SX1262 | 1087557 | 1087553 | -4 | +0 |
+| Heltec_WSL3_repeater | ESP32 | SX1262 | 1161337 | 1161337 | +0 | +0 |
+| Heltec_WSL3_repeater_bridge_espnow | ESP32 | SX1262 | 1171765 | 1171765 | +0 | +0 |
+| Heltec_WSL3_repeater_bridge_rs232 | ESP32 | SX1262 | 1163785 | 1163785 | +0 | +0 |
+| Heltec_WSL3_room_server | ESP32 | SX1262 | 1156821 | 1156821 | +0 | +0 |
+| Heltec_WSL3_sensor | ESP32 | SX1262 | 1168233 | 1168233 | +0 | +0 |
+| Heltec_Wireless_Paper_companion_radio_ble | ESP32 | SX1262 | 1616301 | 1616301 | +0 | +0 |
+| Heltec_Wireless_Paper_companion_radio_usb | ESP32 | SX1262 | 626549 | 626545 | -4 | +0 |
+| Heltec_Wireless_Paper_kiss_modem | ESP32 | SX1262 | 517461 | 517461 | +0 | +0 |
+| Heltec_Wireless_Paper_repeater | ESP32 | SX1262 | 1121873 | 1121873 | +0 | +0 |
+| Heltec_Wireless_Paper_repeater_bridge_espnow | ESP32 | SX1262 | 1132325 | 1132325 | +0 | +0 |
+| Heltec_Wireless_Paper_room_server | ESP32 | SX1262 | 1117125 | 1117125 | +0 | +0 |
+| Heltec_Wireless_Tracker_companion_radio_ble | ESP32 | SX1262 | 1266077 | 1266081 | +4 | +0 |
+| Heltec_Wireless_Tracker_companion_radio_usb | ESP32 | SX1262 | 662693 | 662697 | +4 | +0 |
+| Heltec_Wireless_Tracker_kiss_modem | ESP32 | SX1262 | 526709 | 526709 | +0 | +0 |
+| Heltec_Wireless_Tracker_repeater | ESP32 | SX1262 | 1157621 | 1157621 | +0 | +0 |
+| Heltec_Wireless_Tracker_repeater_bridge_espnow | ESP32 | SX1262 | 1168109 | 1168109 | +0 | +0 |
+| Heltec_Wireless_Tracker_room_server | ESP32 | SX1262 | 1152893 | 1152893 | +0 | +0 |
+| Heltec_ct62_companion_radio_ble | ESP32 | SX1262 | 1277060 | 1277060 | +0 | +0 |
+| Heltec_ct62_companion_radio_usb | ESP32 | SX1262 | 564990 | 564990 | +0 | +0 |
+| Heltec_ct62_kiss_modem | ESP32 | SX1262 | 497028 | 497028 | +0 | +0 |
+| Heltec_ct62_repeater | ESP32 | SX1262 | 1151874 | 1151874 | +0 | +0 |
+| Heltec_ct62_sensor | ESP32 | SX1262 | 1157740 | 1157740 | +0 | +0 |
+| Heltec_mesh_solar_companion_radio_ble | nRF52 | SX1262 | 375004 | 374956 | -48 | +0 |
+| Heltec_mesh_solar_companion_radio_usb | nRF52 | SX1262 | 370004 | 369956 | -48 | +0 |
+| Heltec_mesh_solar_kiss_modem | nRF52 | SX1262 | 309024 | 308976 | -48 | +0 |
+| Heltec_mesh_solar_repeater | nRF52 | SX1262 | 365600 | 365536 | -64 | +0 |
+| Heltec_mesh_solar_room_server | nRF52 | SX1262 | 359072 | 359008 | -64 | +0 |
+| Heltec_t096_companion_radio_ble | nRF52 | SX1262 | 434516 | 434452 | -64 | +0 |
+| Heltec_t096_companion_radio_usb | nRF52 | SX1262 | 427780 | 427732 | -48 | +0 |
+| Heltec_t096_kiss_modem | nRF52 | SX1262 | 340776 | 340728 | -48 | +0 |
+| Heltec_t096_repeater | nRF52 | SX1262 | 414464 | 414416 | -48 | +0 |
+| Heltec_t096_repeater_bridge_rs232 | nRF52 | SX1262 | 416736 | 416688 | -48 | +0 |
+| Heltec_t096_room_server | nRF52 | SX1262 | 407584 | 407520 | -64 | +0 |
+| Heltec_t096_sensor | nRF52 | SX1262 | 411348 | 411300 | -48 | +0 |
+| Heltec_t114_companion_radio_ble | nRF52 | SX1262 | 418584 | 418536 | -48 | +0 |
+| Heltec_t114_companion_radio_usb | nRF52 | SX1262 | 411848 | 411800 | -48 | +0 |
+| Heltec_t114_kiss_modem | nRF52 | SX1262 | 311268 | 311204 | -64 | +0 |
+| Heltec_t114_repeater | nRF52 | SX1262 | 398460 | 398396 | -64 | +0 |
+| Heltec_t114_repeater_bridge_rs232 | nRF52 | SX1262 | 368532 | 368468 | -64 | +0 |
+| Heltec_t114_room_server | nRF52 | SX1262 | 391580 | 391516 | -64 | +0 |
+| Heltec_t114_without_display_companion_radio_ble | nRF52 | SX1262 | 392832 | 392784 | -48 | +0 |
+| Heltec_t114_without_display_companion_radio_usb | nRF52 | SX1262 | 386000 | 385952 | -48 | +0 |
+| Heltec_t114_without_display_repeater | nRF52 | SX1262 | 366260 | 366196 | -64 | +0 |
+| Heltec_t114_without_display_repeater_bridge_rs232 | nRF52 | SX1262 | 368532 | 368468 | -64 | +0 |
+| Heltec_t114_without_display_room_server | nRF52 | SX1262 | 359740 | 359676 | -64 | +0 |
+| Heltec_t1_companion_radio_ble | nRF52 | SX1262 | 436016 | 435952 | -64 | +0 |
+| Heltec_t1_companion_radio_usb | nRF52 | SX1262 | 429312 | 429248 | -64 | +0 |
+| Heltec_t1_kiss_modem | nRF52 | SX1262 | 339884 | 339836 | -48 | +0 |
+| Heltec_t1_repeater | nRF52 | SX1262 | 413508 | 413460 | -48 | +0 |
+| Heltec_t1_room_server | nRF52 | SX1262 | 406644 | 406596 | -48 | +0 |
+| Heltec_tower_v2_companion_radio_ble | nRF52 | SX1262 | 335884 | 335836 | -48 | +0 |
+| Heltec_tower_v2_companion_radio_usb | nRF52 | SX1262 | 329044 | 328996 | -48 | +0 |
+| Heltec_tower_v2_kiss_modem | nRF52 | SX1262 | 251864 | 251800 | -64 | +0 |
+| Heltec_tower_v2_repeater | nRF52 | SX1262 | 309528 | 309480 | -48 | +0 |
+| Heltec_tower_v2_room_server | nRF52 | SX1262 | 303000 | 302952 | -48 | +0 |
+| Heltec_v2_companion_radio_ble | ESP32 | SX1276 | 1431145 | 1431229 | +84 | +0 |
+| Heltec_v2_companion_radio_usb | ESP32 | SX1276 | 613269 | 613349 | +80 | +0 |
+| Heltec_v2_companion_radio_wifi | ESP32 | SX1276 | 1084281 | 1084365 | +84 | +0 |
+| Heltec_v2_kiss_modem | ESP32 | SX1276 | 506169 | 506169 | +0 | +0 |
+| Heltec_v2_repeater | ESP32 | SX1276 | 1151913 | 1151997 | +84 | +0 |
+| Heltec_v2_repeater_bridge_espnow | ESP32 | SX1276 | 1162757 | 1162813 | +56 | +0 |
+| Heltec_v2_room_server | ESP32 | SX1276 | 1147261 | 1147337 | +76 | +0 |
+| Heltec_v2_terminal_chat | ESP32 | SX1276 | 534429 | 534429 | +0 | +0 |
+| Heltec_v3_companion_radio_ble | ESP32 | SX1262 | 1671657 | 1671653 | -4 | +0 |
+| Heltec_v3_companion_radio_usb | ESP32 | SX1262 | 658197 | 658201 | +4 | +0 |
+| Heltec_v3_companion_radio_wifi | ESP32 | SX1262 | 1107825 | 1107821 | -4 | +0 |
+| Heltec_v3_kiss_modem | ESP32 | SX1262 | 581253 | 581253 | +0 | +0 |
+| Heltec_v3_repeater | ESP32 | SX1262 | 1175025 | 1175025 | +0 | +0 |
+| Heltec_v3_repeater_bridge_espnow | ESP32 | SX1262 | 1185493 | 1185493 | +0 | +0 |
+| Heltec_v3_repeater_bridge_rs232 | ESP32 | SX1262 | 1177493 | 1177493 | +0 | +0 |
+| Heltec_v3_room_server | ESP32 | SX1262 | 1170173 | 1170173 | +0 | +0 |
+| Heltec_v3_sensor | ESP32 | SX1262 | 1181561 | 1181561 | +0 | +0 |
+| Heltec_v3_terminal_chat | ESP32 | SX1262 | 602381 | 602337 | -44 | +0 |
+| KeepteenLT1_companion_radio_ble | nRF52 | SX1262 | 353648 | 353600 | -48 | +0 |
+| KeepteenLT1_companion_radio_usb | nRF52 | SX1262 | 335720 | 335656 | -64 | +0 |
+| KeepteenLT1_kiss_modem | nRF52 | SX1262 | 248868 | 248820 | -48 | +0 |
+| KeepteenLT1_repeater | nRF52 | SX1262 | 322028 | 321964 | -64 | +0 |
+| KeepteenLT1_room_server | nRF52 | SX1262 | 315108 | 315044 | -64 | +0 |
+| LilyGo_T-Echo-Lite_companion_radio_ble | nRF52 | SX1262 | 357416 | 357352 | -64 | +0 |
+| LilyGo_T-Echo-Lite_companion_radio_usb | nRF52 | SX1262 | 352512 | 352448 | -64 | +0 |
+| LilyGo_T-Echo-Lite_kiss_modem | nRF52 | SX1262 | 276892 | 276844 | -48 | +0 |
+| LilyGo_T-Echo-Lite_non_shell_companion_radio_ble | nRF52 | SX1262 | 316504 | 316440 | -64 | +0 |
+| LilyGo_T-Echo-Lite_non_shell_companion_radio_usb | nRF52 | SX1262 | 311360 | 311312 | -48 | +0 |
+| LilyGo_T-Echo-Lite_repeater | nRF52 | SX1262 | 335772 | 335708 | -64 | +0 |
+| LilyGo_T-Echo-Lite_room_server | nRF52 | SX1262 | 328964 | 328900 | -64 | +0 |
+| LilyGo_T-Echo_Card_companion_radio_ble | nRF52 | SX1262 | 350208 | 350160 | -48 | +0 |
+| LilyGo_T-Echo_Card_companion_radio_usb | nRF52 | SX1262 | 344448 | 344400 | -48 | +0 |
+| LilyGo_T-Echo_Card_kiss_modem | nRF52 | SX1262 | 261536 | 261472 | -64 | +0 |
+| LilyGo_T-Echo_Card_repeater | nRF52 | SX1262 | 322368 | 322304 | -64 | +0 |
+| LilyGo_T-Echo_Card_room_server | nRF52 | SX1262 | 314112 | 314064 | -48 | +0 |
+| LilyGo_T-Echo_companion_radio_ble | nRF52 | SX1262 | 376640 | 376592 | -48 | +0 |
+| LilyGo_T-Echo_companion_radio_usb | nRF52 | SX1262 | 369248 | 369200 | -48 | +0 |
+| LilyGo_T-Echo_kiss_modem | nRF52 | SX1262 | 291496 | 291432 | -64 | +0 |
+| LilyGo_T-Echo_repeater | nRF52 | SX1262 | 350096 | 350032 | -64 | +0 |
+| LilyGo_T-Echo_room_server | nRF52 | SX1262 | 343288 | 343240 | -48 | +0 |
+| LilyGo_T3S3_sx1262_companion_radio_ble | ESP32 | SX1262 | 1217077 | 1217069 | -8 | +0 |
+| LilyGo_T3S3_sx1262_companion_radio_usb | ESP32 | SX1262 | 591581 | 591577 | -4 | +0 |
+| LilyGo_T3S3_sx1262_kiss_modem | ESP32 | SX1262 | 507869 | 507869 | +0 | +0 |
+| LilyGo_T3S3_sx1262_repeater | ESP32 | SX1262 | 1108533 | 1108533 | +0 | +0 |
+| LilyGo_T3S3_sx1262_repeater_bridge_espnow | ESP32 | SX1262 | 1118825 | 1118825 | +0 | +0 |
+| LilyGo_T3S3_sx1262_room_server | ESP32 | SX1262 | 1103801 | 1103801 | +0 | +0 |
+| LilyGo_T3S3_sx1262_terminal_chat | ESP32 | SX1262 | 535785 | 535733 | -52 | +0 |
+| LilyGo_T3S3_sx1276_companion_radio_ble | ESP32 | SX1276 | 1214793 | 1214869 | +76 | +0 |
+| LilyGo_T3S3_sx1276_companion_radio_usb | ESP32 | SX1276 | 589469 | 589545 | +76 | +0 |
+| LilyGo_T3S3_sx1276_kiss_modem | ESP32 | SX1276 | 505769 | 505769 | +0 | +0 |
+| LilyGo_T3S3_sx1276_repeater | ESP32 | SX1276 | 1105521 | 1105605 | +84 | +0 |
+| LilyGo_T3S3_sx1276_repeater_bridge_espnow | ESP32 | SX1276 | 1115821 | 1115905 | +84 | +0 |
+| LilyGo_T3S3_sx1276_room_server | ESP32 | SX1276 | 1100725 | 1100813 | +88 | +0 |
+| LilyGo_T3S3_sx1276_terminal_chat | ESP32 | SX1276 | 533621 | 533621 | +0 | +0 |
+| LilyGo_TBeam_1W_companion_radio_ble | ESP32 | SX1262 | 1267529 | 1267537 | +8 | +0 |
+| LilyGo_TBeam_1W_companion_radio_usb | ESP32 | SX1262 | 642565 | 642577 | +12 | +0 |
+| LilyGo_TBeam_1W_companion_radio_wifi | ESP32 | SX1262 | 1088761 | 1088761 | +0 | +0 |
+| LilyGo_TBeam_1W_repeater | ESP32 | SX1262 | 1154973 | 1154973 | +0 | +0 |
+| LilyGo_TBeam_1W_repeater_bridge_espnow | ESP32 | SX1262 | 1165461 | 1165461 | +0 | +0 |
+| LilyGo_TBeam_1W_room_server | ESP32 | SX1262 | 1150141 | 1150141 | +0 | +0 |
+| LilyGo_TDeck_companion_radio_ble | ESP32 | SX1262 | 1253177 | 1253181 | +4 | +0 |
+| LilyGo_TDeck_companion_radio_usb | ESP32 | SX1262 | 649749 | 649753 | +4 | +0 |
+| LilyGo_TDeck_kiss_modem | ESP32 | SX1262 | 563305 | 563305 | +0 | +0 |
+| LilyGo_TDeck_repeater | ESP32 | SX1262 | 1144713 | 1144713 | +0 | +0 |
+| LilyGo_TETH_Elite_sx1262_companion_radio_ble | ESP32 | SX1262 | 1178633 | 1178613 | -20 | +0 |
+| LilyGo_TETH_Elite_sx1262_companion_radio_usb | ESP32 | SX1262 | 553953 | 553933 | -20 | +0 |
+| LilyGo_TETH_Elite_sx1262_kiss_modem | ESP32 | SX1262 | 489269 | 489269 | +0 | +0 |
+| LilyGo_TETH_Elite_sx1262_repeater | ESP32 | SX1262 | 1076289 | 1076289 | +0 | +0 |
+| LilyGo_TETH_Elite_sx1262_room_server | ESP32 | SX1262 | 1071653 | 1071653 | +0 | +0 |
+| LilyGo_TLora_V2_1_1_6_companion_radio_ble | ESP32 | SX1276 | 1917873 | 1918181 | +308 | +0 |
+| LilyGo_TLora_V2_1_1_6_companion_radio_usb | ESP32 | SX1276 | 993025 | 993389 | +364 | +0 |
+| LilyGo_TLora_V2_1_1_6_companion_radio_wifi | ESP32 | SX1276 | 1520857 | 1521209 | +352 | +0 |
+| LilyGo_TLora_V2_1_1_6_kiss_modem | ESP32 | SX1276 | 862433 | 862805 | +372 | +0 |
+| LilyGo_TLora_V2_1_1_6_repeater | ESP32 | SX1276 | 1663989 | 1664357 | +368 | +0 |
+| LilyGo_TLora_V2_1_1_6_repeater_bridge_espnow | ESP32 | SX1276 | 1677925 | 1678253 | +328 | +0 |
+| LilyGo_TLora_V2_1_1_6_repeater_bridge_rs232 | ESP32 | SX1276 | 1669385 | 1669705 | +320 | +0 |
+| LilyGo_TLora_V2_1_1_6_room_server | ESP32 | SX1276 | 1642141 | 1642473 | +332 | +0 |
+| LilyGo_TLora_V2_1_1_6_terminal_chat | ESP32 | SX1276 | 907025 | 907409 | +384 | +0 |
+| LilyGo_T_Impulse_Plus_companion_radio_ble | nRF52 | SX1262 | 406948 | 406900 | -48 | +0 |
+| LilyGo_T_Impulse_Plus_kiss_modem | nRF52 | SX1262 | 311364 | 311300 | -64 | +0 |
+| LilyGo_T_Impulse_Plus_repeater | nRF52 | SX1262 | 366508 | 366444 | -64 | +0 |
+| LilyGo_Tlora_C6_companion_radio_ble_ | ESP32 | SX1262 | 1446667 | 1446667 | +0 | +0 |
+| LilyGo_Tlora_C6_kiss_modem | ESP32 | SX1262 | 472809 | 472809 | +0 | +0 |
+| LilyGo_Tlora_C6_repeater_ | ESP32 | SX1262 | 542447 | 542447 | +0 | +0 |
+| LilyGo_Tlora_C6_room_server_ | ESP32 | SX1262 | 536981 | 536979 | -2 | +0 |
+| M5Stack_Unit_C6L_companion_radio_ble | ESP32 | SX1262 | 1454227 | 1454239 | +12 | +0 |
+| M5Stack_Unit_C6L_companion_radio_usb | ESP32 | SX1262 | 546345 | 546345 | +0 | +0 |
+| M5Stack_Unit_C6L_kiss_modem | ESP32 | SX1262 | 480175 | 480175 | +0 | +0 |
+| M5Stack_Unit_C6L_repeater | ESP32 | SX1262 | 552821 | 552821 | +0 | +0 |
+| M5Stack_Unit_C6L_room_server | ESP32 | SX1262 | 547355 | 547355 | +0 | +0 |
+| MeshTracker_X1_companion_radio_ble | nRF52 | LR2021 | 325484 | 325484 | +0 | +0 |
+| MeshTracker_X1_companion_radio_usb | nRF52 | LR2021 | 319852 | 319836 | -16 | +0 |
+| MeshTracker_X1_kiss_modem | nRF52 | LR2021 | 241380 | 241380 | +0 | +0 |
+| MeshTracker_X1_repeater | nRF52 | LR2021 | 301152 | 301152 | +0 | +0 |
+| MeshTracker_X1_room_server | nRF52 | LR2021 | 293652 | 293636 | -16 | +0 |
+| Mesh_pocket_companion_radio_ble | nRF52 | SX1262 | 345996 | 345948 | -48 | +0 |
+| Mesh_pocket_companion_radio_usb | nRF52 | SX1262 | 339196 | 339132 | -64 | +0 |
+| Mesh_pocket_kiss_modem | nRF52 | SX1262 | 268408 | 268360 | -48 | +0 |
+| Mesh_pocket_repeater | nRF52 | SX1262 | 326840 | 326792 | -48 | +0 |
+| Mesh_pocket_room_server | nRF52 | SX1262 | 320096 | 320048 | -48 | +0 |
+| Meshadventurer_sx1262_companion_radio_ble | ESP32 | SX1262 | 1442253 | 1442257 | +4 | +0 |
+| Meshadventurer_sx1262_companion_radio_usb | ESP32 | SX1262 | 603441 | 603445 | +4 | +0 |
+| Meshadventurer_sx1262_kiss_modem | ESP32 | SX1262 | 529933 | 529933 | +0 | +0 |
+| Meshadventurer_sx1262_repeater | ESP32 | SX1262 | 1162097 | 1162097 | +0 | +0 |
+| Meshadventurer_sx1262_repeater_bridge_espnow | ESP32 | SX1262 | 1172881 | 1172881 | +0 | +0 |
+| Meshadventurer_sx1262_room_server | ESP32 | SX1262 | 1157353 | 1157353 | +0 | +0 |
+| Meshadventurer_sx1262_terminal_chat | ESP32 | SX1262 | 558457 | 558413 | -44 | +0 |
+| Meshadventurer_sx1268_companion_radio_ble | ESP32 | SX1268 | 1442029 | 1442033 | +4 | +0 |
+| Meshadventurer_sx1268_companion_radio_usb | ESP32 | SX1268 | 603205 | 603213 | +8 | +0 |
+| Meshadventurer_sx1268_kiss_modem | ESP32 | SX1268 | 529701 | 529701 | +0 | +0 |
+| Meshadventurer_sx1268_repeater | ESP32 | SX1268 | 1161869 | 1161869 | +0 | +0 |
+| Meshadventurer_sx1268_repeater_bridge_espnow | ESP32 | SX1268 | 1172661 | 1172661 | +0 | +0 |
+| Meshadventurer_sx1268_room_server | ESP32 | SX1268 | 1157133 | 1157133 | +0 | +0 |
+| Meshadventurer_sx1268_terminal_chat | ESP32 | SX1268 | 558233 | 558185 | -48 | +0 |
+| Meshimi_companion_radio_ble_ | ESP32 | SX1262 | 1446739 | 1446739 | +0 | +0 |
+| Meshimi_repeater_ | ESP32 | SX1262 | 542535 | 542535 | +0 | +0 |
+| Meshtiny_companion_radio_ble | nRF52 | SX1262 | 338512 | 338464 | -48 | +0 |
+| Meshtiny_companion_radio_usb | nRF52 | SX1262 | 331112 | 331064 | -48 | +0 |
+| Meshtiny_kiss_modem | nRF52 | SX1262 | 243268 | 243220 | -48 | +0 |
+| Minewsemi_me25ls01_companion_radio_ble | nRF52 | LR1110 | 319852 | 319852 | +0 | +0 |
+| Minewsemi_me25ls01_companion_radio_usb | nRF52 | LR1110 | 314156 | 314140 | -16 | +0 |
+| Minewsemi_me25ls01_kiss_modem | nRF52 | LR1110 | 244700 | 244700 | +0 | +0 |
+| Minewsemi_me25ls01_repeater | nRF52 | LR1110 | 306976 | 306976 | +0 | +0 |
+| Minewsemi_me25ls01_room_server | nRF52 | LR1110 | 298820 | 298820 | +0 | +0 |
+| Minewsemi_me25ls01_terminal_chat | nRF52 | LR1110 | 271188 | 271188 | +0 | +0 |
+| Nano_G2_Ultra_companion_radio_ble | nRF52 | SX1262 | 346684 | 346636 | -48 | +0 |
+| Nano_G2_Ultra_companion_radio_usb | nRF52 | SX1262 | 339276 | 339212 | -64 | +0 |
+| Nano_G2_Ultra_kiss_modem | nRF52 | SX1262 | 249476 | 249428 | -48 | +0 |
+| Nano_G2_Ultra_repeater | nRF52 | SX1262 | 319500 | 319452 | -48 | +0 |
+| Nano_G2_Ultra_room_server | nRF52 | SX1262 | 312580 | 312516 | -64 | +0 |
+| PicoW_companion_radio | RP2040 | SX1262 | 667496 | 667496 | +0 | +0 |
+| PicoW_companion_radio_ble | RP2040 | SX1262 | 635332 | 635332 | +0 | +0 |
+| PicoW_companion_radio_usb | RP2040 | SX1262 | 497012 | 497012 | +0 | +0 |
+| PicoW_companion_radio_wifi | RP2040 | SX1262 | 530428 | 530428 | +0 | +0 |
+| PicoW_kiss_modem | RP2040 | SX1262 | 439572 | 439572 | +0 | +0 |
+| PicoW_repeater | RP2040 | SX1262 | 492668 | 492668 | +0 | +0 |
+| PicoW_room_server | RP2040 | SX1262 | 488612 | 488612 | +0 | +0 |
+| PicoW_terminal_chat | RP2040 | SX1262 | 469148 | 469148 | +0 | +0 |
+| ProMicro_companion_radio_ble | nRF52 | SX1262 | 368804 | 368756 | -48 | +0 |
+| ProMicro_companion_radio_usb | nRF52 | SX1262 | 359796 | 359732 | -64 | +0 |
+| ProMicro_kiss_modem | nRF52 | SX1262 | 273400 | 273336 | -64 | +0 |
+| ProMicro_repeater | nRF52 | SX1262 | 346240 | 346176 | -64 | +0 |
+| ProMicro_repeater_bridge_rs232_serial1 | nRF52 | SX1262 | 342544 | 342496 | -48 | +0 |
+| ProMicro_room_server | nRF52 | SX1262 | 339288 | 339224 | -64 | +0 |
+| ProMicro_sensor | nRF52 | SX1262 | 342956 | 342892 | -64 | +0 |
+| ProMicro_terminal_chat | nRF52 | SX1262 | 298384 | 298320 | -64 | +0 |
+| R1Neo_companion_radio_ble | nRF52 | SX1262 | 386296 | 386248 | -48 | +0 |
+| R1Neo_companion_radio_usb | nRF52 | SX1262 | 378888 | 378840 | -48 | +0 |
+| R1Neo_kiss_modem | nRF52 | SX1262 | 312020 | 311956 | -64 | +0 |
+| R1Neo_repeater | nRF52 | SX1262 | 368916 | 368852 | -64 | +0 |
+| R1Neo_room_server | nRF52 | SX1262 | 361420 | 361356 | -64 | +0 |
+| R1Neo_sensor | nRF52 | SX1262 | 365104 | 365040 | -64 | +0 |
+| R1Neo_terminal_chat | nRF52 | SX1262 | 334572 | 334524 | -48 | +0 |
+| RAK_11310_companion_radio_usb | RP2040 | SX1262 | 240532 | 240532 | +0 | +0 |
+| RAK_11310_kiss_modem | RP2040 | SX1262 | 183084 | 183084 | +0 | +0 |
+| RAK_11310_repeater | RP2040 | SX1262 | 236172 | 236172 | +0 | +0 |
+| RAK_11310_repeater_bridge_rs232 | RP2040 | SX1262 | 240664 | 240664 | +0 | +0 |
+| RAK_11310_room_server | RP2040 | SX1262 | 232124 | 232124 | +0 | +0 |
+| RAK_11310_terminal_chat | RP2040 | SX1262 | 212668 | 212668 | +0 | +0 |
+| RAK_3112_companion_radio_ble | ESP32 | SX1262 | 1654533 | 1654529 | -4 | +0 |
+| RAK_3112_companion_radio_usb | ESP32 | SX1262 | 643549 | 643553 | +4 | +0 |
+| RAK_3112_companion_radio_wifi | ESP32 | SX1262 | 1092901 | 1092897 | -4 | +0 |
+| RAK_3112_kiss_modem | ESP32 | SX1262 | 586073 | 586073 | +0 | +0 |
+| RAK_3112_repeater | ESP32 | SX1262 | 1165829 | 1165829 | +0 | +0 |
+| RAK_3112_repeater_bridge_espnow | ESP32 | SX1262 | 1176333 | 1176333 | +0 | +0 |
+| RAK_3112_repeater_bridge_rs232 | ESP32 | SX1262 | 1168329 | 1168329 | +0 | +0 |
+| RAK_3112_room_server | ESP32 | SX1262 | 1161341 | 1161341 | +0 | +0 |
+| RAK_3112_sensor | ESP32 | SX1262 | 1172777 | 1172777 | +0 | +0 |
+| RAK_3112_terminal_chat | ESP32 | SX1262 | 607193 | 607145 | -48 | +0 |
+| RAK_3401_companion_radio_ble | nRF52 | SX1262 | 433916 | 433868 | -48 | +0 |
+| RAK_3401_companion_radio_usb | nRF52 | SX1262 | 424908 | 424860 | -48 | +0 |
+| RAK_3401_kiss_modem | nRF52 | SX1262 | 340928 | 340880 | -48 | +0 |
+| RAK_3401_repeater | nRF52 | SX1262 | 411040 | 410992 | -48 | +0 |
+| RAK_3401_room_server | nRF52 | SX1262 | 404192 | 404144 | -48 | +0 |
+| RAK_3401_sensor | nRF52 | SX1262 | 407888 | 407824 | -64 | +0 |
+| RAK_3401_terminal_chat | nRF52 | SX1262 | 363424 | 363376 | -48 | +0 |
+| RAK_3x72_companion_radio_usb | STM32 | STM32WLx | 199816 | 199824 | +8 | +0 |
+| RAK_3x72_kiss_modem | STM32 | STM32WLx | 143164 | 143164 | +0 | +0 |
+| RAK_3x72_repeater | STM32 | STM32WLx | 196776 | 196776 | +0 | +0 |
+| RAK_3x72_sensor | STM32 | STM32WLx | 196376 | 196376 | +0 | +0 |
+| RAK_4631_companion_radio_ble | nRF52 | SX1262 | 465172 | 465124 | -48 | +0 |
+| RAK_4631_companion_radio_ethernet | nRF52 | SX1262 | 470712 | 470664 | -48 | +0 |
+| RAK_4631_companion_radio_usb | nRF52 | SX1262 | 456148 | 456100 | -48 | +0 |
+| RAK_4631_kiss_modem | nRF52 | SX1262 | 371976 | 371928 | -48 | +0 |
+| RAK_4631_repeater | nRF52 | SX1262 | 441944 | 441880 | -64 | +0 |
+| RAK_4631_repeater_bridge_rs232_serial1 | nRF52 | SX1262 | 408052 | 407988 | -64 | +0 |
+| RAK_4631_repeater_bridge_rs232_serial2 | nRF52 | SX1262 | 408052 | 407988 | -64 | +0 |
+| RAK_4631_repeater_ethernet | nRF52 | SX1262 | 459588 | 459540 | -48 | +0 |
+| RAK_4631_room_server | nRF52 | SX1262 | 435096 | 435032 | -64 | +0 |
+| RAK_4631_room_server_ethernet | nRF52 | SX1262 | 452732 | 452684 | -48 | +0 |
+| RAK_4631_sensor | nRF52 | SX1262 | 438776 | 438712 | -64 | +0 |
+| RAK_4631_terminal_chat | nRF52 | SX1262 | 394376 | 394328 | -48 | +0 |
+| RAK_WisMesh_Tag_companion_radio_ble | nRF52 | SX1262 | 386600 | 386552 | -48 | +0 |
+| RAK_WisMesh_Tag_companion_radio_usb | nRF52 | SX1262 | 379176 | 379128 | -48 | +0 |
+| RAK_WisMesh_Tag_kiss_modem | nRF52 | SX1262 | 312180 | 312116 | -64 | +0 |
+| RAK_WisMesh_Tag_repeater | nRF52 | SX1262 | 369076 | 369012 | -64 | +0 |
+| RAK_WisMesh_Tag_room_server | nRF52 | SX1262 | 361548 | 361500 | -48 | +0 |
+| RAK_WisMesh_Tag_sensor | nRF52 | SX1262 | 365232 | 365184 | -48 | +0 |
+| SenseCap_Solar_companion_radio_ble | nRF52 | SX1262 | 375040 | 374976 | -64 | +0 |
+| SenseCap_Solar_companion_radio_usb | nRF52 | SX1262 | 369904 | 369840 | -64 | +0 |
+| SenseCap_Solar_kiss_modem | nRF52 | SX1262 | 311028 | 310980 | -48 | +0 |
+| SenseCap_Solar_repeater | nRF52 | SX1262 | 366108 | 366044 | -64 | +0 |
+| SenseCap_Solar_room_server | nRF52 | SX1262 | 359372 | 359324 | -48 | +0 |
+| Station_G2_companion_radio_usb | ESP32 | SX1262 | 715897 | 715897 | +0 | +0 |
+| Station_G2_companion_radio_wifi | ESP32 | SX1262 | 1141001 | 1141005 | +4 | +0 |
+| Station_G2_kiss_modem | ESP32 | SX1262 | 598649 | 598649 | +0 | +0 |
+| Station_G2_logging_repeater | ESP32 | SX1262 | 1207909 | 1207909 | +0 | +0 |
+| Station_G2_logging_repeater_bridge_espnow | ESP32 | SX1262 | 1218365 | 1218365 | +0 | +0 |
+| Station_G2_repeater | ESP32 | SX1262 | 1207885 | 1207885 | +0 | +0 |
+| Station_G2_repeater_bridge_espnow | ESP32 | SX1262 | 1218341 | 1218341 | +0 | +0 |
+| Station_G2_room_server | ESP32 | SX1262 | 1203069 | 1203069 | +0 | +0 |
+| Station_G3_ESP32_companion_radio_usb | ESP32 | SX1262 | 717525 | 717525 | +0 | +0 |
+| Station_G3_ESP32_companion_radio_wifi | ESP32 | SX1262 | 1142589 | 1142593 | +4 | +0 |
+| Station_G3_ESP32_logging_repeater | ESP32 | SX1262 | 1209509 | 1209509 | +0 | +0 |
+| Station_G3_ESP32_repeater | ESP32 | SX1262 | 1209469 | 1209469 | +0 | +0 |
+| Station_G3_ESP32_room_server | ESP32 | SX1262 | 1204681 | 1204681 | +0 | +0 |
+| T_Beam_S3_Supreme_SX1262_companion_radio_ble | ESP32 | SX1262 | 1264157 | 1264161 | +4 | +0 |
+| T_Beam_S3_Supreme_SX1262_companion_radio_wifi | ESP32 | SX1262 | 1085749 | 1085745 | -4 | +0 |
+| T_Beam_S3_Supreme_SX1262_kiss_modem | ESP32 | SX1262 | 570321 | 570321 | +0 | +0 |
+| T_Beam_S3_Supreme_SX1262_repeater | ESP32 | SX1262 | 1155517 | 1155517 | +0 | +0 |
+| T_Beam_S3_Supreme_SX1262_repeater_bridge_espnow | ESP32 | SX1262 | 1166001 | 1166001 | +0 | +0 |
+| T_Beam_S3_Supreme_SX1262_room_server | ESP32 | SX1262 | 1150717 | 1150717 | +0 | +0 |
+| Tbeam_SX1262_companion_radio_ble | ESP32 | SX1262 | 1485265 | 1485273 | +8 | +0 |
+| Tbeam_SX1262_kiss_modem | ESP32 | SX1262 | 567437 | 567437 | +0 | +0 |
+| Tbeam_SX1262_repeater | ESP32 | SX1262 | 1205213 | 1205213 | +0 | +0 |
+| Tbeam_SX1262_repeater_bridge_espnow | ESP32 | SX1262 | 1216165 | 1216165 | +0 | +0 |
+| Tbeam_SX1262_room_server | ESP32 | SX1262 | 1200065 | 1200065 | +0 | +0 |
+| Tbeam_SX1276_companion_radio_ble | ESP32 | SX1276 | 1481229 | 1481313 | +84 | +0 |
+| Tbeam_SX1276_kiss_modem | ESP32 | SX1276 | 563485 | 563485 | +0 | +0 |
+| Tbeam_SX1276_repeater | ESP32 | SX1276 | 1201181 | 1201325 | +144 | +0 |
+| Tbeam_SX1276_repeater_bridge_espnow | ESP32 | SX1276 | 1212213 | 1212285 | +72 | +0 |
+| Tbeam_SX1276_room_server | ESP32 | SX1276 | 1196049 | 1196157 | +108 | +0 |
+| Tenstar_C3_sx1262_kiss_modem | ESP32 | SX1262 | 497480 | 497480 | +0 | +0 |
+| Tenstar_C3_sx1262_repeater | ESP32 | SX1262 | 1152392 | 1152392 | +0 | +0 |
+| Tenstar_C3_sx1268_kiss_modem | ESP32 | SX1268 | 497412 | 497412 | +0 | +0 |
+| Tenstar_C3_sx1268_repeater | ESP32 | SX1268 | 1152294 | 1152294 | +0 | +0 |
+| ThinkNode_M1_companion_radio_ble | nRF52 | SX1262 | 365532 | 365484 | -48 | +0 |
+| ThinkNode_M1_companion_radio_usb | nRF52 | SX1262 | 354748 | 354684 | -64 | +0 |
+| ThinkNode_M1_kiss_modem | nRF52 | SX1262 | 249444 | 249396 | -48 | +0 |
+| ThinkNode_M1_repeater | nRF52 | SX1262 | 306180 | 306116 | -64 | +0 |
+| ThinkNode_M1_room_server | nRF52 | SX1262 | 299636 | 299572 | -64 | +0 |
+| ThinkNode_M2_Repeater | ESP32 | SX1262 | 1110181 | 1110181 | +0 | +0 |
+| ThinkNode_M2_Repeater_bridge_espnow | ESP32 | SX1262 | 1120509 | 1120509 | +0 | +0 |
+| ThinkNode_M2_companion_radio_ble | ESP32 | SX1262 | 1220049 | 1220045 | -4 | +0 |
+| ThinkNode_M2_companion_radio_serial | ESP32 | SX1262 | 617201 | 617197 | -4 | +0 |
+| ThinkNode_M2_companion_radio_usb | ESP32 | SX1262 | 617125 | 617121 | -4 | +0 |
+| ThinkNode_M2_companion_radio_wifi | ESP32 | SX1262 | 1045021 | 1045021 | +0 | +0 |
+| ThinkNode_M2_kiss_modem | ESP32 | SX1262 | 520617 | 520617 | +0 | +0 |
+| ThinkNode_M2_room_server | ESP32 | SX1262 | 1105477 | 1105477 | +0 | +0 |
+| ThinkNode_M2_terminal_chat | ESP32 | SX1262 | 548569 | 548517 | -52 | +0 |
+| ThinkNode_M3_companion_radio_ble | nRF52 | LR1110 | 320304 | 320288 | -16 | +0 |
+| ThinkNode_M3_companion_radio_usb | nRF52 | LR1110 | 314584 | 314584 | +0 | +0 |
+| ThinkNode_M3_kiss_modem | nRF52 | LR1110 | 244580 | 244580 | +0 | +0 |
+| ThinkNode_M3_repeater | nRF52 | LR1110 | 302260 | 302260 | +0 | +0 |
+| ThinkNode_M3_room_server | nRF52 | LR1110 | 295732 | 295732 | +0 | +0 |
+| ThinkNode_M4_companion_radio_ble | nRF52 | LR1110 | 320688 | 320672 | -16 | +0 |
+| ThinkNode_M4_companion_radio_usb | nRF52 | LR1110 | 314968 | 314968 | +0 | +0 |
+| ThinkNode_M4_kiss_modem | nRF52 | LR1110 | 244564 | 244564 | +0 | +0 |
+| ThinkNode_M4_repeater | nRF52 | LR1110 | 302268 | 302252 | -16 | +0 |
+| ThinkNode_M4_room_server | nRF52 | LR1110 | 295716 | 295716 | +0 | +0 |
+| ThinkNode_M5_Repeater | ESP32 | SX1262 | 1127465 | 1127465 | +0 | +0 |
+| ThinkNode_M5_Repeater_bridge_espnow | ESP32 | SX1262 | 1137969 | 1137969 | +0 | +0 |
+| ThinkNode_M5_companion_radio_ble | ESP32 | SX1262 | 1237889 | 1237901 | +12 | +0 |
+| ThinkNode_M5_companion_radio_usb | ESP32 | SX1262 | 634917 | 634925 | +8 | +0 |
+| ThinkNode_M5_companion_radio_wifi | ESP32 | SX1262 | 1062609 | 1062609 | +0 | +0 |
+| ThinkNode_M5_kiss_modem | ESP32 | SX1262 | 538413 | 538413 | +0 | +0 |
+| ThinkNode_M5_room_server | ESP32 | SX1262 | 1122813 | 1122813 | +0 | +0 |
+| ThinkNode_M5_terminal_chat | ESP32 | SX1262 | 566685 | 566629 | -56 | +0 |
+| ThinkNode_M6_companion_radio_ble | nRF52 | SX1262 | 377424 | 377360 | -64 | +0 |
+| ThinkNode_M6_companion_radio_usb | nRF52 | SX1262 | 369392 | 369344 | -48 | +0 |
+| ThinkNode_M6_kiss_modem | nRF52 | SX1262 | 311444 | 311380 | -64 | +0 |
+| ThinkNode_M6_repeater | nRF52 | SX1262 | 366212 | 366164 | -48 | +0 |
+| ThinkNode_M6_room_server | nRF52 | SX1262 | 359676 | 359628 | -48 | +0 |
+| ThinkNode_M7_companion_radio_ble | ESP32 | LR1110 | 1629677 | 1629681 | +4 | +0 |
+| ThinkNode_M7_companion_radio_ethernet | ESP32 | LR1110 | 1062465 | 1062453 | -12 | +0 |
+| ThinkNode_M7_companion_radio_usb | ESP32 | LR1110 | 589309 | 589297 | -12 | +0 |
+| ThinkNode_M7_companion_radio_wifi | ESP32 | LR1110 | 1028821 | 1028825 | +4 | +0 |
+| ThinkNode_M7_kiss_modem | ESP32 | LR1110 | 502001 | 502001 | +0 | +0 |
+| ThinkNode_M7_repeater | ESP32 | LR1110 | 1089241 | 1089241 | +0 | +0 |
+| ThinkNode_M7_room_server | ESP32 | LR1110 | 1084621 | 1084621 | +0 | +0 |
+| ThinkNode_M8_companion_radio_ble | nRF52 | SX1262 | 371116 | 371052 | -64 | +0 |
+| ThinkNode_M8_companion_radio_usb | nRF52 | SX1262 | 346856 | 346792 | -64 | +0 |
+| ThinkNode_M9_companion_radio_ble_ | ESP32 | LR1110 | 1292989 | 1292993 | +4 | +0 |
+| ThinkNode_M9_companion_radio_usb_ | ESP32 | LR1110 | 689357 | 689361 | +4 | +0 |
+| ThinkNode_M9_companion_radio_wifi_ | ESP32 | LR1110 | 1117505 | 1117509 | +4 | +0 |
+| ThinkNode_M9_kiss_modem | ESP32 | LR1110 | 601349 | 601349 | +0 | +0 |
+| ThinkNode_M9_repeater_ | ESP32 | LR1110 | 1182977 | 1182977 | +0 | +0 |
+| ThinkNode_M9_room_server_ | ESP32 | LR1110 | 1178285 | 1178285 | +0 | +0 |
+| Tiny_Relay_companion_radio_usb | STM32 | STM32WLx | 199824 | 199832 | +8 | +0 |
+| Tiny_Relay_kiss_modem | STM32 | STM32WLx | 143164 | 143164 | +0 | +0 |
+| Tiny_Relay_repeater | STM32 | STM32WLx | 196784 | 196784 | +0 | +0 |
+| Tiny_Relay_sensor | STM32 | STM32WLx | 196376 | 196376 | +0 | +0 |
+| WHY2025_badge_companion_radio_ble_ | ESP32 | SX1262 | 1446639 | 1446639 | +0 | +0 |
+| WHY2025_badge_repeater_ | ESP32 | SX1262 | 542435 | 542435 | +0 | +0 |
+| Waveshare_S3_LR1121_companion_radio_ble | ESP32 | LR1121 | 1185873 | 1185853 | -20 | +0 |
+| Waveshare_S3_LR1121_companion_radio_usb | ESP32 | LR1121 | 584221 | 584201 | -20 | +0 |
+| Waveshare_S3_LR1121_kiss_modem | ESP32 | LR1121 | 497809 | 497809 | +0 | +0 |
+| Waveshare_S3_LR1121_repeater | ESP32 | LR1121 | 1084869 | 1084869 | +0 | +0 |
+| Waveshare_S3_LR1121_room_server | ESP32 | LR1121 | 1080313 | 1080313 | +0 | +0 |
+| WioTrackerL1-1W_companion_radio_ble | nRF52 | SX1262 | 408732 | 408684 | -48 | +0 |
+| WioTrackerL1-1W_companion_radio_usb | nRF52 | SX1262 | 399052 | 398988 | -64 | +0 |
+| WioTrackerL1-1W_kiss_modem | nRF52 | SX1262 | 312084 | 312020 | -64 | +0 |
+| WioTrackerL1-1W_repeater | nRF52 | SX1262 | 378716 | 378668 | -48 | +0 |
+| WioTrackerL1-1W_room_server | nRF52 | SX1262 | 371812 | 371764 | -48 | +0 |
+| WioTrackerL1Eink_companion_radio_ble | nRF52 | SX1262 | 425124 | 425076 | -48 | +0 |
+| WioTrackerL1Eink_kiss_modem | nRF52 | SX1262 | 311236 | 311172 | -64 | +0 |
+| WioTrackerL1_companion_radio_ble | nRF52 | SX1262 | 407676 | 407612 | -64 | +0 |
+| WioTrackerL1_companion_radio_usb | nRF52 | SX1262 | 397980 | 397932 | -48 | +0 |
+| WioTrackerL1_kiss_modem | nRF52 | SX1262 | 311140 | 311092 | -48 | +0 |
+| WioTrackerL1_repeater | nRF52 | SX1262 | 377724 | 377660 | -64 | +0 |
+| WioTrackerL1_room_server | nRF52 | SX1262 | 370804 | 370740 | -64 | +0 |
+| Xiao_C3_companion_radio_ble | ESP32 | SX1262 | 1256962 | 1256962 | +0 | +0 |
+| Xiao_C3_companion_radio_usb | ESP32 | SX1262 | 544902 | 544902 | +0 | +0 |
+| Xiao_C3_companion_radio_wifi | ESP32 | SX1262 | 1012330 | 1012328 | -2 | +0 |
+| Xiao_C3_kiss_modem | ESP32 | SX1262 | 473692 | 473692 | +0 | +0 |
+| Xiao_C3_repeater | ESP32 | SX1262 | 1158046 | 1158046 | +0 | +0 |
+| Xiao_C3_room_server | ESP32 | SX1262 | 1152902 | 1152902 | +0 | +0 |
+| Xiao_C6_companion_radio_ble_ | ESP32 | SX1262 | 1446683 | 1446683 | +0 | +0 |
+| Xiao_C6_kiss_modem | ESP32 | SX1262 | 472835 | 472835 | +0 | +0 |
+| Xiao_C6_repeater_ | ESP32 | SX1262 | 542479 | 542479 | +0 | +0 |
+| Xiao_S3_WIO_companion_radio_ble | ESP32 | SX1262 | 1643821 | 1643833 | +12 | +0 |
+| Xiao_S3_WIO_companion_radio_serial | ESP32 | SX1262 | 672893 | 672893 | +0 | +0 |
+| Xiao_S3_WIO_companion_radio_usb | ESP32 | SX1262 | 653989 | 653989 | +0 | +0 |
+| Xiao_S3_WIO_companion_radio_wifi | ESP32 | SX1262 | 1055781 | 1055785 | +4 | +0 |
+| Xiao_S3_WIO_kiss_modem | ESP32 | SX1262 | 549837 | 549837 | +0 | +0 |
+| Xiao_S3_WIO_repeater | ESP32 | SX1262 | 1127969 | 1127969 | +0 | +0 |
+| Xiao_S3_WIO_repeater_bridge_espnow | ESP32 | SX1262 | 1138525 | 1138525 | +0 | +0 |
+| Xiao_S3_WIO_room_server | ESP32 | SX1262 | 1123353 | 1123353 | +0 | +0 |
+| Xiao_S3_WIO_sensor | ESP32 | SX1262 | 1134745 | 1134745 | +0 | +0 |
+| Xiao_S3_WIO_terminal_chat | ESP32 | SX1262 | 571045 | 570989 | -56 | +0 |
+| Xiao_S3_companion_radio_ble | ESP32 | SX1262 | 1646569 | 1646565 | -4 | +0 |
+| Xiao_S3_companion_radio_usb | ESP32 | SX1262 | 656689 | 656693 | +4 | +0 |
+| Xiao_S3_kiss_modem | ESP32 | SX1262 | 559569 | 559569 | +0 | +0 |
+| Xiao_S3_repeater | ESP32 | SX1262 | 1137605 | 1137605 | +0 | +0 |
+| Xiao_S3_repeater_bridge_espnow | ESP32 | SX1262 | 1148121 | 1148121 | +0 | +0 |
+| Xiao_S3_room_server | ESP32 | SX1262 | 1132949 | 1132949 | +0 | +0 |
+| Xiao_S3_sensor | ESP32 | SX1262 | 1144397 | 1144397 | +0 | +0 |
+| Xiao_nrf52_companion_radio_ble | nRF52 | SX1262 | 380568 | 380504 | -64 | +0 |
+| Xiao_nrf52_companion_radio_usb | nRF52 | SX1262 | 374872 | 374808 | -64 | +0 |
+| Xiao_nrf52_kiss_modem | nRF52 | SX1262 | 305840 | 305792 | -48 | +0 |
+| Xiao_nrf52_repeater | nRF52 | SX1262 | 361800 | 361736 | -64 | +0 |
+| Xiao_nrf52_room_server | nRF52 | SX1262 | 354264 | 354200 | -64 | +0 |
+| Xiao_rp2040_companion_radio_usb | RP2040 | SX1262 | 240148 | 240148 | +0 | +0 |
+| Xiao_rp2040_kiss_modem | RP2040 | SX1262 | 182708 | 182708 | +0 | +0 |
+| Xiao_rp2040_repeater | RP2040 | SX1262 | 235796 | 235796 | +0 | +0 |
+| Xiao_rp2040_room_server | RP2040 | SX1262 | 231740 | 231740 | +0 | +0 |
+| Xiao_rp2040_terminal_chat | RP2040 | SX1262 | 212284 | 212284 | +0 | +0 |
+| heltec_rc32_companion_radio_ble | ESP32 | SX1262 | 1281841 | 1281849 | +8 | +0 |
+| heltec_rc32_companion_radio_usb | ESP32 | SX1262 | 676905 | 676917 | +12 | +0 |
+| heltec_rc32_companion_radio_wifi | ESP32 | SX1262 | 1104789 | 1104789 | +0 | +0 |
+| heltec_rc32_kiss_modem | ESP32 | SX1262 | 582197 | 582197 | +0 | +0 |
+| heltec_rc32_repeater | ESP32 | SX1262 | 1169069 | 1169069 | +0 | +0 |
+| heltec_rc32_repeater_bridge_espnow | ESP32 | SX1262 | 1179565 | 1179565 | +0 | +0 |
+| heltec_rc32_room_server | ESP32 | SX1262 | 1164401 | 1164401 | +0 | +0 |
+| heltec_rc32_sensor | ESP32 | SX1262 | 1175813 | 1175813 | +0 | +0 |
+| heltec_rc32_terminal_chat | ESP32 | SX1262 | 603285 | 603233 | -52 | +0 |
+| heltec_rc32_without_display_companion_radio_ble | ESP32 | SX1262 | 1276937 | 1276945 | +8 | +0 |
+| heltec_rc32_without_display_companion_radio_usb | ESP32 | SX1262 | 671725 | 671737 | +12 | +0 |
+| heltec_rc32_without_display_companion_radio_wifi | ESP32 | SX1262 | 1099669 | 1099669 | +0 | +0 |
+| heltec_rc32_without_display_repeater | ESP32 | SX1262 | 1162169 | 1162169 | +0 | +0 |
+| heltec_rc32_without_display_repeater_bridge_espnow | ESP32 | SX1262 | 1172545 | 1172545 | +0 | +0 |
+| heltec_rc32_without_display_room_server | ESP32 | SX1262 | 1157585 | 1157585 | +0 | +0 |
+| heltec_rc32_without_display_sensor | ESP32 | SX1262 | 1169053 | 1169053 | +0 | +0 |
+| heltec_tracker_v2_companion_radio_ble | ESP32 | SX1262 | 1339277 | 1339285 | +8 | +0 |
+| heltec_tracker_v2_companion_radio_usb | ESP32 | SX1262 | 712585 | 712597 | +12 | +0 |
+| heltec_tracker_v2_companion_radio_wifi | ESP32 | SX1262 | 1159269 | 1159269 | +0 | +0 |
+| heltec_tracker_v2_repeater | ESP32 | SX1262 | 1226257 | 1226257 | +0 | +0 |
+| heltec_tracker_v2_repeater_bridge_espnow | ESP32 | SX1262 | 1236713 | 1236713 | +0 | +0 |
+| heltec_tracker_v2_room_server | ESP32 | SX1262 | 1221505 | 1221505 | +0 | +0 |
+| heltec_tracker_v2_sensor | ESP32 | SX1262 | 1232881 | 1232881 | +0 | +0 |
+| heltec_tracker_v2_terminal_chat | ESP32 | SX1262 | 628193 | 628133 | -60 | +0 |
+| heltec_v4_companion_radio_ble | ESP32 | SX1262 | 1669997 | 1669997 | +0 | +0 |
+| heltec_v4_companion_radio_usb | ESP32 | SX1262 | 656597 | 656609 | +12 | +0 |
+| heltec_v4_companion_radio_wifi | ESP32 | SX1262 | 1106165 | 1106165 | +0 | +0 |
+| heltec_v4_expansionkit_repeater | ESP32 | SX1262 | 1173189 | 1173189 | +0 | +0 |
+| heltec_v4_kiss_modem | ESP32 | SX1262 | 579645 | 579645 | +0 | +0 |
+| heltec_v4_r8_companion_radio_ble | ESP32 | SX1262 | 1673481 | 1673481 | +0 | +0 |
+| heltec_v4_r8_companion_radio_usb | ESP32 | SX1262 | 660077 | 660089 | +12 | +0 |
+| heltec_v4_r8_companion_radio_wifi | ESP32 | SX1262 | 1109629 | 1109629 | +0 | +0 |
+| heltec_v4_r8_kiss_modem | ESP32 | SX1262 | 583089 | 583089 | +0 | +0 |
+| heltec_v4_r8_repeater | ESP32 | SX1262 | 1176629 | 1176629 | +0 | +0 |
+| heltec_v4_r8_room_server | ESP32 | SX1262 | 1171913 | 1171913 | +0 | +0 |
+| heltec_v4_r8_sensor | ESP32 | SX1262 | 1183245 | 1183245 | +0 | +0 |
+| heltec_v4_r8_terminal_chat | ESP32 | SX1262 | 604189 | 604137 | -52 | +0 |
+| heltec_v4_r8_tft_companion_radio_ble | ESP32 | SX1262 | 1290425 | 1290433 | +8 | +0 |
+| heltec_v4_r8_tft_companion_radio_usb | ESP32 | SX1262 | 663853 | 663865 | +12 | +0 |
+| heltec_v4_r8_tft_companion_radio_wifi | ESP32 | SX1262 | 1113457 | 1113457 | +0 | +0 |
+| heltec_v4_r8_tft_kiss_modem | ESP32 | SX1262 | 583481 | 583481 | +0 | +0 |
+| heltec_v4_r8_tft_repeater | ESP32 | SX1262 | 1178717 | 1178717 | +0 | +0 |
+| heltec_v4_r8_tft_room_server | ESP32 | SX1262 | 1173901 | 1173901 | +0 | +0 |
+| heltec_v4_r8_tft_sensor | ESP32 | SX1262 | 1185277 | 1185277 | +0 | +0 |
+| heltec_v4_r8_tft_terminal_chat | ESP32 | SX1262 | 604577 | 604525 | -52 | +0 |
+| heltec_v4_repeater | ESP32 | SX1262 | 1173137 | 1173137 | +0 | +0 |
+| heltec_v4_repeater_bridge_espnow | ESP32 | SX1262 | 1183673 | 1183673 | +0 | +0 |
+| heltec_v4_room_server | ESP32 | SX1262 | 1168421 | 1168421 | +0 | +0 |
+| heltec_v4_sensor | ESP32 | SX1262 | 1179785 | 1179785 | +0 | +0 |
+| heltec_v4_terminal_chat | ESP32 | SX1262 | 600737 | 600681 | -56 | +0 |
+| heltec_v4_tft_companion_radio_ble | ESP32 | SX1262 | 1284809 | 1284817 | +8 | +0 |
+| heltec_v4_tft_companion_radio_usb | ESP32 | SX1262 | 658273 | 658285 | +12 | +0 |
+| heltec_v4_tft_companion_radio_wifi | ESP32 | SX1262 | 1107773 | 1107773 | +0 | +0 |
+| heltec_v4_tft_repeater | ESP32 | SX1262 | 1174849 | 1174849 | +0 | +0 |
+| heltec_v4_tft_repeater_bridge_espnow | ESP32 | SX1262 | 1185325 | 1185325 | +0 | +0 |
+| heltec_v4_tft_room_server | ESP32 | SX1262 | 1170009 | 1170009 | +0 | +0 |
+| heltec_v4_tft_sensor | ESP32 | SX1262 | 1181413 | 1181413 | +0 | +0 |
+| heltec_v4_tft_terminal_chat | ESP32 | SX1262 | 600737 | 600681 | -56 | +0 |
+| ikoka_handheld_nrf_e22_30dbm_096_companion_radio_ble | nRF52 | SX1262 | 398560 | 398496 | -64 | +0 |
+| ikoka_handheld_nrf_e22_30dbm_096_companion_radio_usb | nRF52 | SX1262 | 391168 | 391120 | -48 | +0 |
+| ikoka_handheld_nrf_e22_30dbm_096_rotated_companion_radio_ble | nRF52 | SX1262 | 398608 | 398560 | -48 | +0 |
+| ikoka_handheld_nrf_e22_30dbm_096_rotated_companion_radio_usb | nRF52 | SX1262 | 391232 | 391168 | -64 | +0 |
+| ikoka_handheld_nrf_e22_30dbm_repeater | nRF52 | SX1262 | 358296 | 358248 | -48 | +0 |
+| ikoka_handheld_nrf_e22_30dbm_room_server | nRF52 | SX1262 | 351752 | 351688 | -64 | +0 |
+| ikoka_handheld_nrf_kiss_modem | nRF52 | SX1262 | 304272 | 304224 | -48 | +0 |
+| ikoka_nano_nrf_22dbm_companion_radio_ble | nRF52 | SX1262 | 387712 | 387648 | -64 | +0 |
+| ikoka_nano_nrf_22dbm_companion_radio_usb | nRF52 | SX1262 | 380768 | 380704 | -64 | +0 |
+| ikoka_nano_nrf_22dbm_kiss_modem | nRF52 | SX1262 | 305264 | 305216 | -48 | +0 |
+| ikoka_nano_nrf_22dbm_repeater | nRF52 | SX1262 | 361176 | 361128 | -48 | +0 |
+| ikoka_nano_nrf_22dbm_room_server | nRF52 | SX1262 | 353720 | 353656 | -64 | +0 |
+| ikoka_nano_nrf_30dbm_companion_radio_ble | nRF52 | SX1262 | 387712 | 387648 | -64 | +0 |
+| ikoka_nano_nrf_30dbm_companion_radio_usb | nRF52 | SX1262 | 380768 | 380704 | -64 | +0 |
+| ikoka_nano_nrf_30dbm_kiss_modem | nRF52 | SX1262 | 305264 | 305216 | -48 | +0 |
+| ikoka_nano_nrf_30dbm_repeater | nRF52 | SX1262 | 361176 | 361128 | -48 | +0 |
+| ikoka_nano_nrf_30dbm_room_server | nRF52 | SX1262 | 353720 | 353656 | -64 | +0 |
+| ikoka_nano_nrf_33dbm_companion_radio_ble | nRF52 | SX1262 | 387712 | 387648 | -64 | +0 |
+| ikoka_nano_nrf_33dbm_companion_radio_usb | nRF52 | SX1262 | 380768 | 380704 | -64 | +0 |
+| ikoka_nano_nrf_33dbm_kiss_modem | nRF52 | SX1262 | 305264 | 305216 | -48 | +0 |
+| ikoka_nano_nrf_33dbm_repeater | nRF52 | SX1262 | 361176 | 361128 | -48 | +0 |
+| ikoka_nano_nrf_33dbm_room_server | nRF52 | SX1262 | 353720 | 353656 | -64 | +0 |
+| ikoka_stick_nrf_22dbm_companion_radio_ble | nRF52 | SX1262 | 398624 | 398560 | -64 | +0 |
+| ikoka_stick_nrf_22dbm_companion_radio_usb | nRF52 | SX1262 | 391824 | 391776 | -48 | +0 |
+| ikoka_stick_nrf_22dbm_kiss_modem | nRF52 | SX1262 | 318112 | 318048 | -64 | +0 |
+| ikoka_stick_nrf_22dbm_repeater | nRF52 | SX1262 | 373768 | 373720 | -48 | +0 |
+| ikoka_stick_nrf_22dbm_room_server | nRF52 | SX1262 | 366816 | 366768 | -48 | +0 |
+| ikoka_stick_nrf_30dbm_companion_radio_ble | nRF52 | SX1262 | 398624 | 398560 | -64 | +0 |
+| ikoka_stick_nrf_30dbm_companion_radio_usb | nRF52 | SX1262 | 391824 | 391776 | -48 | +0 |
+| ikoka_stick_nrf_30dbm_kiss_modem | nRF52 | SX1262 | 318112 | 318048 | -64 | +0 |
+| ikoka_stick_nrf_30dbm_repeater | nRF52 | SX1262 | 373768 | 373720 | -48 | +0 |
+| ikoka_stick_nrf_30dbm_room_server | nRF52 | SX1262 | 366816 | 366768 | -48 | +0 |
+| ikoka_stick_nrf_33dbm_companion_radio_ble | nRF52 | SX1262 | 398624 | 398560 | -64 | +0 |
+| ikoka_stick_nrf_33dbm_companion_radio_usb | nRF52 | SX1262 | 391824 | 391776 | -48 | +0 |
+| ikoka_stick_nrf_33dbm_kiss_modem | nRF52 | SX1262 | 318112 | 318048 | -64 | +0 |
+| ikoka_stick_nrf_33dbm_repeater | nRF52 | SX1262 | 373768 | 373720 | -48 | +0 |
+| ikoka_stick_nrf_33dbm_room_server | nRF52 | SX1262 | 366816 | 366768 | -48 | +0 |
+| meshnology_w12_companion_radio_ble | ESP32 | LR2021 | 1291233 | 1291233 | +0 | +0 |
+| meshnology_w12_companion_radio_usb | ESP32 | LR2021 | 666013 | 666013 | +0 | +0 |
+| meshnology_w12_companion_radio_wifi | ESP32 | LR2021 | 1113313 | 1113313 | +0 | +0 |
+| meshnology_w12_kiss_modem | ESP32 | LR2021 | 589353 | 589425 | +72 | +0 |
+| meshnology_w12_repeater | ESP32 | LR2021 | 1183449 | 1183449 | +0 | +0 |
+| meshnology_w12_repeater_bridge_espnow | ESP32 | LR2021 | 1193929 | 1193929 | +0 | +0 |
+| meshnology_w12_room_server | ESP32 | LR2021 | 1178341 | 1178341 | +0 | +0 |
+| meshnology_w12_sensor | ESP32 | LR2021 | 1189749 | 1189749 | +0 | +0 |
+| meshnology_w12_terminal_chat | ESP32 | LR2021 | 610585 | 610521 | -64 | +0 |
+| muzi_base_duo_companion_radio_ble | nRF52 | LR1121 | 327124 | 327124 | +0 | +0 |
+| muzi_base_duo_companion_radio_usb | nRF52 | LR1121 | 322084 | 322084 | +0 | +0 |
+| muzi_base_duo_repeater | nRF52 | LR1121 | 297316 | 297316 | +0 | +0 |
+| muzi_base_duo_room_server | nRF52 | LR1121 | 290820 | 290804 | -16 | +0 |
+| muzi_base_duo_superIO_companion_radio_ble | nRF52 | LR1121 | 346168 | 346168 | +0 | +0 |
+| muzi_base_uno_companion_radio_ble | nRF52 | SX1262 | 331148 | 331100 | -48 | +0 |
+| muzi_base_uno_companion_radio_usb | nRF52 | SX1262 | 326124 | 326060 | -64 | +0 |
+| muzi_base_uno_repeater | nRF52 | SX1262 | 301236 | 301172 | -64 | +0 |
+| muzi_base_uno_room_server | nRF52 | SX1262 | 294724 | 294660 | -64 | +0 |
+| muzi_base_uno_superIO_companion_radio_ble | nRF52 | SX1262 | 350208 | 350160 | -48 | +0 |
+| nibble_screen_connect_companion_radio_ble_ | ESP32 | SX1262 | 1211705 | 1211689 | -16 | +0 |
+| nibble_screen_connect_companion_radio_usb_ | ESP32 | SX1262 | 586329 | 586313 | -16 | +0 |
+| nibble_screen_connect_companion_radio_wifi_ | ESP32 | SX1262 | 1035369 | 1035365 | -4 | +0 |
+| nibble_screen_connect_kiss_modem_ | ESP32 | SX1262 | 495625 | 495625 | +0 | +0 |
+| nibble_screen_connect_repeater_ | ESP32 | SX1262 | 1103205 | 1103205 | +0 | +0 |
+| nibble_screen_connect_repeater_bridge_espnow_ | ESP32 | SX1262 | 1113529 | 1113529 | +0 | +0 |
+| nibble_screen_connect_room_server_ | ESP32 | SX1262 | 1098497 | 1098497 | +0 | +0 |
+| nibble_screen_connect_terminal_chat_ | ESP32 | SX1262 | 523457 | 523405 | -52 | +0 |
+| nibble_zero_connect_companion_radio_ble_ | ESP32 | SX1262 | 1211937 | 1211921 | -16 | +0 |
+| nibble_zero_connect_companion_radio_usb_ | ESP32 | SX1262 | 586537 | 586521 | -16 | +0 |
+| nibble_zero_connect_companion_radio_wifi_ | ESP32 | SX1262 | 1035601 | 1035597 | -4 | +0 |
+| nibble_zero_connect_repeater_ | ESP32 | SX1262 | 1103309 | 1103309 | +0 | +0 |
+| nibble_zero_connect_repeater_bridge_espnow_ | ESP32 | SX1262 | 1113613 | 1113613 | +0 | +0 |
+| nibble_zero_connect_room_server_ | ESP32 | SX1262 | 1098589 | 1098589 | +0 | +0 |
+| nibble_zero_connect_terminal_chat_ | ESP32 | SX1262 | 523537 | 523485 | -52 | +0 |
+| t1000e_companion_radio_ble | nRF52 | LR1110 | 311644 | 311644 | +0 | +0 |
+| t1000e_companion_radio_usb | nRF52 | LR1110 | 306020 | 306020 | +0 | +0 |
+| t1000e_kiss_modem | nRF52 | LR1110 | 235436 | 235436 | +0 | +0 |
+| t1000e_repeater | nRF52 | LR1110 | 294712 | 294712 | +0 | +0 |
+| t1000e_room_server | nRF52 | LR1110 | 287564 | 287548 | -16 | +0 |
+| waveshare_rp2040_lora_companion_radio_usb | RP2040 | SX1262 | 240940 | 240948 | +8 | +0 |
+| waveshare_rp2040_lora_kiss_modem | RP2040 | SX1262 | 183500 | 183500 | +0 | +0 |
+| waveshare_rp2040_lora_repeater | RP2040 | SX1262 | 236596 | 236596 | +0 | +0 |
+| waveshare_rp2040_lora_repeater_bridge_rs232 | RP2040 | SX1262 | 241080 | 241080 | +0 | +0 |
+| waveshare_rp2040_lora_room_server | RP2040 | SX1262 | 232548 | 232548 | +0 | +0 |
+| waveshare_rp2040_lora_terminal_chat | RP2040 | SX1262 | 213084 | 213084 | +0 | +0 |
+| wio-e5-mini_companion_radio_usb | STM32 | STM32WLx | 211296 | 211296 | +0 | +0 |
+| wio-e5-mini_kiss_modem | STM32 | STM32WLx | 151208 | 151208 | +0 | +0 |
+| wio-e5-mini_repeater | STM32 | STM32WLx | 204136 | 204136 | +0 | +0 |
+| wio-e5-mini_sensor | STM32 | STM32WLx | 203664 | 203664 | +0 | +0 |
+| wio-e5-repeater_bridge_rs232 | STM32 | STM32WLx | 199064 | 199064 | +0 | +0 |
+| wio-e5_companion_radio_usb | STM32 | STM32WLx | 199968 | 199968 | +0 | +0 |
+| wio-e5_kiss_modem | STM32 | STM32WLx | 143248 | 143248 | +0 | +0 |
+| wio-e5_repeater | STM32 | STM32WLx | 196848 | 196848 | +0 | +0 |
+| wio_wm1110_companion_radio_ble | nRF52 | LR1110 | 358792 | 358792 | +0 | +0 |
+| wio_wm1110_kiss_modem | nRF52 | LR1110 | 289992 | 289992 | +0 | +0 |
+| wio_wm1110_repeater | nRF52 | LR1110 | 345388 | 345388 | +0 | +0 |
+| wio_wm1110_room_server | nRF52 | LR1110 | 338224 | 338224 | +0 | +0 |
+
+</details>
+
+### What was not verified on hardware
+
+No board test for 9c. Every wrapper makes the same chip calls in the same order
+as before (host suite, 80 cases, 16 mutations), and the firmware differences
+are explained above down to the symbol. LLCC68 has no firmware environment and
+is covered by the host suite only.
