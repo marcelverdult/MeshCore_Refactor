@@ -1173,6 +1173,29 @@ heap addresses, not anything a user, an app or the mesh sees. The pull requests
 show this by reading the constructors of every global the 53 `target.cpp` keep,
 and by comparing images (see "Verification plan").
 
+The constructors of the moved globals, read in the sources the builds use
+(RadioLib at `6d893483`, the libraries PlatformIO installed for the environments;
+arduino-esp32 3.20017 for ESP32, 3.1.3 and 3.3.9 for the C6 builds): none of them
+reads another global object. They store their arguments, allocate, or read a clock.
+
+| global | constructor chain | what it does | source |
+|---|---|---|---|
+| `radio` (`new Module(...)`, 4 pins) | `Module(cs, irq, rst, gpio)` | stores the pins, `new ArduinoHal()`, which stores the address of RadioLib's default bus (`spi(&RADIOLIB_DEFAULT_SPI)`) and constants | RadioLib `src/Module.cpp:10`, `src/hal/Arduino/ArduinoHal.cpp:5`, `src/Hal.cpp:5` |
+| `radio` (`new Module(..., SPI)` or `spi`) | `Module(cs, irq, rst, gpio, SPIClass&, SPISettings)` | stores the pins, `new ArduinoHal(spi, settings)`, which stores the bus's address and the settings | `src/Module.cpp:14`, `src/hal/Arduino/ArduinoHal.cpp:7` |
+| `radio` (SX1262, SX1268) | `CustomSX126x(Module*)`, `SX1262`/`SX1268(Module*)`, `SX126x(Module*)`, `PhysicalLayer()` | sets members (chip type, step size, `mod`) | `src/helpers/radiolib/CustomSX126x.h:16`, RadioLib `src/modules/SX126x/SX1262.cpp:44`, `SX1268.cpp:44`, `SX126x.cpp:6`, `src/protocols/PhysicalLayer/PhysicalLayer.cpp:5` |
+| `radio` (SX1276) | `CustomSX1276(Module*)`, `SX1276`, `SX1278`, `SX127x(Module*)`, `PhysicalLayer()` | sets members | `src/helpers/radiolib/CustomSX1276.h:13`, RadioLib `src/modules/SX127x/SX1276.cpp:4`, `SX1278.cpp:5`, `SX127x.cpp:5` |
+| `radio_driver` | `CustomSX1262Wrapper`, `CustomSX1268Wrapper`, `CustomSX1276Wrapper(radio, board)`, `RadioLibWrapper(PhysicalLayer&, MainBoard&)` | stores the addresses of `radio` and `board`, zeroes counters | `src/helpers/radiolib/CustomSX1262Wrapper.h:13`, `CustomSX1268Wrapper.h:13`, `CustomSX1276Wrapper.h:12`, `RadioLibWrappers.h:34` |
+| `fallback_clock` (nRF52) | `VolatileRTCClock()` | sets a fixed base time and reads `millis()`, which is `tick2ms(xTaskGetTickCount())` and 0 before the scheduler starts, in either order | `src/helpers/ArduinoHelpers.h:11`, Adafruit nRF52 core `cores/nRF5/delay.c:28` |
+| `fallback_clock` (ESP32) | `ESP32RTCClock()` | nothing | `src/helpers/ESP32Board.h:210` |
+| `rtc_clock` | `AutoDiscoverRTCClock(RTCClock&)` | stores the address of `fallback_clock` | `src/helpers/AutoDiscoverRTCClock.h:12` |
+| `spi` (ESP32) | `SPIClass(uint8_t spi_bus)` | sets members, creates its parameter mutex (`xSemaphoreCreateMutex()`), which allocates | arduino-esp32 `libraries/SPI/src/SPI.cpp:34` (3.20017), `:38` (3.1.3, 3.3.9) |
+
+What the order can change is therefore the order of the heap allocations
+(`new Module`, `new ArduinoHal`, the mutex) relative to the variant's other
+globals, so heap addresses. The builds bound the image differences to that: see
+"D1: builds" and "D2: builds" (`nm` and `objdump`, `SOURCE_DATE_EPOCH` fixed, same
+worktree).
+
 ### Two pull requests
 
 - **D1, nRF52**: the globals of the 31 variants of cut C. No new `radio_init()`
