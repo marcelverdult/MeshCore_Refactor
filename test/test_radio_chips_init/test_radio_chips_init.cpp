@@ -16,12 +16,15 @@
 #define P_LORA_SCLK 5
 #define P_LORA_MISO 3
 #define P_LORA_MOSI 6
+#define LR1121_FORCE_HP_PA 1
 
 #include <gtest/gtest.h>
 
 #include <helpers/radiolib/CustomSX1262.h>
 #include <helpers/radiolib/CustomSX1268.h>
 #include <helpers/radiolib/CustomLLCC68.h>
+#include <helpers/radiolib/CustomLR1110.h>
+#include <helpers/radiolib/CustomLR1121.h>
 
 // What std_init() does with every option set. All three chips share the
 // configuration path; SX1262 alone passes the LDO option to begin(), applies the
@@ -113,6 +116,52 @@ TEST_F(SX1268Init, AllOptions) { expectWithoutSX1262Extras(*this); }
 TEST_F(SX1268Init, RetryIsSilent) { expectRetryWithoutSX1262Extras(*this); }
 TEST_F(LLCC68Init, AllOptions) { expectWithoutSX1262Extras(*this); }
 TEST_F(LLCC68Init, RetryIsSilent) { expectRetryWithoutSX1262Extras(*this); }
+
+// The LR11x0 chip classes with MESH_DEBUG: the line after a header error names
+// the chip. With LR1121_FORCE_HP_PA, LR1121 asks for the high power PA.
+template <typename T>
+struct LR11x0Debug : public ::testing::Test {
+  Module mod;
+  T radio{&mod};
+  void SetUp() override { Serial.reset(); }
+  void headerError() {
+    radio.rx_length = 0;
+    radio.irq = RADIOLIB_LR11X0_IRQ_HEADER_ERR;
+    EXPECT_EQ(radio.getPacketLength(true), 0u);
+    std::vector<std::string> want = {"standby()"};
+    EXPECT_EQ(radio.calls, want);
+  }
+};
+class LR1110Debug : public LR11x0Debug<CustomLR1110> { };
+class LR1121Debug : public LR11x0Debug<CustomLR1121> { };
+
+TEST_F(LR1110Debug, HeaderErrorLineNamesTheChip) {
+  headerError();
+  EXPECT_EQ(Serial.out, "DEBUG: LR1110: got header err, calling standby()\n");
+}
+
+TEST_F(LR1121Debug, HeaderErrorLineNamesTheChip) {
+  headerError();
+  EXPECT_EQ(Serial.out, "DEBUG: LR1121: got header err, calling standby()\n");
+}
+
+TEST_F(LR1110Debug, BeginPrintsNothing) {
+  EXPECT_EQ(radio.begin(), RADIOLIB_ERR_NONE);
+  EXPECT_EQ(Serial.out, "");
+}
+
+TEST_F(LR1121Debug, ForcedHighPowerPa) {
+  radio.clip_to = 13;
+  EXPECT_EQ(radio.setOutputPower(22), RADIOLIB_ERR_NONE);
+  std::vector<std::string> want = {"checkOutputPower(22,1)", "setOutputPower(13,1)"};
+  EXPECT_EQ(radio.calls, want);
+}
+
+TEST_F(LR1110Debug, PowerIgnoresTheLr1121Option) {
+  EXPECT_EQ(radio.setOutputPower(22), RADIOLIB_ERR_NONE);
+  std::vector<std::string> want = {"setOutputPower(22)"};
+  EXPECT_EQ(radio.calls, want);
+}
 
 }  // namespace
 

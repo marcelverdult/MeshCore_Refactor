@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Measure how far the SX126x chip classes in src/helpers/radiolib differ.
+"""Measure how far the chip classes of one family in src/helpers/radiolib differ.
 
-Usage: python3 tools/refactoring/scripts/sx126x_inventory.py [repo root]
+Usage: python3 tools/refactoring/scripts/sx126x_inventory.py [repo root] [family]
 
-Cuts every member out of CustomSX1262.h, CustomSX1268.h and CustomLLCC68.h,
-removes comments and white space and replaces the chip name with a placeholder,
-then prints per member which chips carry an identical copy. For members that
-differ, it prints a unified diff of the normalized lines against SX1262.
-Lines outside the class body (includes) are compared the same way.
+family is sx126x (default: CustomSX1262.h, CustomSX1268.h, CustomLLCC68.h, step
+9b) or lr11x0 (CustomLR1110.h, CustomLR1121.h, step 9d). Cuts every member out
+of the chip headers, removes comments and white space and replaces the chip
+name with a placeholder, then prints per member which chips carry an identical
+copy. For members that differ, it prints a unified diff of the normalized lines
+against the first chip of the family. Lines outside the class body (includes)
+are compared the same way.
 """
 import difflib
 import hashlib
@@ -15,7 +17,10 @@ import re
 import sys
 from pathlib import Path
 
-CHIPS = ["SX1262", "SX1268", "LLCC68"]
+FAMILIES = {
+    "sx126x": ["SX1262", "SX1268", "LLCC68"],
+    "lr11x0": ["LR1110", "LR1121"],
+}
 
 
 def normalize(text, chip):
@@ -54,6 +59,8 @@ def members(lines):
 
 def main():
     root = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+    CHIPS = FAMILIES[sys.argv[2] if len(sys.argv) > 2 else "sx126x"]
+    first = CHIPS[0]
     parsed = {}
     for chip in CHIPS:
         src = (root / "src/helpers/radiolib" / f"Custom{chip}.h").read_text()
@@ -77,7 +84,7 @@ def main():
             b = body(chip, n)
             h = hashlib.sha1("\n".join(b).encode()).hexdigest()[:8] if b is not None else "absent"
             groups.setdefault(h, []).append(chip)
-        ln = len(body("SX1262", n) or [])
+        ln = len(body(first, n) or [])
         desc = " / ".join(", ".join(v) + ("" if k != "absent" else " (absent)") for k, v in groups.items())
         print(f"{n:<22} {ln:>5}  {desc}")
         if len(groups) > 1:
@@ -85,11 +92,11 @@ def main():
 
     for n in diffs:
         for chip in CHIPS[1:]:
-            a, b = body("SX1262", n) or [], body(chip, n) or []
+            a, b = body(first, n) or [], body(chip, n) or []
             if a == b:
                 continue
-            print(f"\n--- {n}: SX1262 vs {chip}")
-            for l in difflib.unified_diff(a, b, "SX1262", chip, n=0, lineterm=""):
+            print(f"\n--- {n}: {first} vs {chip}")
+            for l in difflib.unified_diff(a, b, first, chip, n=0, lineterm=""):
                 if not l.startswith(("---", "+++")):
                     print(l)
 
