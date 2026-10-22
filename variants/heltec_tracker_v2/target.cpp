@@ -10,8 +10,3 @@ HeltecTrackerV2Board board;
 #else
   EnvironmentSensorManager sensors;
 #endif
-
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display(&board.periph_power);   // peripheral power pin is shared
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif

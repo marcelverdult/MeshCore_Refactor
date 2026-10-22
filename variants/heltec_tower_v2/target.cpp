@@ -10,11 +10,6 @@ MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
 EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
 TowerV2ExternalWatchdog external_watchdog;
 
-#ifdef DISPLAY_CLASS
-DISPLAY_CLASS display;
-MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-
 bool TowerV2ExternalWatchdog::begin() {
   last_feed_watchdog = 0;
   pinMode(EXTERNAL_WATCHDOG_WAKE_PIN, INPUT);

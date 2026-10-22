@@ -33,4 +33,12 @@ extern TestBoard board;
 #ifdef DISPLAY_CLASS
   extern DISPLAY_CLASS display;
   extern MomentaryButton user_btn;
+  #define DISPLAY_TARGET_GLOBALS   // display and user_btn come from VariantTarget.cpp
+  #if TEST_DISPLAY_VARIANT == 2
+    #define DISPLAY_PERIPH_POWER &board.periph_power
+  #elif TEST_DISPLAY_VARIANT == 3
+    #define DISPLAY_PERIPH_POWER NULL
+  #elif TEST_DISPLAY_VARIANT == 4
+    #define USER_BTN_PULL
+  #endif
 #endif

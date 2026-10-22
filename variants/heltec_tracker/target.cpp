@@ -10,11 +10,6 @@ HeltecV3Board board;
 MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock, GPS_RESET, GPS_EN, &board.periph_power);
 HWTSensorManager sensors = HWTSensorManager(nmea);
 
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display(&board.periph_power);   // peripheral power pin is shared
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-
 void HWTSensorManager::start_gps() {
   if (!gps_active) {
     _location->begin();  // Claims periph_power via RefCountedDigitalPin

@@ -13,6 +13,7 @@
   #include <helpers/ui/MomentaryButton.h>
   extern DISPLAY_CLASS display;
   extern MomentaryButton user_btn;
+  #define DISPLAY_TARGET_GLOBALS   // display and user_btn come from VariantTarget.cpp
 #endif
 
 extern TBeam1WBoard board;

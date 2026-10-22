@@ -13,29 +13,6 @@
 
 TestBoard board;
 
-// The variant's block, copied verbatim from its target.cpp.
-#if TEST_DISPLAY_VARIANT == 1
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display;
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-#elif TEST_DISPLAY_VARIANT == 2
-#ifdef DISPLAY_CLASS
-DISPLAY_CLASS display(&board.periph_power);
-MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-#elif TEST_DISPLAY_VARIANT == 3
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display(NULL);
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-#elif TEST_DISPLAY_VARIANT == 4
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display;
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true, true);
-#endif
-#endif
-
 // The same block once more, as the reference the cases are checked against on
 // every commit, whatever defines the globals above.
 namespace copy {

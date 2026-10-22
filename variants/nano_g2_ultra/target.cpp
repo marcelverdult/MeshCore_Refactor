@@ -10,11 +10,6 @@ NanoG2Ultra board;
 MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
 NanoG2UltraSensorManager sensors = NanoG2UltraSensorManager(nmea);
 
-#ifdef DISPLAY_CLASS
-DISPLAY_CLASS display;
-MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-
 void NanoG2UltraSensorManager::start_gps() {
   MESH_DEBUG_PRINTLN("Starting GPS");
   if (!gps_active) {
