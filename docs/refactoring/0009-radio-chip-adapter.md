@@ -1,7 +1,7 @@
 # 0009: One RadioLib adapter per chip family, part one: the receive detection
 
 Status: steps 9a, 9b and 9c implemented. Behaviour change: none. Step 9d is
-planned below and needs its own branch.
+designed below.
 
 ## Context
 
@@ -2077,3 +2077,191 @@ No board test for 9c. Every wrapper makes the same chip calls in the same order
 as before (host suite, 80 cases, 16 mutations), and the firmware differences
 are explained above down to the symbol. LLCC68 has no firmware environment and
 is covered by the host suite only.
+
+## Step 9d: one template for LR1110 and LR1121
+
+Status: designed, not implemented yet. Behaviour change: none planned.
+
+### Measured inventory
+
+`tools/refactoring/scripts/sx126x_inventory.py` now takes a family as second
+argument; `lr11x0` compares `CustomLR1110.h` and `CustomLR1121.h` the same way
+as for 9b (comments and white space removed, chip name replaced by a
+placeholder). On `integration` 07fa9c5c:
+
+| Member | Lines (normalized) | Groups of identical copies |
+|--------|--------------------|----------------------------|
+| includes | 4 | LR1110, LR1121 |
+| `_rxActivity`, `_rx_boosted`, constructor | 1 each | LR1110, LR1121 |
+| `begin()` | 8 | LR1110, LR1121 |
+| `getPacketLength()` | 8 | LR1110, LR1121 |
+| `getFreqMHz()` | 1 | LR1110, LR1121 |
+| `setRxBoostedGainMode()`, `getRxBoostedGainMode()` | 4, 1 | LR1110, LR1121 |
+| `startReceive()` | 3 | LR1110, LR1121 |
+| `isReceiving()` | 14 | LR1110, LR1121 |
+| `setPreambleMillis()`, `setMaxPayloadMillis()` | 1 each | LR1110, LR1121 |
+| `getSpreadingFactor()` | 1 | LR1110, LR1121 |
+| `_txPower`, `_txPowerSet`, `using LR1121::setOutputPower`, `using LR1121::setFrequency` | 1 each | LR1121 only |
+| `setOutputPower(int8_t)` | 15 | LR1121 only |
+| `setFrequency(float)` | 5 | LR1121 only |
+
+So every member of `CustomLR1110` has an identical copy in `CustomLR1121`, and
+`CustomLR1121` adds the band dependent power handling: `setOutputPower()` clips
+to the range of the power amplifier the band selects (and honours
+`LR1121_FORCE_HP_PA`, set by `waveshare_esp32s3_lr1121`), remembers the power,
+and `setFrequency()` applies it again after a band change.
+
+One difference the placeholder hides: the debug line in `getPacketLength()`
+names the chip (`"LR1110: got header err, calling standby()"` against
+`"LR1121: ..."`). `MESH_DEBUG_PRINTLN` pastes its format into a `printf`
+(`src/MeshCore.h:28`), so printing `Traits::name()` through `%s` gives the same
+text, as in 9b.
+
+In the tree, `RADIO_CLASS` is `CustomLR1110` in 38 environments (25 nRF52, 13
+ESP32) and `CustomLR1121` in 10 (5 nRF52, 5 ESP32); every one of them uses the
+matching wrapper. No class in `src`, `variants` or `examples` derives from either
+chip class; they are named only as `RADIO_CLASS` and in `target.h`, and built by
+copy initialization (`RADIO_CLASS radio = new Module(...)`), which needs the
+constructor to stay non `explicit`.
+
+### Template form
+
+A new header `src/helpers/radiolib/CustomLR11x0.h`, shaped like
+`CustomSX126x.h`:
+
+```cpp
+template <class Base, class Traits>
+class CustomLR11x0 : public Base {
+  RxActivityTracker _rxActivity;
+  bool _rx_boosted = false;
+public:
+  explicit CustomLR11x0(Module* mod) : Base(mod) { }
+  int16_t begin(/* the same parameters and defaults */);  // Base::begin, then setRegulatorDCDC() on success
+  size_t getPacketLength(bool update) override;            // standby() after a header error, debug line with Traits::name()
+  float getFreqMHz() const;
+  int16_t setRxBoostedGainMode(bool en);
+  bool getRxBoostedGainMode() const;
+  int16_t startReceive() override;
+  bool isReceiving();
+  void setPreambleMillis(uint32_t);
+  void setMaxPayloadMillis(uint32_t);
+  uint8_t getSpreadingFactor() const;
+};
+```
+
+The two chip headers keep their class as a thin subclass:
+
+```cpp
+struct CustomLR1110Traits {
+  static const char* name() { return "LR1110"; }
+};
+class CustomLR1110 : public CustomLR11x0<LR1110, CustomLR1110Traits> {
+public:
+  CustomLR1110(Module* mod) : CustomLR11x0(mod) { }
+};
+
+struct CustomLR1121Traits {
+  static const char* name() { return "LR1121"; }
+};
+class CustomLR1121 : public CustomLR11x0<LR1121, CustomLR1121Traits> {
+  int8_t _txPower = 0;
+  bool _txPowerSet = false;
+public:
+  CustomLR1121(Module* mod) : CustomLR11x0(mod) { }
+  using LR1121::setOutputPower;
+  using LR1121::setFrequency;
+  int16_t setOutputPower(int8_t power) override;   // unchanged text
+  int16_t setFrequency(float freq) override;       // unchanged text
+};
+```
+
+The bodies move unchanged, with `this->` (or `Base::`) in front of the members of
+the dependent base (`freqMHz`, `spreadingFactor`, `getIrqStatus()`,
+`clearIrqState()`, `standby()`, `setRegulatorDCDC()`), C++11 as in 9b. Name
+lookup stays as it was: the template's `begin()`, `getPacketLength(bool)` and
+`setRxBoostedGainMode()` hide the RadioLib overloads exactly as the class
+members did; `CustomLR1121` declares `setOutputPower` and `setFrequency` itself
+with the same `using` lines, the template declares neither. `standby()` inside
+`getPacketLength()` stays a virtual call, so an override in a subclass (#3638)
+is reached as before.
+
+Traits only where needed: the chip name is the only difference in the shared
+part, so the traits struct holds nothing else.
+
+### Exceptions, kept as they are
+
+- **The power handling stays LR1121 only.** `CustomLR1110` uses RadioLib's
+  `setOutputPower()` and `setFrequency()` as now. Giving LR1110 the clipping and
+  the re-apply after a frequency change would change what LR1110 boards transmit
+  after `set radio`, a behaviour change, and LR1110 has no band dependent PA
+  choice in MeshCore today.
+- **`LR1121_FORCE_HP_PA` keeps its name** and stays in the LR1121 subclass.
+- `CustomLR11x0Wrapper.h`, `CustomLR1110Wrapper.h`, `CustomLR1121Wrapper.h`,
+  `LR11x0Reset.h`, `RxActivityTracker.h` and the variants are untouched.
+- `CustomLR2021` stays its own class (different RadioLib family `LR2021`, other
+  IRQ names, no `begin()` or `getPacketLength()` override).
+
+### Alternatives considered for 9d
+
+- **The power handling in the template behind a trait** (`bandPower = false` for
+  LR1110). Without `if constexpr` both branches must compile for both chips; they
+  do, but the trait would hold two overrides and two members for one chip. The
+  subclass is the place for chip only code, as `powerOff()` in 9c.
+- **`using CustomLR1110 = CustomLR11x0<LR1110, ...>;`** Breaks a downstream
+  forward declaration and leaves #3638's and #3261's LR1110 only additions no
+  place. Rejected as in 9b and 9c.
+- **No traits, the debug line prints "LR11x0".** Changes the debug output, a
+  (small) behaviour change. Rejected.
+- **A template parameter `const char*` for the name.** Needs a string with
+  linkage per chip in C++11; a traits struct is shorter and matches 9b.
+- **Merging into `CustomSX126x.h` style naming `CustomLR11x0<Base>` without
+  traits, overriding `getPacketLength()` per chip for the name.** Leaves the eight
+  lines of `getPacketLength()` twice, the copy the step is meant to remove.
+
+### Upstream collisions (checked 22 October 2026)
+
+All open pull requests on `meshcore-dev/MeshCore` (493) were listed with their
+files; these touch `CustomLR1110.h` or `CustomLR1121.h`:
+
+| PR | Touches | Collision with 9d |
+|----|---------|-------------------|
+| #3638 dual radio profiles | `CustomLR1110.h` +236 -2: profile switching members, overrides of `standby()`, `standby(uint8_t)`, `sleep()`, `reset()`, `stageMode()`, `setPreambleLength()`, `setFrequency()`, `invertIQ()`, `setModem()`, `getTimeOnAir()`, and a new `startReceive()` body; `begin()`, `getPacketLength()`, `isReceiving()` unchanged (the PR still has the pre 9a members) | Heavy textual, light semantic. Its members are LR1110 only and land in the thin `CustomLR1110` subclass; its `startReceive()` there overrides the template's, its `standby()` is reached from the template's `getPacketLength()` through the vtable as today. A hunk move, as in 9b. |
+| #3261 stale SPI reply | `CustomLR1110.h` +41 -1: a status aware read in `getPacketLength()` and a helper | Semantic. After 9d `getPacketLength()` is shared: on rebase the PR either overrides it in `CustomLR1110` (LR1110 only, as it is written) or changes the template, which also gives LR1121 the fix. That choice is the PR's, and the template makes it one place instead of two. |
+| #3496 KISS gain control | `setRxBoostedGainMode()` in both, the same 3 line change (store the flag only on success) | Textual; one edit in the template instead of two. |
+| #2682 ThinkNode M4 | adds `begin()` to `CustomLR1110.h` (already in the tree) and creates `CustomLR1121.h` as a new file | Already conflicts with the tree; 9d changes nothing for it. |
+| #2999, #2696, #2198 LR1121 boards | create `CustomLR1121.h` as a new file | As #2682. |
+
+### Verification plan
+
+- Characterization first, committed before the move and passing unchanged on
+  both sides, in the `native_radio_chips` environment (no new environment):
+  - `test/test_radio_chips`: a suite over both chips for `begin()` (the
+    arguments reach RadioLib's `begin()`, `setRegulatorDCDC()` follows only on
+    success, its result is returned), `getPacketLength()` (`standby()` only for
+    length 0 with the header error bit, the length returned unchanged),
+    `getFreqMHz()`, `getSpreadingFactor()` (the member), boosted gain (flag
+    stored before the chip call, returned by the getter); and for the power
+    handling: LR1121 clips through `checkOutputPower()` with `force_hp` false,
+    remembers the requested (not the clipped) power only on success, applies it
+    again after a successful `setFrequency()` and not before one was set; LR1110
+    passes `setOutputPower()` and `setFrequency()` straight to RadioLib.
+  - `test/test_radio_chips_init` (built with `MESH_DEBUG`): the header error
+    debug line per chip, and with `LR1121_FORCE_HP_PA` the `force_hp` true path.
+  - The LR11x0 stubs gain a logged `begin()` with RadioLib's defaults,
+    `setRegulatorDCDC()`, a settable `getPacketLength(bool)`, `checkOutputPower()`
+    with a clip value and `setOutputPower(int8_t, bool)` / `setFrequency()` with
+    queued results.
+- Mutation tests on the code commit (wrong trait name, DCDC also after a failed
+  `begin()`, no `standby()` after a header error, power stored when the chip
+  fails, LR1121 power handling moved to LR1110, `force_hp` ignored, and so on).
+- Build matrix: all 48 environments with `CustomLR1110` or `CustomLR1121`, plus
+  controls per platform that do not include the two headers
+  (`RAK_4631_repeater`, `Heltec_v3_repeater`, `waveshare_rp2040_lora_repeater`,
+  `wio-e5-mini_repeater`, `Heltec_v2_repeater`, `MeshTracker_X1_repeater`,
+  `meshnology_w12_repeater`), on `integration` 07fa9c5c and on the code commit in
+  the same worktree, with `SOURCE_DATE_EPOCH=1792540800`; flash and RAM per
+  environment.
+- Image comparison of a sample keeping the ELF files, `nm -S -C` symbol by
+  symbol with the template name folded back, and disassembly where a size
+  changes.
+- All native test environments.
