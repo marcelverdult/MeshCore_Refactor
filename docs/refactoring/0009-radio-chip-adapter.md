@@ -1,7 +1,6 @@
 # 0009: One RadioLib adapter per chip family, part one: the receive detection
 
-Status: steps 9a, 9b and 9c implemented. Behaviour change: none. Step 9d is
-designed below.
+Status: steps 9a to 9d implemented. Behaviour change: none.
 
 ## Context
 
@@ -2080,7 +2079,7 @@ is covered by the host suite only.
 
 ## Step 9d: one template for LR1110 and LR1121
 
-Status: designed, not implemented yet. Behaviour change: none planned.
+Status: implemented. Behaviour change: none.
 
 ### Measured inventory
 
@@ -2135,7 +2134,7 @@ class CustomLR11x0 : public Base {
   RxActivityTracker _rxActivity;
   bool _rx_boosted = false;
 public:
-  explicit CustomLR11x0(Module* mod) : Base(mod) { }
+  CustomLR11x0(Module* mod) : Base(mod) { }
   int16_t begin(/* the same parameters and defaults */);  // Base::begin, then setRegulatorDCDC() on success
   size_t getPacketLength(bool update) override;            // standby() after a header error, debug line with Traits::name()
   float getFreqMHz() const;
@@ -2265,3 +2264,207 @@ files; these touch `CustomLR1110.h` or `CustomLR1121.h`:
   symbol with the template name folded back, and disassembly where a size
   changes.
 - All native test environments.
+
+### What changed
+
+`src/helpers/radiolib/CustomLR11x0.h` holds the template as designed above (the
+constructor is not `explicit`, as in `CustomSX126x.h`). `CustomLR1110.h` is a
+traits struct and a subclass with the constructor; `CustomLR1121.h` is a traits
+struct and a subclass with the constructor, `_txPower`, `_txPowerSet`, the two
+`using` lines, `setOutputPower()` and `setFrequency()`, their text unchanged. In
+`src`, 129 lines go and 92 come in. Callers, the wrappers, the reset helpers and
+the variants are unchanged.
+
+After the step, `sx126x_inventory.py . lr11x0` finds in the two headers only
+the include and traits struct and the constructor (identical up to the chip name)
+and the LR1121 power members; everything else sits once in the template.
+
+### Characterization tests
+
+Committed first (683a8d51), passing unchanged on that commit and on the code
+commit 8bbf8caa, in the `native_radio_chips` environment:
+
+- `test/test_radio_chips`: a typed suite `LR11x0ChipTest` over both chips, 10
+  tests: `begin()` passes its arguments and then switches to DC-DC, keeps
+  RadioLib's defaults, skips the regulator after a failed `begin()` and returns
+  the regulator's error; `getPacketLength()` puts the chip in standby for length
+  0 with the header error bit only (not without the bit, not for a non empty
+  packet) and clears no IRQ bit; `getFreqMHz()` and `getSpreadingFactor()` return
+  the chip's members; the boosted gain flag is stored before the chip answers,
+  also when it fails. Then 8 power tests: LR1110 passes `setOutputPower()` and
+  `setFrequency()` straight to RadioLib; LR1121 clips to the PA range with
+  `force_hp` false, applies the requested (not the clipped) power again after a
+  frequency change, does not remember a failed power, leaves the frequency plain
+  before a power was set or after a failed one, skips the power after a failed
+  frequency, and returns a power error that follows a frequency change.
+- `test/test_radio_chips_init` (with `MESH_DEBUG`, and now `LR1121_FORCE_HP_PA`):
+  the header error line per chip (`DEBUG: LR1110: got header err, calling
+  standby()`, the same with LR1121), `begin()` prints nothing, LR1121 asks for the
+  high power PA, LR1110 ignores the LR1121 option. 5 tests.
+
+The LR11x0 stub gains a logged `begin()` with RadioLib's defaults,
+`setRegulatorDCDC()`, a settable `getPacketLength(bool)`, a clipping
+`checkOutputPower()`, and the power, frequency and boosted gain setters with
+queued results. The existing chip and wrapper cases pass unchanged with it.
+
+`native_radio_chips`: 251 cases (218 before, 33 new, one skipped), on 683a8d51 and
+on 8bbf8caa. All 22 native environments on 8bbf8caa: 818 cases, one skipped.
+
+### Mutation tests
+
+Each mutation was applied to the code (M1 to M16 by a script, M17 by hand),
+`native_radio_chips` run, and the change reverted.
+
+| # | Mutation | Failing cases |
+|---|----------|---------------|
+| M1 | LR1110 trait returns "LR1121" | 1, LR1110 debug line |
+| M2 | DC-DC also after a failed `begin()` | 2, both chips |
+| M3 | no `standby()` after a header error | 4, both chips, plain and debug |
+| M4 | `standby()` also for a non empty packet | 2, both chips |
+| M5 | `begin()` drops the TCXO voltage | 2, both chips |
+| M6 | `begin()` default preamble 16 | 4, both chips |
+| M7 | boosted gain flag stored only on success (the change #3496 proposes) | 2, both chips |
+| M8 | spreading factor not the member | 6, both chips, chip and wrapper suites |
+| M9 | frequency not the member | 4, both chips, chip and wrapper (`doResetAGC()`) suites |
+| M10 | LR1121 remembers a failed power | 2, LR1121 |
+| M11 | LR1121 remembers the clipped power | 1, LR1121 |
+| M12 | LR1121 applies the power after a failed frequency | 1, LR1121 |
+| M13 | `LR1121_FORCE_HP_PA` ignored | 1, LR1121 |
+| M14 | LR1121 does not clip | 2, LR1121 |
+| M15 | LR1110 gets the LR1121 clipping in its subclass | 2, LR1110 |
+| M16 | power error after a frequency change swallowed | 1, LR1121 |
+| M17 | the power handling moved from the LR1121 subclass into the template | 2, LR1110 |
+
+### Build matrix
+
+All 48 environments with `CustomLR1110` (25 nRF52, 13 ESP32) or `CustomLR1121`
+(5 nRF52, 5 ESP32), plus 7 controls that do not include the two headers:
+`RAK_4631_repeater` (nRF52, SX1262), `Heltec_v3_repeater` (ESP32, SX1262),
+`waveshare_rp2040_lora_repeater` (RP2040, SX1262), `wio-e5-mini_repeater`
+(STM32, STM32WLx), `Heltec_v2_repeater` (ESP32, SX1276), `MeshTracker_X1_repeater`
+(nRF52, LR2021), `meshnology_w12_repeater` (ESP32, LR2021). Each built in the same
+worktree on 07fa9c5c (source of `src` and `variants` identical to the design
+commit) and on the code commit 8bbf8caa, same toolchain,
+`SOURCE_DATE_EPOCH=1792540800` for every build, ELF files kept.
+
+All 55 build on both sides. RAM is unchanged in all 55.
+
+| Platform | Radio class | Environments | Flash difference (environments) | Image identical |
+|----------|-------------|--------------|---------------------------------|-----------------|
+| nRF52 | LR1110 | 25 | +0 (25) | 0 |
+| nRF52 | LR1121 | 5 | +0 (5) | 0 |
+| ESP32 | LR1110 | 13 | +8 (4), -12 (3), -4 (2), -8 (2), -16 (1), +0 (1) | 0 |
+| ESP32 | LR1121 | 5 | +0 (5) | 0 |
+| all four | controls | 7 | +0 (7) | 7 |
+
+#### Image comparison and where the bytes go
+
+The 7 control images are byte identical. None of the 48 LR images is: the
+template members have other symbol names, so the linker places them in another
+order. `nm -S -C` of all 48 ELF pairs was compared symbol by symbol, with
+`CustomLR11x0<LR1110, CustomLR1110Traits>` folded back into `CustomLR1110` (and
+LR1121 likewise) and compiler clone suffixes folded:
+
+- **35 have no symbol of another size**: all 30 nRF52 environments, all 5
+  `Waveshare_S3_LR1121_*` (the board that sets `LR1121_FORCE_HP_PA`, so the
+  forced PA branch is in these images), and `ThinkNode_M7_companion_radio_ethernet`.
+  Only the order changed.
+- **13 ESP32 LR1110 environments** (`ThinkNode_M7_*`, `ThinkNode_M9_*`): only
+  these change size: `_GLOBAL__sub_I_board`, the static initializer that builds
+  the radio object (+1 in 7, -4 in 6), `CustomLR1110::isReceiving()` (+4 in 4),
+  `MyMesh::begin()` (-4 in 5), `MyMesh::cmdSetRadioParams()` (+4 in 1), and in the
+  six M9 builds `MicroNMEALocationProvider::loop()` (-4) and `::formatAge()` (-2
+  or +1), which the step does not touch. The rest of each flash difference is
+  section padding.
+
+Disassembled and compared (mnemonics with operands, addresses masked, narrow and
+wide encodings of one instruction counted as the same):
+
+- `isReceiving()` in `ThinkNode_M7_repeater` (143 to 147 bytes): the same
+  instruction sequence; two zero bytes of branch target alignment after the
+  `retw.n` and two after a `j` are new (objdump decodes the bytes after the
+  `retw.n` out of step because of them).
+- `_GLOBAL__sub_I_board` in `ThinkNode_M7_repeater` and
+  `ThinkNode_M7_companion_radio_ble` (+1): the same 87 and 94 instructions in
+  another order, with `movi`/`movi.n` and `mov.n`/`or` encodings swapped.
+  In `ThinkNode_M9_repeater_` and `ThinkNode_M9_companion_radio_wifi_` (-4): the
+  same instructions except that the vtable pointer of the radio object is stored
+  through `a5` instead of `a3`, and one padding byte less.
+- `MyMesh::begin()` in `ThinkNode_M7_companion_radio_ble` (-4): the same
+  instructions, four padding bytes less. `cmdSetRadioParams()` in
+  `ThinkNode_M9_companion_radio_wifi_` (+4): the same, two padding bytes more.
+  `MicroNMEALocationProvider::loop()` in `ThinkNode_M9_repeater_` (-4): padding,
+  with the same out of step decoding as above.
+
+So the flash differences are alignment, encoding and register choices of GCC on
+Xtensa. No behaviour depends on them; the host suites pin the calls each chip
+class makes.
+
+<details>
+<summary>Flash and RAM per environment (55)</summary>
+
+| Environment | Platform | Radio class | Flash before | Flash after | Flash | RAM | Image identical |
+|---|---|---|---|---|---|---|---|
+| ThinkNode_M7_companion_radio_ble | ESP32 | LR1110 | 1629681 | 1629677 | -4 | +0 | no |
+| ThinkNode_M7_companion_radio_ethernet | ESP32 | LR1110 | 1062453 | 1062453 | +0 | +0 | no |
+| ThinkNode_M7_companion_radio_usb | ESP32 | LR1110 | 589297 | 589305 | +8 | +0 | no |
+| ThinkNode_M7_companion_radio_wifi | ESP32 | LR1110 | 1028825 | 1028821 | -4 | +0 | no |
+| ThinkNode_M7_kiss_modem | ESP32 | LR1110 | 502001 | 502009 | +8 | +0 | no |
+| ThinkNode_M7_repeater | ESP32 | LR1110 | 1089241 | 1089249 | +8 | +0 | no |
+| ThinkNode_M7_room_server | ESP32 | LR1110 | 1084621 | 1084629 | +8 | +0 | no |
+| ThinkNode_M9_companion_radio_ble_ | ESP32 | LR1110 | 1292993 | 1292981 | -12 | +0 | no |
+| ThinkNode_M9_companion_radio_usb_ | ESP32 | LR1110 | 689361 | 689345 | -16 | +0 | no |
+| ThinkNode_M9_companion_radio_wifi_ | ESP32 | LR1110 | 1117509 | 1117501 | -8 | +0 | no |
+| ThinkNode_M9_kiss_modem | ESP32 | LR1110 | 601349 | 601341 | -8 | +0 | no |
+| ThinkNode_M9_repeater_ | ESP32 | LR1110 | 1182977 | 1182965 | -12 | +0 | no |
+| ThinkNode_M9_room_server_ | ESP32 | LR1110 | 1178285 | 1178273 | -12 | +0 | no |
+| Minewsemi_me25ls01_companion_radio_ble | nRF52 | LR1110 | 319852 | 319852 | +0 | +0 | no |
+| Minewsemi_me25ls01_companion_radio_usb | nRF52 | LR1110 | 314140 | 314140 | +0 | +0 | no |
+| Minewsemi_me25ls01_kiss_modem | nRF52 | LR1110 | 244700 | 244700 | +0 | +0 | no |
+| Minewsemi_me25ls01_repeater | nRF52 | LR1110 | 306976 | 306976 | +0 | +0 | no |
+| Minewsemi_me25ls01_room_server | nRF52 | LR1110 | 298820 | 298820 | +0 | +0 | no |
+| Minewsemi_me25ls01_terminal_chat | nRF52 | LR1110 | 271188 | 271188 | +0 | +0 | no |
+| ThinkNode_M3_companion_radio_ble | nRF52 | LR1110 | 320288 | 320288 | +0 | +0 | no |
+| ThinkNode_M3_companion_radio_usb | nRF52 | LR1110 | 314584 | 314584 | +0 | +0 | no |
+| ThinkNode_M3_kiss_modem | nRF52 | LR1110 | 244580 | 244580 | +0 | +0 | no |
+| ThinkNode_M3_repeater | nRF52 | LR1110 | 302260 | 302260 | +0 | +0 | no |
+| ThinkNode_M3_room_server | nRF52 | LR1110 | 295732 | 295732 | +0 | +0 | no |
+| ThinkNode_M4_companion_radio_ble | nRF52 | LR1110 | 320672 | 320672 | +0 | +0 | no |
+| ThinkNode_M4_companion_radio_usb | nRF52 | LR1110 | 314968 | 314968 | +0 | +0 | no |
+| ThinkNode_M4_kiss_modem | nRF52 | LR1110 | 244564 | 244564 | +0 | +0 | no |
+| ThinkNode_M4_repeater | nRF52 | LR1110 | 302252 | 302252 | +0 | +0 | no |
+| ThinkNode_M4_room_server | nRF52 | LR1110 | 295716 | 295716 | +0 | +0 | no |
+| t1000e_companion_radio_ble | nRF52 | LR1110 | 311644 | 311644 | +0 | +0 | no |
+| t1000e_companion_radio_usb | nRF52 | LR1110 | 306020 | 306020 | +0 | +0 | no |
+| t1000e_kiss_modem | nRF52 | LR1110 | 235436 | 235436 | +0 | +0 | no |
+| t1000e_repeater | nRF52 | LR1110 | 294712 | 294712 | +0 | +0 | no |
+| t1000e_room_server | nRF52 | LR1110 | 287548 | 287548 | +0 | +0 | no |
+| wio_wm1110_companion_radio_ble | nRF52 | LR1110 | 358792 | 358792 | +0 | +0 | no |
+| wio_wm1110_kiss_modem | nRF52 | LR1110 | 289992 | 289992 | +0 | +0 | no |
+| wio_wm1110_repeater | nRF52 | LR1110 | 345388 | 345388 | +0 | +0 | no |
+| wio_wm1110_room_server | nRF52 | LR1110 | 338224 | 338224 | +0 | +0 | no |
+| Waveshare_S3_LR1121_companion_radio_ble | ESP32 | LR1121 | 1185853 | 1185853 | +0 | +0 | no |
+| Waveshare_S3_LR1121_companion_radio_usb | ESP32 | LR1121 | 584201 | 584201 | +0 | +0 | no |
+| Waveshare_S3_LR1121_kiss_modem | ESP32 | LR1121 | 497809 | 497809 | +0 | +0 | no |
+| Waveshare_S3_LR1121_repeater | ESP32 | LR1121 | 1084869 | 1084869 | +0 | +0 | no |
+| Waveshare_S3_LR1121_room_server | ESP32 | LR1121 | 1080313 | 1080313 | +0 | +0 | no |
+| muzi_base_duo_companion_radio_ble | nRF52 | LR1121 | 327124 | 327124 | +0 | +0 | no |
+| muzi_base_duo_companion_radio_usb | nRF52 | LR1121 | 322084 | 322084 | +0 | +0 | no |
+| muzi_base_duo_repeater | nRF52 | LR1121 | 297316 | 297316 | +0 | +0 | no |
+| muzi_base_duo_room_server | nRF52 | LR1121 | 290804 | 290804 | +0 | +0 | no |
+| muzi_base_duo_superIO_companion_radio_ble | nRF52 | LR1121 | 346168 | 346168 | +0 | +0 | no |
+| meshnology_w12_repeater | ESP32 | LR2021 | 1183449 | 1183449 | +0 | +0 | yes |
+| MeshTracker_X1_repeater | nRF52 | LR2021 | 301152 | 301152 | +0 | +0 | yes |
+| wio-e5-mini_repeater | STM32 | STM32WLx | 204136 | 204136 | +0 | +0 | yes |
+| Heltec_v3_repeater | ESP32 | SX1262 | 1174961 | 1174961 | +0 | +0 | yes |
+| waveshare_rp2040_lora_repeater | RP2040 | SX1262 | 236596 | 236596 | +0 | +0 | yes |
+| RAK_4631_repeater | nRF52 | SX1262 | 441916 | 441916 | +0 | +0 | yes |
+| Heltec_v2_repeater | ESP32 | SX1276 | 1151985 | 1151985 | +0 | +0 | yes |
+
+</details>
+
+### What was not verified on hardware
+
+No board test for 9d. Both chip classes make the same chip calls in the same order
+as before (host suites, 33 new cases, 17 mutations), and the firmware differences
+are explained above down to the instruction.
