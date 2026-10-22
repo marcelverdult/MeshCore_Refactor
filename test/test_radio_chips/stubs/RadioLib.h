@@ -280,7 +280,54 @@ class SX1262 : public SX126x { public: using SX126x::SX126x; };
 class SX1268 : public SX126x { public: using SX126x::SX126x; };
 class LLCC68 : public SX1262 { public: using SX1262::SX1262; };
 class STM32WLx : public SX1262 { public: using SX1262::SX1262; };
-class LR11x0 : public StubChip { public: using StubChip::StubChip; };
+// The LR11x0 calls CustomLR1110 and CustomLR1121 make outside the receive
+// detection: begin() with RadioLib's parameters and defaults (LR1110.h and
+// LR1121.h at the pinned commit), the regulator switch, the packet length, and
+// the power and frequency setters with the PA choice of LR1121. Each is logged;
+// the results a test queues are returned in order, then RADIOLIB_ERR_NONE.
+class LR11x0 : public StubChip {
+  static int16_t next(std::vector<int16_t>& q) {
+    if (q.empty()) return RADIOLIB_ERR_NONE;
+    int16_t r = q.front();
+    q.erase(q.begin());
+    return r;
+  }
+public:
+  using StubChip::StubChip;
+  std::vector<int16_t> begin_results, dcdc_results, power_results, freq_results, gain_results;
+  size_t rx_length = 0;  // what RadioLib's getPacketLength(bool) reports
+  int8_t clip_to = 127;  // checkOutputPower() clips the power to at most this
+
+  int16_t begin(float freq = 434.0, float bw = 125.0, uint8_t sf = 9, uint8_t cr = 7,
+                uint8_t syncWord = RADIOLIB_LR11X0_LORA_SYNC_WORD_PRIVATE, int8_t power = 10,
+                uint16_t preambleLength = 8, float tcxoVoltage = 1.6) {
+    calls.push_back(stubCall("begin", freq, bw, sf, cr, syncWord, power, preambleLength, tcxoVoltage));
+    return next(begin_results);
+  }
+  int16_t setRegulatorDCDC() { calls.push_back("setRegulatorDCDC()"); return next(dcdc_results); }
+  size_t getPacketLength(bool) override { return rx_length; }
+  int16_t checkOutputPower(int8_t power, int8_t* clipped, bool forceHighPower) {
+    calls.push_back(stubCall("checkOutputPower", power, forceHighPower));
+    *clipped = power < clip_to ? power : clip_to;
+    return RADIOLIB_ERR_NONE;
+  }
+  int16_t setOutputPower(int8_t power) override {
+    calls.push_back(stubCall("setOutputPower", power));
+    return next(power_results);
+  }
+  int16_t setOutputPower(int8_t power, bool forceHighPower) {
+    calls.push_back(stubCall("setOutputPower", power, forceHighPower));
+    return next(power_results);
+  }
+  int16_t setFrequency(float freq) override {
+    calls.push_back(stubCall("setFrequency", freq));
+    return next(freq_results);
+  }
+  int16_t setRxBoostedGainMode(bool en) {
+    calls.push_back(stubCall("setRxBoostedGainMode", en));
+    return next(gain_results);
+  }
+};
 class LR1110 : public LR11x0 { public: using LR11x0::LR11x0; };
 class LR1121 : public LR11x0 { public: using LR11x0::LR11x0; };
 class LR2021 : public StubChip {

@@ -328,6 +328,166 @@ TYPED_TEST(SX126xInitTest, RxBoostedGainModeReadsTheGainRegister) {
   EXPECT_EQ(this->radio.calls, want);
 }
 
+// The rest of the LR11x0 chip classes: begin() on the DC-DC regulator, the
+// standby after a header error, the getters the wrapper reads and the boosted
+// gain flag. LR1110 and LR1121 carry the same code for these.
+template <typename T>
+struct LR11x0ChipTest : public ::testing::Test {
+  Module mod;
+  T radio{&mod};
+  void SetUp() override { Serial.reset(); }
+};
+using LR11x0Chips = ::testing::Types<CustomLR1110, CustomLR1121>;
+TYPED_TEST_SUITE(LR11x0ChipTest, LR11x0Chips);
+
+using Log = std::vector<std::string>;
+
+TYPED_TEST(LR11x0ChipTest, BeginPassesItsArgumentsThenSwitchesToDcdc) {
+  EXPECT_EQ(this->radio.begin(869.525f, 250.0f, 11, 5, 0x12, 22, 16, 1.8f), RADIOLIB_ERR_NONE);
+  Log want = {"begin(869.525,250,11,5,18,22,16,1.8)", "setRegulatorDCDC()"};
+  EXPECT_EQ(this->radio.calls, want);
+}
+
+TYPED_TEST(LR11x0ChipTest, BeginKeepsRadioLibsDefaults) {
+  EXPECT_EQ(this->radio.begin(), RADIOLIB_ERR_NONE);
+  Log want = {"begin(434,125,9,7,18,10,8,1.6)", "setRegulatorDCDC()"};
+  EXPECT_EQ(this->radio.calls, want);
+}
+
+TYPED_TEST(LR11x0ChipTest, FailedBeginSkipsTheRegulator) {
+  this->radio.begin_results = {-2};
+  EXPECT_EQ(this->radio.begin(), -2);
+  Log want = {"begin(434,125,9,7,18,10,8,1.6)"};
+  EXPECT_EQ(this->radio.calls, want);
+}
+
+TYPED_TEST(LR11x0ChipTest, RegulatorErrorIsReturned) {
+  this->radio.dcdc_results = {-5};
+  EXPECT_EQ(this->radio.begin(), -5);
+}
+
+TYPED_TEST(LR11x0ChipTest, EmptyPacketWithHeaderErrorPutsTheChipInStandby) {
+  this->radio.rx_length = 0;
+  this->radio.irq = RADIOLIB_LR11X0_IRQ_HEADER_ERR;
+  EXPECT_EQ(this->radio.getPacketLength(true), 0u);
+  Log want = {"standby()"};
+  EXPECT_EQ(this->radio.calls, want);
+  EXPECT_TRUE(this->radio.clears.empty());  // the IRQ bits are left alone
+  EXPECT_EQ(Serial.out, "");                // the debug line is off here
+}
+
+TYPED_TEST(LR11x0ChipTest, EmptyPacketWithoutHeaderErrorIsLeftAlone) {
+  this->radio.rx_length = 0;
+  this->radio.irq = ~RADIOLIB_LR11X0_IRQ_HEADER_ERR;
+  EXPECT_EQ(this->radio.getPacketLength(false), 0u);
+  EXPECT_TRUE(this->radio.calls.empty());
+}
+
+TYPED_TEST(LR11x0ChipTest, PacketWithHeaderErrorBitIsLeftAlone) {
+  this->radio.rx_length = 42;
+  this->radio.irq = RADIOLIB_LR11X0_IRQ_HEADER_ERR;
+  EXPECT_EQ(this->radio.getPacketLength(true), 42u);
+  EXPECT_TRUE(this->radio.calls.empty());
+}
+
+TYPED_TEST(LR11x0ChipTest, FrequencyAndSpreadingFactorAreTheChipsMembers) {
+  this->radio.freqMHz = 433.875f;
+  this->radio.spreadingFactor = 7;
+  EXPECT_EQ(this->radio.getFreqMHz(), 433.875f);
+  EXPECT_EQ(this->radio.getSpreadingFactor(), 7);
+}
+
+TYPED_TEST(LR11x0ChipTest, BoostedGainFlagIsStoredBeforeTheChipAnswers) {
+  EXPECT_FALSE(this->radio.getRxBoostedGainMode());
+  EXPECT_EQ(this->radio.setRxBoostedGainMode(true), RADIOLIB_ERR_NONE);
+  EXPECT_TRUE(this->radio.getRxBoostedGainMode());
+  this->radio.gain_results = {-1};
+  EXPECT_EQ(this->radio.setRxBoostedGainMode(false), -1);
+  EXPECT_FALSE(this->radio.getRxBoostedGainMode());  // stored although the chip failed
+  this->radio.gain_results = {-1};
+  EXPECT_EQ(this->radio.setRxBoostedGainMode(true), -1);
+  EXPECT_TRUE(this->radio.getRxBoostedGainMode());
+  Log want = {"setRxBoostedGainMode(1)", "setRxBoostedGainMode(0)", "setRxBoostedGainMode(1)"};
+  EXPECT_EQ(this->radio.calls, want);
+}
+
+// The output power: LR1110 leaves it to RadioLib; LR1121 clips it to the range of
+// the PA the band selects and applies it again after a frequency change.
+struct LR1110Power : public ::testing::Test {
+  Module mod;
+  CustomLR1110 radio{&mod};
+};
+struct LR1121Power : public ::testing::Test {
+  Module mod;
+  CustomLR1121 radio{&mod};
+};
+
+TEST_F(LR1110Power, PowerAndFrequencyGoStraightToRadioLib) {
+  EXPECT_EQ(radio.setOutputPower(22), RADIOLIB_ERR_NONE);
+  EXPECT_EQ(radio.setFrequency(2400.0f), RADIOLIB_ERR_NONE);
+  Log want = {"setOutputPower(22)", "setFrequency(2400)"};
+  EXPECT_EQ(radio.calls, want);
+  radio.power_results = {-13};
+  EXPECT_EQ(radio.setOutputPower(30), -13);
+}
+
+TEST_F(LR1121Power, FrequencyBeforeAnyPowerIsPlain) {
+  EXPECT_EQ(radio.setFrequency(915.0f), RADIOLIB_ERR_NONE);
+  Log want = {"setFrequency(915)"};
+  EXPECT_EQ(radio.calls, want);
+}
+
+TEST_F(LR1121Power, PowerIsClippedToThePaRange) {
+  radio.clip_to = 13;
+  EXPECT_EQ(radio.setOutputPower(22), RADIOLIB_ERR_NONE);
+  Log want = {"checkOutputPower(22,0)", "setOutputPower(13,0)"};
+  EXPECT_EQ(radio.calls, want);
+}
+
+TEST_F(LR1121Power, FrequencyChangeAppliesTheRequestedPowerAgain) {
+  radio.clip_to = 13;
+  radio.setOutputPower(22);
+  radio.calls.clear();
+  radio.clip_to = 22;
+  EXPECT_EQ(radio.setFrequency(868.0f), RADIOLIB_ERR_NONE);
+  Log want = {"setFrequency(868)", "checkOutputPower(22,0)", "setOutputPower(22,0)"};
+  EXPECT_EQ(radio.calls, want);
+}
+
+TEST_F(LR1121Power, FailedPowerIsNotRemembered) {
+  radio.setOutputPower(10);
+  radio.power_results = {-13};
+  EXPECT_EQ(radio.setOutputPower(22), -13);
+  radio.calls.clear();
+  EXPECT_EQ(radio.setFrequency(868.0f), RADIOLIB_ERR_NONE);
+  Log want = {"setFrequency(868)", "checkOutputPower(10,0)", "setOutputPower(10,0)"};
+  EXPECT_EQ(radio.calls, want);
+}
+
+TEST_F(LR1121Power, FailedFirstPowerLeavesFrequencyPlain) {
+  radio.power_results = {-13};
+  EXPECT_EQ(radio.setOutputPower(22), -13);
+  radio.calls.clear();
+  EXPECT_EQ(radio.setFrequency(868.0f), RADIOLIB_ERR_NONE);
+  Log want = {"setFrequency(868)"};
+  EXPECT_EQ(radio.calls, want);
+}
+
+TEST_F(LR1121Power, FailedFrequencySkipsThePower) {
+  radio.setOutputPower(22);
+  radio.calls.clear();
+  radio.freq_results = {-12};
+  EXPECT_EQ(radio.setFrequency(2400.0f), -12);
+  Log want = {"setFrequency(2400)"};
+  EXPECT_EQ(radio.calls, want);
+}
+
+TEST_F(LR1121Power, PowerErrorAfterAFrequencyChangeIsReturned) {
+  radio.setOutputPower(22);
+  radio.power_results = {-13};
+  EXPECT_EQ(radio.setFrequency(2400.0f), -13);
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
