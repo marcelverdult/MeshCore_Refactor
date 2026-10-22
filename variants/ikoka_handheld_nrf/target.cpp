@@ -4,13 +4,6 @@
 
 IkokaNrf52Board board;
 
-RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, SPI);
-
-WRAPPER_CLASS radio_driver(radio, board);
-
-VolatileRTCClock fallback_clock;
-AutoDiscoverRTCClock rtc_clock(fallback_clock);
-
 EnvironmentSensorManager sensors;
 
 #ifdef DISPLAY_CLASS
