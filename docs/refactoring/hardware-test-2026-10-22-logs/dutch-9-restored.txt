@@ -1,0 +1,9 @@
+ver => v1.13.0-evo_0.1.9-9e5dbf2 (Build: 21-Feb-2026)
+board => Heltec V3
+get name => > Dutch Embassy
+get public.key => > D6ADD22BD18F70B528B8FF53E7E71068522136D56FAF24426CABE21CC6F45621
+get radio => > 869.6179809,62.5,8,5
+get tx => > 22
+get advert.interval => > 240
+get lat => > 53.5809249
+get lon => > 9.7076969

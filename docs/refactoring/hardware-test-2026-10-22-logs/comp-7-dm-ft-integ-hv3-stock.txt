@@ -1,0 +1,13 @@
+>> shell /private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/c /dev/cu.usbmodem1301 send 1fe03aad38ed hallo-von-ft-integ
+>> send 1fe03aad38ed hallo-von-ft-integ
+    SENT flood=0 ack=5137bdce timeout_ms=3996 
+>> listen 3
+>> sync
+    NO_MORE_MESSAGES
+>> send 10c028d31040 hallo-von-hv3-stock-2
+    SENT flood=0 ack=38b69cf8 timeout_ms=3996
+    PUSH_LOG_RX snr=12.5 rssi=-3 raw=0e0038b69cf80050..
+    PUSH_SEND_CONFIRMED ack=38b69cf8 rtt_ms=1013
+>> shell /private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/c /dev/cu.usbmodem1301 sync
+>> sync
+    MSG from=1fe03aad38ed path_len=255 type=0 ts=1792708034 text='hallo-von-hv3-stock-2' 

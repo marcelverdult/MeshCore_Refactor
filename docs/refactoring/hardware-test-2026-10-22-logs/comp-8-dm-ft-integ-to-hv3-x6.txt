@@ -1,0 +1,28 @@
+>> send 1fe03aad38ed ft-integ-1
+    SENT flood=0 ack=451cd92b timeout_ms=3210 
+    NO_MORE_MESSAGES
+>> send 1fe03aad38ed ft-integ-2
+    SENT flood=0 ack=042acd91 timeout_ms=3210
+    PUSH_SEND_CONFIRMED ack=042acd91 rtt_ms=6479 
+    PUSH_MSG_WAITING
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708086 text='ft-integ-2'
+>> send 1fe03aad38ed ft-integ-3
+    SENT flood=0 ack=1af1d722 timeout_ms=3210
+    PUSH_SEND_CONFIRMED ack=1af1d722 rtt_ms=5101 
+    PUSH_MSG_WAITING
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708104 text='ft-integ-3'
+>> send 1fe03aad38ed ft-integ-4
+    SENT flood=0 ack=c28606f7 timeout_ms=3210
+    PUSH_SEND_CONFIRMED ack=c28606f7 rtt_ms=4981 
+    PUSH_MSG_WAITING
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708123 text='ft-integ-4'
+>> send 1fe03aad38ed ft-integ-5
+    SENT flood=0 ack=c649c466 timeout_ms=3210
+    PUSH_SEND_CONFIRMED ack=c649c466 rtt_ms=4980 
+    PUSH_MSG_WAITING
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708141 text='ft-integ-5'
+>> send 1fe03aad38ed ft-integ-6
+    SENT flood=0 ack=6241c040 timeout_ms=3210
+    PUSH_SEND_CONFIRMED ack=6241c040 rtt_ms=9206 
+    PUSH_MSG_WAITING
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708160 text='ft-integ-6'

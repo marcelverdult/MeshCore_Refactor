@@ -1,0 +1,24 @@
+>> contacts
+    CONTACTS_START count=1
+    CONTACT name=HWT-FT-C type=1 out_path_len=255 last_advert=1792707869 pub=10c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc
+    END_OF_CONTACTS
+>> shell /private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/c /dev/cu.usbmodem1301 send 1fe03aad38ed hallo-von-ft-stock
+>> send 1fe03aad38ed hallo-von-ft-stock
+    SENT flood=1 ack=4b72cd88 timeout_ms=9156
+    PUSH_LOG_RX snr=13.0 rssi=-6 raw=2100101ff3b8ff8faa0b8fa1e6386bbb8b2c0920..
+    FRAME code=129 811fe03aad38ed17e40bb0f287e026e742364abe170aaad63b4408ce1f87e0477e
+    PUSH_SEND_CONFIRMED ack=4b72cd88 rtt_ms=1159 
+>> listen 3
+    PUSH_LOG_RX snr=12.0 rssi=-4 raw=09001f10e8f25379b08b4cdf25766711e5de4413..
+    PUSH_MSG_WAITING
+    PUSH_LOG_RX snr=12.0 rssi=-4 raw=22001f1087c832d5858481d000de0e68218f169c..
+    FRAME code=129 8110c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc
+>> sync
+    FRAME code=7 0710c028d310400000418dda6a68616c6c6f2d766f6e2d66742d73746f636b
+>> send 10c028d31040 hallo-von-hv3-stock
+    SENT flood=0 ack=14a99509 timeout_ms=3996
+    PUSH_LOG_RX snr=12.25 rssi=-3 raw=0e0014a9950900f8..
+    PUSH_SEND_CONFIRMED ack=14a99509 rtt_ms=5231
+>> shell /private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/c /dev/cu.usbmodem1301 sync
+>> sync
+    FRAME code=7 071fe03aad38edff00528dda6a68616c6c6f2d766f6e2d6876332d73746f636b 

@@ -1,0 +1,13 @@
+## FakeTec(integration) advert -> Heltec Dutch(stock)
+advert => OK - Advert sent
+stats-packets => {"recv":0,"sent":1,"flood_tx":0,"direct_tx":1,"flood_rx":0,"direct_rx":0,"recv_errors":0}
+neighbors => None
+stats-packets => {"recv":0,"sent":0,"flood_tx":0,"direct_tx":0,"flood_rx":0,"direct_rx":0,"recv_errors":0}
+stats-radio => {"noise_floor":-94,"last_rssi":-3,"last_snr":12.25,"tx_air_secs":0,"rx_air_secs":0}
+## Heltec Dutch(stock) advert -> FakeTec(integration)
+advert => None
+neighbors => 1FE03AAD:23:49
+stats-packets => {"recv":3,"sent":2,"flood_tx":1,"direct_tx":1,"flood_rx":2,"direct_rx":1,"recv_errors":0}
+stats-radio => {"noise_floor":-101,"last_rssi":-5,"last_snr":13.00,"tx_air_secs":2,"rx_air_secs":3}
+clock => 10:57 - 15/5/2024 UTC
+stats-core => {"battery_mv":4486,"uptime_secs":272,"errors":0,"queue_len":0}

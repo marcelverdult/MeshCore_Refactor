@@ -1,0 +1,27 @@
+>> send 1fe03aad38ed ii-ft-to-hv3-1
+    SENT flood=0 ack=c2413482 timeout_ms=3996
+    PUSH_SEND_CONFIRMED ack=c2413482 rtt_ms=2866 
+    PUSH_MSG_WAITING
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708332 text='ii-ft-to-hv3-1'
+>> send 10c028d31040 ii-hv3-to-ft-1
+    SENT flood=0 ack=82609914 timeout_ms=3996
+    PUSH_SEND_CONFIRMED ack=82609914 rtt_ms=1014
+    MSG from=1fe03aad38ed path_len=255 type=0 ts=1792708350 text='ii-hv3-to-ft-1' 
+>> send 1fe03aad38ed ii-ft-to-hv3-2
+    SENT flood=0 ack=18798457 timeout_ms=3996
+    PUSH_SEND_CONFIRMED ack=18798457 rtt_ms=1015 
+    PUSH_MSG_WAITING
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708367 text='ii-ft-to-hv3-2'
+>> send 10c028d31040 ii-hv3-to-ft-2
+    SENT flood=0 ack=9a7f6036 timeout_ms=3996
+    PUSH_SEND_CONFIRMED ack=9a7f6036 rtt_ms=5110
+    MSG from=1fe03aad38ed path_len=255 type=0 ts=1792708385 text='ii-hv3-to-ft-2' 
+>> send 1fe03aad38ed ii-ft-to-hv3-3
+    SENT flood=0 ack=938f6be1 timeout_ms=3996
+    PUSH_SEND_CONFIRMED ack=938f6be1 rtt_ms=1016 
+    PUSH_MSG_WAITING
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708403 text='ii-ft-to-hv3-3'
+>> send 10c028d31040 ii-hv3-to-ft-3
+    SENT flood=0 ack=05d78a3a timeout_ms=3996
+    PUSH_SEND_CONFIRMED ack=05d78a3a rtt_ms=2940
+    MSG from=1fe03aad38ed path_len=255 type=0 ts=1792708421 text='ii-hv3-to-ft-3' 

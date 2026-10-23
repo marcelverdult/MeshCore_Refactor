@@ -1,0 +1,9 @@
+[/dev/cu.usbserial-0001] neighbors => -none-
+advert => OK - Advert sent
+stats-packets => {"recv":0,"sent":1,"flood_tx":0,"direct_tx":1,"flood_rx":0,"direct_rx":0,"recv_errors":0}
+stats-radio => {"noise_floor":-100,"last_rssi":-105,"last_snr":16.75,"tx_air_secs":1,"rx_air_secs":0} 
+[/dev/cu.usbserial-0001] neighbors => 10C028D3:2:48
+[/dev/cu.usbserial-0001] stats-packets => {"recv":1,"sent":0,"flood_tx":0,"direct_tx":0,"flood_rx":1,"direct_rx":0,"recv_errors":0}
+advert => OK - Advert sent 
+[/dev/cu.usbserial-0001] neighbors => 10C028D3:12:48
+[/dev/cu.usbserial-0001] stats-packets => {"recv":1,"sent":2,"flood_tx":1,"direct_tx":1,"flood_rx":1,"direct_rx":0,"recv_errors":0}

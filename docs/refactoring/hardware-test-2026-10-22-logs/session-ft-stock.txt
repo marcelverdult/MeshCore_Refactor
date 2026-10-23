@@ -1,0 +1,38 @@
+APP_START                          01 len  15 -> 0501021610c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc00df3103408995000002000063440d0024f4000008084857542d46542d4332
+DEVICE_QUERY                       16 len   2 -> 0d0eaf280000000031352d4f63742d323032360050726f4d6963726f204449590000000000000000000000000000000000000000000000000000000076312e31382e302d3831646261653500000000000100
+GET_TUNING_PARAMS                  2b len   1 -> 17ca080000dc050000
+GET_AUTOADD_CONFIG                 3b len   1 -> 190000
+GET_DEFAULT_FLOOD_SCOPE            40 len   1 -> 1c
+SET_RADIO_TX_POWER (same)          0c len   2 -> 00
+SET_RADIO_PARAMS (same)            0b len  12 -> 0106
+SET_TUNING_PARAMS (same)           15 len   9 -> 00
+SET_OTHER_PARAMS (same)            26 len   5 -> 00
+SET_AUTOADD_CONFIG (same)          3a len   3 -> 00
+SET_PATH_HASH_MODE (same)          3d len   3 -> 00
+SET_ADVERT_NAME (same)             08 len  10 -> 00
+SET_ADVERT_LATLON (same)           0e len   9 -> 00
+SET_DEVICE_PIN (same)              25 len   5 -> 00
+SET_FLOOD_SCOPE_KEY clear          36 len   2 -> 00
+SET_FLOOD_SCOPE_KEY sub 2          36 len   2 -> 0101
+SET_PATH_HASH_MODE byte 1 not 0    3d len   3 -> 0101
+SET_PATH_HASH_MODE 3               3d len   3 -> 0106
+SET_RADIO_TX_POWER 127             0c len   2 -> 0106
+SET_DEVICE_TIME in the past        06 len   5 -> 0106
+SET_DEVICE_PIN 5 digits            25 len   5 -> 0106
+GET_STATS core                     38 len   2 -> 1800eeeeeeeeeeee000000
+GET_STATS radio                    38 len   2 -> 1801eeeeeeeeeeeeeeeeeeeeeeee
+GET_STATS 3                        38 len   2 -> 0106
+SEND_TELEMETRY_REQ self            27 len   4 -> 8b0010c028d31040eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+SEND_TELEMETRY_REQ len 5           27 len   5 -> 0101
+SIGN_START                         21 len   1 -> 130000200000
+SIGN_DATA                          22 len  18 -> 00
+SIGN_FINISH                        23 len   1 -> 14cf465b321f8c79440989c3ee3e95baa8fa9a04a4637f45160fbb10c812c5c7ad832219cd7a97fccc0491abf11fe3a13888f92a9d0898e3e50ada41004ae2390b
+SIGN_FINISH again                  23 len   1 -> 0104
+GET_CHANNEL 0                      1f len   2 -> 12005075626c6963000989c3ee3e95baa8fa9a04a4637f45160fbb10c812c5c7ad838b3387e9c5cdea6ac9e5edbaa115cd72
+GET_CHANNEL 255                    1f len   2 -> 0102
+RUN_CLI_COMMAND ver                42 len   4 -> 1d76312e31382e302d3831646261653520284275696c643a2031352d4f63742d3230323629
+RUN_CLI_COMMAND get name           42 len   9 -> 1d3e204857542d46542d4332
+REBOOT wrong word                  13 len   7 -> 0101
+FACTORY_RESET wrong word           33 len   6 -> 0101
+GET_DEVICE_TIME                    05 len   1 -> 09eeeeeeee
+GET_BATT_AND_STORAGE               14 len   1 -> 0ceeee1300000064000000

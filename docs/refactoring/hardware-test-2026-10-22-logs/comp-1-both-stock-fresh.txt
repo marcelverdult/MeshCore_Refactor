@@ -1,0 +1,24 @@
+=== /dev/cu.usbmodem1301
+>> info
+    SELF_INFO name=HWT-FT5095b pub=10c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc tx=1/22 radio=869.462,62.5,8,8 lat=53600000 lon=9800000
+>> cli ver
+    CLI_REPLY 'v1.18.0-81dbae5 (Build: 15-Oct-2026)'
+>> cli get radio
+    CLI_REPLY '> 869.461975,62.5,8,8'
+>> contacts
+    CONTACTS_START count=0
+    END_OF_CONTACTS
+>> time
+    CURR_TIME 1715770410
+=== /dev/cu.usbserial-0001
+>> info
+    SELF_INFO name=HWT-HV3Db pub=1fe03aad38ed17e40bb0f287e026e742364abe170aaad63b4408ce1f87e0477e tx=1/22 radio=869.462,62.5,8,8 lat=53600000 lon=9800000
+>> cli ver
+    CLI_REPLY 'v1.18.0-81dbae5 (Build: 15-Oct-2026)'
+>> cli get radio
+    CLI_REPLY '> 869.461975,62.5,8,8'
+>> contacts
+    CONTACTS_START count=0
+    END_OF_CONTACTS
+>> time
+    CURR_TIME 1772323213

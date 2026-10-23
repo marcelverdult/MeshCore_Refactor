@@ -1,0 +1,2 @@
+clock => 10:53 - 15/5/2024 UTC
+stats-radio => {"noise_floor":-102,"last_rssi":-104,"last_snr":16.75,"tx_air_secs":1,"rx_air_secs":0}

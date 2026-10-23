@@ -1,0 +1,23 @@
+>> settime
+    OK
+>> cli set name HWT-FT-C
+    CLI_REPLY 'OK'
+>> advert
+    OK
+>> settime
+    OK
+>> cli set name HWT-HV3D-C
+    CLI_REPLY 'OK'
+>> listen 3
+>> contacts
+    CONTACTS_START count=0
+    END_OF_CONTACTS
+>> advert
+    OK
+>> listen 2
+    PUSH_LOG_RX snr=12.25 rssi=-6 raw=12001fe03aad38ed17e40bb0f287e026e742364a..
+    PUSH_ADVERT pub=1fe03aad38ed17e40bb0f287e026e742364abe170aaad63b4408ce1f87e0477e
+>> contacts
+    CONTACTS_START count=1
+    CONTACT name=HWT-HV3D-C type=1 out_path_len=255 last_advert=1792707834 pub=1fe03aad38ed17e40bb0f287e026e742364abe170aaad63b4408ce1f87e0477e
+    END_OF_CONTACTS

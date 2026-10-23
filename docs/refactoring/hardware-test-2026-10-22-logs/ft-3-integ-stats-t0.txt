@@ -1,0 +1,5 @@
+clock => 10:53 - 15/5/2024 UTC
+stats-core => {"battery_mv":4408,"uptime_secs":38,"errors":0,"queue_len":0}
+stats-radio => {"noise_floor":-101,"last_rssi":-104,"last_snr":16.75,"tx_air_secs":1,"rx_air_secs":0}
+stats-packets => {"recv":0,"sent":1,"flood_tx":0,"direct_tx":1,"flood_rx":0,"direct_rx":0,"recv_errors":0}
+neighbors => -none-

@@ -1,0 +1,48 @@
+--- boot/console ---
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x8 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x4bc
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a0c
+entry 0x403c98d0
+Repeater ID: 1FE03AAD38ED17E40BB0F287E026E742364ABE170AAAD63B4408CE1F87E0477E
+
+---
+ver => v1.18.0 (Build: hw-07fa9c5)
+get public.key => > 1FE03AAD38ED17E40BB0F287E026E742364ABE170AAAD63B4408CE1F87E0477E
+board => Heltec V3
+get public.key => > 1FE03AAD38ED17E40BB0F287E026E742364ABE170AAAD63B4408CE1F87E0477E
+ver => v1.18.0 (Build: hw-07fa9c5)
+get role => > repeater
+get name => > HWT-HV3D
+get radio => > 869.461975,62.5,8,8
+get freq => > 869.461975
+get tx => > 2
+get af => > 2.0
+get dutycycle => > 33.3%
+get rxdelay => > 3.5
+get txdelay => > 0.75
+get direct.txdelay => > 0.3499999
+get int.thresh => > 12
+get agc.reset.interval => > 40
+get multi.acks => > 1
+get path.hash.mode => > 1
+get cad => > on
+get radio.rxgain => > off
+get lat => > 53.5
+get lon => > 9.6999998
+get advert.interval => > 60
+get flood.advert.interval => > 47
+get flood.max => > 32
+get flood.max.unscoped => > 64
+get flood.max.advert => > 8
+get loop.detect => > minimal
+get allow.read.only => > off
+get owner.info => > hwtest-A
+get adc.multiplier => Error: unsupported
+get repeat => > on
+gps => off
+gps advert => > prefs

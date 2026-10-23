@@ -1,0 +1,26 @@
+esp time OK - clock set: 22:09 - 22/10/2026 UTC
+nrf time OK - clock set: 22:09 - 22/10/2026 UTC
+esp 1FE03AAD nrf 10C028D3
+nrf->esp #1: MISS
+nrf->esp #2: OK snr=12.0
+nrf->esp #3: MISS
+nrf->esp #4: OK snr=12.0
+nrf->esp #5: OK snr=11.75
+nrf->esp #6: OK snr=12.0
+nrf->esp #7: OK snr=11.75
+nrf->esp #8: OK snr=12.0
+nrf->esp #9: OK snr=12.0
+nrf->esp #10: OK snr=11.75
+esp->nrf #1: OK snr=12.75
+esp->nrf #2: OK snr=12.75
+esp->nrf #3: OK snr=13.0
+esp->nrf #4: OK snr=12.75
+esp->nrf #5: OK snr=12.5
+esp->nrf #6: OK snr=12.5
+esp->nrf #7: OK snr=12.5
+esp->nrf #8: OK snr=12.25
+esp->nrf #9: OK snr=12.75
+esp->nrf #10: OK snr=12.75
+RESULT nrf->esp 8/10  esp->nrf 10/10
+esp stats {"recv":19,"sent":21,"flood_tx":20,"direct_tx":1,"flood_rx":19,"direct_rx":0,"recv_errors":0} {"noise_floor":-94,"last_rssi":-3,"last_snr":12.50,"tx_air_secs":25,"rx_air_secs":22}
+nrf stats {"recv":21,"sent":20,"flood_tx":19,"direct_tx":1,"flood_rx":20,"direct_rx":1,"recv_errors":0} {"noise_floor":-100,"last_rssi":-5,"last_snr":12.75,"tx_air_secs":24,"rx_air_secs":25}

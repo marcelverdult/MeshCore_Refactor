@@ -1,0 +1,12 @@
+>> info
+    SELF_INFO name=HWT-FT-C2 pub=10c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc tx=2/22 radio=869.475,62.5,8,8 lat=53600000 lon=9800000
+>> contacts
+    CONTACTS_START count=1
+    CONTACT name=HWT-HV3D-C type=1 out_path_len=0 last_advert=1792707834 pub=1fe03aad38ed17e40bb0f287e026e742364abe170aaad63b4408ce1f87e0477e
+    END_OF_CONTACTS
+>> cli get radio
+    CLI_REPLY '> 869.4749755,62.5,8,8'
+>> cli get tx
+    CLI_REPLY '> 2'
+>> cli get name
+    CLI_REPLY '> HWT-FT-C2'

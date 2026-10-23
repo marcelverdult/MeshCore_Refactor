@@ -1,0 +1,5 @@
+ver => 1.14.1-letsmesh.net-dev-2026-03-20-abe6e046 (Build: 20-Mar-2026)
+board => Heltec V3
+get name => > Jork Observer
+get public.key => > E936D9576965117BB28BEFC1FB82EF37D87E5CE11853B7EC18054C69A9EDFD0B
+get radio => > 869.6179809,62.5,8,8

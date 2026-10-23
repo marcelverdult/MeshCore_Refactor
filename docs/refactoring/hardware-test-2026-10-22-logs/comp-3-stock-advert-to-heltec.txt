@@ -1,0 +1,13 @@
+>> contacts
+    CONTACTS_START count=0
+    END_OF_CONTACTS
+>> shell /private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/c /dev/cu.usbmodem1301 advert
+>> advert
+    OK 
+>> listen 4
+    PUSH_LOG_RX snr=12.0 rssi=-4 raw=120010c028d31040b89bbaa460242c32ace3a946..
+    PUSH_ADVERT pub=10c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc
+>> contacts
+    CONTACTS_START count=1
+    CONTACT name=HWT-FT-C type=1 out_path_len=255 last_advert=1792707869 pub=10c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc
+    END_OF_CONTACTS

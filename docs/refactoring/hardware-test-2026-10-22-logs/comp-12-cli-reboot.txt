@@ -1,0 +1,84 @@
+### FT
+>> cli set radio 869.475,62.5,8,8
+    CLI_REPLY 'OK - reboot to apply'
+>> cli set tx 2
+    CLI_REPLY 'OK'
+>> cli get radio
+    CLI_REPLY '> 869.4749755,62.5,8,8'
+>> cli get tx
+    CLI_REPLY '> 2'
+>> cli set name HWT-FT-C2
+    CLI_REPLY 'OK'
+>> reboot
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/platformio/6.2.0_1/libexec/lib/python3.14/site-packages/serial/serialposix.py", line 575, in read
+    buf = os.read(self.fd, size - len(read))
+OSError: [Errno 6] Device not configured
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/comp.py", line 87, in <module>
+    run(act)
+    ~~~^^^^^
+  File "/private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/comp.py", line 82, in run
+    for f in frames(wait):
+             ~~~~~~^^^^^^
+  File "/private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/comp.py", line 14, in frames
+    buf += s.read(4096)
+           ~~~~~~^^^^^^
+  File "/opt/homebrew/Cellar/platformio/6.2.0_1/libexec/lib/python3.14/site-packages/serial/serialposix.py", line 581, in read
+    raise SerialException('read failed: {}'.format(e))
+serial.serialutil.SerialException: read failed: [Errno 6] Device not configured
+### HV3
+>> cli set radio 869.475,62.5,8,8
+    CLI_REPLY 'OK - reboot to apply'
+>> cli set tx 2
+    CLI_REPLY 'OK'
+>> cli get radio
+    CLI_REPLY '> 869.4749755,62.5,8,8'
+>> cli get tx
+    CLI_REPLY '> 2'
+>> cli set name HWT-HV3D-C2
+    CLI_REPLY 'OK'
+>> reboot
+### after reboot
+>> info
+    SELF_INFO name=HWT-FT-C2 pub=10c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc tx=2/22 radio=869.475,62.5,8,8 lat=53600000 lon=9800000
+>> cli get radio
+    CLI_REPLY '> 869.4749755,62.5,8,8'
+>> cli get tx
+    CLI_REPLY '> 2'
+>> contacts
+    CONTACTS_START count=1
+    CONTACT name=HWT-HV3D-C type=1 out_path_len=0 last_advert=1792707834 pub=1fe03aad38ed17e40bb0f287e026e742364abe170aaad63b4408ce1f87e0477e
+    END_OF_CONTACTS
+>> info
+>> cli get radio
+>> cli get tx
+    SELF_INFO name=HWT-HV3D-C2 pub=1fe03aad38ed17e40bb0f287e026e742364abe170aaad63b4408ce1f87e0477e tx=2/22 radio=869.475,62.5,8,8 lat=53600000 lon=9800000
+    CLI_REPLY '> 869.4749755,62.5,8,8'
+    CLI_REPLY '> 2'
+>> contacts
+    CONTACTS_START count=1
+    CONTACT name=HWT-FT-C type=1 out_path_len=0 last_advert=1792707869 pub=10c028d31040b89bbaa460242c32ace3a946c4a3a1f9d37037d9b3a58ada49bc
+    END_OF_CONTACTS
+>> shell /private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/c /dev/cu.usbmodem1301 send 1fe03aad38ed nach-reboot-869475
+>> send 1fe03aad38ed nach-reboot-869475
+    SENT flood=0 ack=89ce72a3 timeout_ms=3996
+    PUSH_LOG_RX snr=12.5 rssi=-5 raw=0e0089ce72a30098..
+    PUSH_SEND_CONFIRMED ack=89ce72a3 rtt_ms=5397 
+>> listen 4
+    PUSH_LOG_RX snr=12.5 rssi=-2 raw=0a001f1049d65f14969fd9dc9169daab37d3d7a3..
+    PUSH_MSG_WAITING
+>> sync
+    MSG from=10c028d31040 path_len=255 type=0 ts=1792708508 text='nach-reboot-869475'
+>> send 10c028d31040 zurueck-869475
+    SENT flood=0 ack=b51c37c0 timeout_ms=3996
+    PUSH_LOG_RX snr=12.0 rssi=-2 raw=0e00b51c37c00063..
+    PUSH_SEND_CONFIRMED ack=b51c37c0 rtt_ms=5110
+>> shell /private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/c /dev/cu.usbmodem1301 listen 2
+>> listen 2 
+>> shell /private/tmp/claude-501/-Users-verdi-Projects-MeshCore-Refactor--claude-worktrees-gifted-murdock-f54535/8e98edac-9755-42ef-a6be-d3b1c7b1a565/scratchpad/c /dev/cu.usbmodem1301 sync
+>> sync
+    MSG from=1fe03aad38ed path_len=255 type=0 ts=1792708526 text='zurueck-869475' 
