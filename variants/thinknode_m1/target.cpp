@@ -9,11 +9,6 @@ ThinkNodeM1Board board;
 MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
 ThinkNodeM1SensorManager sensors = ThinkNodeM1SensorManager(nmea);
 
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display;
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-
 void ThinkNodeM1SensorManager::start_gps() {
   if (!gps_active) {
     gps_active = true;
@@ -120,4 +115,3 @@ bool ThinkNodeM1SensorManager::setSettingValue(const char* name, const char* val
   }
   return false;  // not supported
 }
-

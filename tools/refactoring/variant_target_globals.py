@@ -6,6 +6,10 @@ Used for cut D of step 11 of the refactoring series
 `pio` command; run from the repository root:
 
     python3 tools/refactoring/variant_target_globals.py [--detail]
+    python3 tools/refactoring/variant_target_globals.py --peripherals
+
+With --peripherals (cut E) it groups instead the display, button, GPS and
+sensor manager globals: see peripherals() below.
 
 For every variants/*/target.cpp it extracts the "radio block": the declarations
 of the SPI object, `radio`, `radio_driver`, `fallback_clock` and `rtc_clock`,
@@ -164,10 +168,85 @@ def flag(flags, name):
     return None if m is None else (m.group(1) or "1")
 
 
+PERIPH = {
+    "display": re.compile(r"^(?:static\s+)?\w+\s+display\b"),
+    "button": re.compile(r"^(?:static\s+)?MomentaryButton\s+\w+"),
+    "gps": re.compile(r"^(?:static\s+)?\w*LocationProvider\s+\w+"),
+    "sensors": re.compile(r"^(?:static\s+)?\w*SensorManager\s+sensors\b"),
+}
+
+
+def toplevel_lines(src):
+    """Normalized lines of target.cpp outside any brace (no function bodies)."""
+    out, depth = [], 0
+    for raw in strip_comments(src).splitlines():
+        l = norm(raw)
+        if not l:
+            continue
+        if depth == 0 and not l.startswith("#include"):
+            out.append(l)
+        depth += l.count("{") - l.count("}")
+    return out
+
+
+def periph_block(lines, cats):
+    """The lines of the given categories with the preprocessor lines that
+    enclose them: (unclosed #if lines before the first, block)."""
+    idx = [i for i, l in enumerate(lines) if any(PERIPH[c].match(l) for c in cats)]
+    if not idx:
+        return [], []
+    lo, hi = idx[0], idx[-1]
+    ctx = []
+    for l in lines[:lo]:
+        m = PREPROC.match(l)
+        if m and m.group(1) in ("if", "ifdef", "ifndef"):
+            ctx.append(l)
+        elif m and m.group(1) == "endif" and ctx:
+            ctx.pop()
+    block = lines[lo:hi + 1]
+    # keep only the #if around the first line, which is what guards the block
+    return ctx[-1:], block
+
+
+def peripherals(envs, variants):
+    """Cut E: group the display and button lines, and the GPS and sensor
+    manager lines, of every target.cpp (normalized, with the #if that guards
+    the first of them), with the environments of each group and how many of
+    them define DISPLAY_CLASS or ENV_INCLUDE_GPS (and to what)."""
+    info = {}
+    for v in variants:
+        lines = toplevel_lines(open(f"variants/{v}/target.cpp", encoding="utf-8",
+                                    errors="replace").read())
+        mine = {e: d for e, d in envs.items()
+                if re.search(r"variants/" + re.escape(v) + r"(?:>|/)", d["src"])}
+        info[v] = {"lines": lines, "envs": mine,
+                   "platforms": sorted({platform_name(d["platform"]) for d in mine.values()})}
+    for title, cats, macro in (("display and buttons", ("display", "button"), "DISPLAY_CLASS"),
+                               ("GPS and sensor manager", ("gps", "sensors"), "ENV_INCLUDE_GPS")):
+        groups = collections.defaultdict(list)
+        for v, i in info.items():
+            ctx, block = periph_block(i["lines"], cats)
+            groups[(tuple(ctx), tuple(block))].append(v)
+        print(f"== {title}: {len(groups)} groups ==")
+        for (ctx, block), vs in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            es = [d for v in vs for d in info[v]["envs"].values()]
+            vals = collections.Counter(flag(d["flags"], macro) or "-" for d in es)
+            plats = sorted({p for v in vs for p in info[v]["platforms"]})
+            print(f"-- {len(vs)} variants, {len(es)} envs, {','.join(plats)}, {macro}: "
+                  + ", ".join(f"{k} {n}" for k, n in sorted(vals.items())))
+            for l in (ctx or ("(no guard)",)) + (block or ("(none)",)):
+                print(f"   {l}")
+            print(f"   variants: {', '.join(vs)}")
+        print()
+
+
 def main():
     detail = "--detail" in sys.argv
     envs = environments()
     variants = sorted(p.split("/")[1] for p in glob.glob("variants/*/target.cpp"))
+    if "--peripherals" in sys.argv:
+        peripherals(envs, variants)
+        return
     info = {}
     for v in variants:
         src = open(f"variants/{v}/target.cpp", encoding="utf-8", errors="replace").read()

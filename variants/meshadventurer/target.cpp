@@ -9,11 +9,6 @@ MeshadventurerBoard board;
 MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
 MASensorManager sensors = MASensorManager(nmea);
 
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display;
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
-
 
 void MASensorManager::start_gps() {
   if(!gps_active) {
