@@ -130,6 +130,9 @@ inlining, which is why the tests also read the pair directly. On the code commit
 
 `e6072261` adds the suite to `test_ignore` of the `native` environment, which would
 otherwise pick it up without the stand ins; it changes no firmware source.
+`24e3ead4` includes `<time.h>` in the stand ins: on macOS `<sys/time.h>` declares
+`time()`, with glibc it does not, and the unit test workflow on Linux failed to
+compile the suite without it. It changes no firmware source either.
 
 ### Host suites
 
