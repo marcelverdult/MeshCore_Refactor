@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <sys/time.h>
+#include <time.h>  // time(), which the ESP32 core declares through Arduino.h
 
 // esp_attr.h: on the ESP32 a section in RTC memory that a reset does not clear;
 // on the host ordinary (zero initialized) memory.
