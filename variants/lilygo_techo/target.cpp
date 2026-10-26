@@ -11,3 +11,7 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
 #else
 EnvironmentSensorManager sensors = EnvironmentSensorManager();
 #endif
+
+#ifdef DISPLAY_CLASS
+  MomentaryButton backlight_btn(BACKLIGHT_BTN, 1000, true);   // own global, not part of DISPLAY_TARGET_GLOBALS
+#endif
