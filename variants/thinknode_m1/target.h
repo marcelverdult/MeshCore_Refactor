@@ -42,6 +42,7 @@ extern ThinkNodeM1SensorManager sensors;
   extern DISPLAY_CLASS display;
   extern MomentaryButton user_btn;
   #define DISPLAY_TARGET_GLOBALS   // display and user_btn come from VariantTarget.cpp
+  extern MomentaryButton backlight_btn;
 #endif
 
 bool radio_init();
