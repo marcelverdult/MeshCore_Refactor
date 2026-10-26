@@ -23,6 +23,10 @@ EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
 EnvironmentSensorManager sensors = EnvironmentSensorManager();
 #endif
 
+#ifdef DISPLAY_CLASS
+  MomentaryButton backlight_btn(BACKLIGHT_BTN, 1000, true);   // own global, not part of DISPLAY_TARGET_GLOBALS
+#endif
+
 bool radio_init() {
   fallback_clock.begin();
   rtc_clock.begin(Wire);

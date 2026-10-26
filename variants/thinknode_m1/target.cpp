@@ -9,6 +9,10 @@ ThinkNodeM1Board board;
 MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
 ThinkNodeM1SensorManager sensors = ThinkNodeM1SensorManager(nmea);
 
+#ifdef DISPLAY_CLASS
+  MomentaryButton backlight_btn(BACKLIGHT_BTN, 1000, true);   // own global, not part of DISPLAY_TARGET_GLOBALS
+#endif
+
 void ThinkNodeM1SensorManager::start_gps() {
   if (!gps_active) {
     gps_active = true;
