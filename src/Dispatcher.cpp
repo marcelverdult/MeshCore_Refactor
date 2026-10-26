@@ -153,9 +153,16 @@ void Dispatcher::loop() {
 bool Dispatcher::tryParsePacket(Packet* pkt, const uint8_t* raw, int len) {
   int i = 0;
 
+  if (len < 1) return false;
   pkt->header = raw[i++];
   if (pkt->getPayloadVer() > PAYLOAD_VER_1) {
     MESH_DEBUG_PRINTLN("%s Dispatcher::checkRecv(): unsupported packet version", getLogDateTime());
+    return false;
+  }
+
+  // header, transport codes (if any) and path length byte must all be inside 'len'
+  if (len < (pkt->hasTransportCodes() ? 6 : 2)) {
+    MESH_DEBUG_PRINTLN("%s Dispatcher::checkRecv(): partial or corrupt packet received, len=%d", getLogDateTime(), len);
     return false;
   }
 

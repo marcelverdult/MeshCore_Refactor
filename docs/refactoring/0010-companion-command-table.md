@@ -911,7 +911,9 @@ Each needs its own fix and proposal; 10c leaves the code as it is.
    `tools/refactoring/companion_asan_probe.patch`, run it with `PROBE_SKIP=1`, and
    `companion_asan_probe_summary.py` lists `MyMesh::cmdSendRawPacket` with
    `mesh::Dispatcher::tryParsePacket` for code 65, fills `00` and `3f`, lengths 4
-   to 6 (see `tools/refactoring/README.md`).
+   to 6 (see `tools/refactoring/README.md`). Fixed in
+   `docs/fixes/packet-parse-len.md`, together with the same pattern in
+   `Packet::readFrom()`; after it the probe no longer lists code 65.
 2. **The CLI parser compares prefixes past the terminator.**
    `CommonRadioPrefs::handleCommand()`, `MyMesh::handleCommand()` and `isGet()` use
    `memcmp()` with prefixes longer than the command text. The result is decided at

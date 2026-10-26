@@ -1,45 +1,20 @@
 #pragma once
 
 #include "CustomSX1268.h"
-#include "RadioLibWrappers.h"
-#include "SX126xReset.h"
+#include "CustomSX126xWrapper.h"
 
 #ifndef USE_SX1268
 #define USE_SX1268
 #endif
 
-class CustomSX1268Wrapper : public RadioLibWrapper {
+class CustomSX1268Wrapper : public CustomSX126xWrapper<CustomSX1268> {
 public:
-  CustomSX1268Wrapper(CustomSX1268& radio, mesh::MainBoard& board) : RadioLibWrapper(radio, board) { }
-
-  void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
-    ((CustomSX1268 *)_radio)->setFrequency(freq);
-    ((CustomSX1268 *)_radio)->setSpreadingFactor(sf);
-    ((CustomSX1268 *)_radio)->setBandwidth(bw);
-    ((CustomSX1268 *)_radio)->setCodingRate(cr);
-    updatePreamble(sf);
-    PacketMillis pm = calcMaxPacketMillis(sf, bw, cr, preambleLengthForSF(sf));
-    ((CustomSX1268 *)_radio)->setPreambleMillis(pm.preambleMillis);
-    ((CustomSX1268 *)_radio)->setMaxPayloadMillis(pm.payloadMillis);
-  }
-
-  bool isReceivingPacket() override { 
-    return ((CustomSX1268 *)_radio)->isReceiving();
-  }
-  float getCurrentRSSI() override {
-    return ((CustomSX1268 *)_radio)->getRSSI(false);
-  }
-  float getLastRSSI() const override { return ((CustomSX1268 *)_radio)->getRSSI(); }
-  float getLastSNR() const override { return ((CustomSX1268 *)_radio)->getSNR(); }
-
-  uint8_t getSpreadingFactor() const override { return ((CustomSX1268 *)_radio)->spreadingFactor; }
+  CustomSX1268Wrapper(CustomSX1268& radio, mesh::MainBoard& board) : CustomSX126xWrapper(radio, board) { }
 
   bool setRxBoostedGainMode(bool en) override {
-    return ((CustomSX1268 *)_radio)->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
+    return chip()->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
   }
   bool getRxBoostedGainMode() const override {
-    return ((CustomSX1268 *)_radio)->getRxBoostedGainMode();
+    return chip()->getRxBoostedGainMode();
   }
-
-  void doResetAGC() override { sx126xResetAGC((SX126x *)_radio, getRxBoostedGainMode()); }
 };

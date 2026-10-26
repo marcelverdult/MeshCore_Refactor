@@ -13,6 +13,8 @@
 #endif
 
 extern HeltecE213Board board;
+#define RADIOLIB_TARGET_GLOBALS   // radio, radio_driver and rtc_clock come from RadioLibTarget.cpp
+#define P_LORA_SPI_HOST FSPI   // the radio's own SPI bus
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
 extern SensorManager sensors;
@@ -20,6 +22,8 @@ extern SensorManager sensors;
 #ifdef DISPLAY_CLASS
 extern DISPLAY_CLASS display;
 extern MomentaryButton user_btn;
+#define DISPLAY_TARGET_GLOBALS   // display and user_btn come from VariantTarget.cpp
+#define DISPLAY_PERIPH_POWER &board.periph_power
 #endif
 
 bool radio_init();

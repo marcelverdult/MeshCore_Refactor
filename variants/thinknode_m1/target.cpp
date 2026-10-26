@@ -6,19 +6,8 @@
 
 ThinkNodeM1Board board;
 
-RADIO_CLASS radio = new Module(P_LORA_NSS, P_LORA_DIO_1, P_LORA_RESET, P_LORA_BUSY, SPI);
-
-WRAPPER_CLASS radio_driver(radio, board);
-
-VolatileRTCClock fallback_clock;
-AutoDiscoverRTCClock rtc_clock(fallback_clock);
 MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
 ThinkNodeM1SensorManager sensors = ThinkNodeM1SensorManager(nmea);
-
-#ifdef DISPLAY_CLASS
-  DISPLAY_CLASS display;
-  MomentaryButton user_btn(PIN_USER_BTN, 1000, true);
-#endif
 
 void ThinkNodeM1SensorManager::start_gps() {
   if (!gps_active) {
@@ -126,4 +115,3 @@ bool ThinkNodeM1SensorManager::setSettingValue(const char* name, const char* val
   }
   return false;  // not supported
 }
-

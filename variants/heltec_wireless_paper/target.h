@@ -19,6 +19,7 @@ public:
 #endif
 
 extern HeltecWirelessPaperBoard board;
+#define RADIOLIB_TARGET_GLOBALS   // radio, radio_driver and rtc_clock come from RadioLibTarget.cpp
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
 extern SensorManager sensors;
@@ -26,6 +27,7 @@ extern SensorManager sensors;
 #ifdef DISPLAY_CLASS
 extern DISPLAY_CLASS display;
 extern MomentaryButton user_btn;
+#define DISPLAY_TARGET_GLOBALS   // display and user_btn come from VariantTarget.cpp
 #endif
 
 bool radio_init();
