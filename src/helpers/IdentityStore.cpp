@@ -1,9 +1,11 @@
 #include "IdentityStore.h"
+#include "AtomicFile.h"
 
 bool IdentityStore::load(const char *name, mesh::LocalIdentity& id) {
   bool loaded = false;
   char filename[40];
   sprintf(filename, "%s/%s.id", _dir, name);
+  AtomicFile::cleanup(_fs, filename);
   if (_fs->exists(filename)) {
 #if defined(RP2040_PLATFORM)
     File file = _fs->open(filename, "r");
@@ -22,6 +24,7 @@ bool IdentityStore::load(const char *name, mesh::LocalIdentity& id, char display
   bool loaded = false;
   char filename[40];
   sprintf(filename, "%s/%s.id", _dir, name);
+  AtomicFile::cleanup(_fs, filename);
   if (_fs->exists(filename)) {
 #if defined(RP2040_PLATFORM)
     File file = _fs->open(filename, "r");
@@ -96,58 +99,34 @@ bool IdentityStore::save(const char *name, const mesh::LocalIdentity& id) {
   char filename[40];
   sprintf(filename, "%s/%s.id", _dir, name);
 
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-  _fs->remove(filename);
-  File file = _fs->open(filename, FILE_O_WRITE);
-#elif defined(RP2040_PLATFORM)
-  File file = _fs->open(filename, "w");
-#else
-  File file = _fs->open(filename, "w", true);
-#endif
-  if (file) {
-    bool success = id.writeTo(file);
-    file.close();
-    MESH_DEBUG_PRINTLN("IdentityStore::save() write - %s", success ? "OK" : "Err");
-    if (success && !verifySaved(name, id)) {
-      MESH_DEBUG_PRINTLN("IdentityStore::save() verify - Err");
-      success = false;
-    }
-    return success;
+  bool success = AtomicFile::write(_fs, filename, [&](File& file) {
+    return id.writeTo(file);
+  });
+  MESH_DEBUG_PRINTLN("IdentityStore::save() write - %s", success ? "OK" : "Err");
+  if (success && !verifySaved(name, id)) {
+    MESH_DEBUG_PRINTLN("IdentityStore::save() verify - Err");
+    success = false;
   }
-  MESH_DEBUG_PRINTLN("IdentityStore::save() failed");
-  return false;
+  return success;
 }
 
 bool IdentityStore::save(const char *name, const mesh::LocalIdentity& id, const char display_name[]) {
   char filename[40];
   sprintf(filename, "%s/%s.id", _dir, name);
 
-#if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
-  _fs->remove(filename);
-  File file = _fs->open(filename, FILE_O_WRITE);
-#elif defined(RP2040_PLATFORM)
-  File file = _fs->open(filename, "w");
-#else
-  File file = _fs->open(filename, "w", true);
-#endif
-  if (file) {
-    bool success = id.writeTo(file);
+  uint8_t tmp[32];
+  memset(tmp, 0, sizeof(tmp));
+  int n = strlen(display_name);
+  if (n > sizeof(tmp)-1) n = sizeof(tmp)-1;
+  memcpy(tmp, display_name, n);
 
-    uint8_t tmp[32];
-    memset(tmp, 0, sizeof(tmp));
-    int n = strlen(display_name);
-    if (n > sizeof(tmp)-1) n = sizeof(tmp)-1;
-    memcpy(tmp, display_name, n);
-    success = success && (file.write(tmp, sizeof(tmp)) == sizeof(tmp));
-
-    file.close();
-    MESH_DEBUG_PRINTLN("IdentityStore::save() write - %s", success ? "OK" : "Err");
-    if (success && !verifySaved(name, id, tmp)) {
-      MESH_DEBUG_PRINTLN("IdentityStore::save() verify - Err");
-      success = false;
-    }
-    return success;
+  bool success = AtomicFile::write(_fs, filename, [&](File& file) {
+    return id.writeTo(file) && (file.write(tmp, sizeof(tmp)) == sizeof(tmp));
+  });
+  MESH_DEBUG_PRINTLN("IdentityStore::save() write - %s", success ? "OK" : "Err");
+  if (success && !verifySaved(name, id, tmp)) {
+    MESH_DEBUG_PRINTLN("IdentityStore::save() verify - Err");
+    success = false;
   }
-  MESH_DEBUG_PRINTLN("IdentityStore::save() failed");
-  return false;
+  return success;
 }

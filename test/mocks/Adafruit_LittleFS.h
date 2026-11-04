@@ -99,6 +99,12 @@ public:
 
   // The driver's File offers a buffer read next to the Stream interface, and
   // IdentityStore uses it to pick up the display name.
+  // After a sequential write both are the number of bytes that went in; the
+  // callers of AtomicFile compare the size after close() with the position
+  // before it.
+  uint32_t position() { return _data ? (uint32_t) _data->bytes.size() : 0; }
+  uint32_t size() { return _data ? (uint32_t) _data->bytes.size() : 0; }
+
   size_t read(uint8_t* buffer, size_t size) {
     size_t n = 0;
     while (n < size && available() > 0) buffer[n++] = (uint8_t) read();
@@ -121,6 +127,18 @@ public:
   bool exists(const char* path) { return _files.count(path) > 0; }
   bool remove(const char* path) { return _files.erase(path) > 0; }
   bool mkdir(const char* path) { return true; }
+
+  // littlefs replaces an existing target in the same commit.
+  bool fail_rename = false;
+  bool rename(const char* from, const char* to) {
+    if (fail_rename) return false;
+    auto found = _files.find(from);
+    if (found == _files.end()) return false;
+    Adafruit_LittleFS_Namespace::FileData moved = found->second;
+    _files.erase(found);
+    _files[to] = moved;
+    return true;
+  }
 
   Adafruit_LittleFS_Namespace::File open(const char* path, uint8_t mode = FILE_O_READ) {
     if (fail_open) return Adafruit_LittleFS_Namespace::File();
