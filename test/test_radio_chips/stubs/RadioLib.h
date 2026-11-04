@@ -27,6 +27,7 @@
 #include <vector>
 
 #define RADIOLIB_ERR_NONE             0
+#define RADIOLIB_ERR_LORA_HEADER_DAMAGED (-24)  // the value in RadioLib 7.8.1 TypeDef.h
 #define RADIOLIB_CHANNEL_FREE         (-2)
 #define RADIOLIB_ERR_SPI_CMD_INVALID  (-706)
 #define RADIOLIB_ERR_SPI_CMD_FAILED   (-707)
@@ -192,6 +193,7 @@ public:
   std::vector<RxCall> rx_calls;
 
   float freqMHz = 869.525f;
+  bool rx_has_crc = true;  // what the LoRa header of the last packet says
   uint8_t spreadingFactor = 9;
 
   // SX126x and LR2021 names
@@ -200,6 +202,12 @@ public:
   // LR11x0 names
   uint32_t getIrqStatus() { return irq; }
   int16_t clearIrqState(uint32_t mask) { clears.push_back(mask); irq &= ~mask; return RADIOLIB_ERR_NONE; }
+
+  int16_t getLoRaRxHeaderInfo(uint8_t* cr, bool* hasCRC) {
+    if (cr) *cr = 5;
+    if (hasCRC) *hasCRC = rx_has_crc;
+    return RADIOLIB_ERR_NONE;
+  }
 
   virtual int16_t startReceive() { return RADIOLIB_ERR_NONE; }
   int16_t startReceive(uint32_t timeout, uint32_t flags, uint32_t mask, size_t len) {

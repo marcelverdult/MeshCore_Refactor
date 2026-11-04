@@ -16,8 +16,15 @@ public:
   CustomLR2021Wrapper(CustomLR2021& radio, mesh::MainBoard& board) : CustomChipWrapper(radio, board) { }
 
   void setParams(float freq, float bw, uint8_t sf, uint8_t cr) override {
+    // LR2021 only accepts RF/modulation config commands in STANDBY. Re-configuring
+    // while in continuous RX is silently rejected (-706), which broke hot frequency
+    // changes over BLE (upstream b0bacf8a). The internal idle() inside
+    // applySideDetectorConfig() sets STATE_IDLE, which triggers startReceive().
+    int16_t status = chip()->standby();
+    if (status != RADIOLIB_ERR_NONE) { MESH_DEBUG_PRINTLN("CustomLR2021Wrapper: standby() -> %d", status); }
     setModemParams(freq, bw, sf, cr);
-    applySideDetectorConfig();
+    status = applySideDetectorConfig();
+    if (status != RADIOLIB_ERR_NONE) { MESH_DEBUG_PRINTLN("CustomLR2021Wrapper: applySideDetectorConfig() -> %d", status); }
     setRxDeadlines(bw, sf, cr);
   }
 

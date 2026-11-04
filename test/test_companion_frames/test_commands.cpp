@@ -446,19 +446,18 @@ TEST_F(CommandTest, ResetPathAndRemove) {
 }
 
 // The contact table starts with eight reserved slots for anonymous requests, all
-// zeros until one is used, and the lookup searches them too. A key of zeros
-// therefore names a reserved slot, and REMOVE_CONTACT removes it. The reported
-// count, num_contacts minus the eight, then wraps. Recorded as it is; the slots
-// come back on the next boot (resetContacts()). Also seen on a board, see
-// docs/refactoring/0010-companion-command-table.md.
-TEST_F(CommandTest, AZeroKeyNamesAReservedSlot) {
+// zeros until one is used. Until upstream 060fd219 the lookup searched them too,
+// so a key of zeros named a reserved slot and REMOVE_CONTACT removed it. Now the
+// lookups skip empty slots (ContactInfo::isEmptySlot()): a zero key names no
+// contact, and the reserved slots cannot be removed from the companion protocol.
+// See docs/refactoring/0010-companion-command-table.md for the old quirk.
+TEST_F(CommandTest, AZeroKeyNamesNoContact) {
   Bytes zero(PUB_KEY_SIZE, 0);
-  EXPECT_EQ(h.reply(withKey(GET_CONTACT_BY_KEY, zero))[0], RESP_CONTACT);
-  EXPECT_EQ(h.reply(withKey(REMOVE_CONTACT, zero)), OK);
-  Bytes start = h.reply({GET_CONTACTS});
-  EXPECT_EQ(start, Bytes({RESP_CONTACTS_START, 0xFF, 0xFF, 0xFF, 0xFF}));
-  for (int i = 0; i < 7; i++) EXPECT_EQ(h.reply(withKey(REMOVE_CONTACT, zero)), OK) << i;
+  EXPECT_EQ(h.reply(withKey(GET_CONTACT_BY_KEY, zero)), err(ERR_NOT_FOUND));
   EXPECT_EQ(h.reply(withKey(REMOVE_CONTACT, zero)), err(ERR_NOT_FOUND));
+  Bytes start = h.reply({GET_CONTACTS});
+  EXPECT_EQ(start[0], RESP_CONTACTS_START);
+  EXPECT_NE(start, Bytes({RESP_CONTACTS_START, 0xFF, 0xFF, 0xFF, 0xFF}));  // the count no longer wraps
 }
 
 TEST_F(CommandTest, ShareContact) {

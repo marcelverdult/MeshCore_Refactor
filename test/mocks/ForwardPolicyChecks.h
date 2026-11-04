@@ -48,6 +48,7 @@ protected:
     mesh::Packet pkt;
     memset(&pkt, 0, sizeof(pkt));
     pkt.header = route_type | (payload_type << PH_TYPE_SHIFT);
+    if (route_type == ROUTE_TYPE_TRANSPORT_FLOOD) pkt.transport_codes[0] = 1;  // a scope; zero would read as unscoped
     pkt.path_len = hops;   // one byte per hash at the default path hash size
     return pkt;
   }
@@ -96,6 +97,15 @@ TEST_F(ForwardPolicyTest, TheUnscopedLimitStopsOnlyUnscopedFloods) {
   mesh::Packet scoped = packet(ROUTE_TYPE_TRANSPORT_FLOOD, 2);
   EXPECT_FALSE(node->forwards(&unscoped));
   EXPECT_TRUE(node->forwards(&scoped));
+}
+
+// Upstream #3682: a transport flood whose scope code is zero is handled like an
+// unscoped flood, so the unscoped limit applies to it too.
+TEST_F(ForwardPolicyTest, AScopeOfZeroCountsAsUnscoped) {
+  node->prefs().flood_max_unscoped = 2;
+  mesh::Packet zero_scope = packet(ROUTE_TYPE_TRANSPORT_FLOOD, 2);
+  zero_scope.transport_codes[0] = 0;
+  EXPECT_FALSE(node->forwards(&zero_scope));
 }
 
 TEST_F(ForwardPolicyTest, TheAdvertLimitStopsOnlyAdverts) {

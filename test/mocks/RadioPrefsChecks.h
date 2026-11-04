@@ -287,12 +287,13 @@ void expectRadioCliEdgeCases(P& p) {
   EXPECT_EQ(1, p.rx_boosted_gain);
   EXPECT_TRUE(radio_driver.rx_boosted);
 
-  // tx: "get tx" also matches with trailing text; values wrap into int8_t
+  // tx: "get tx" also matches with trailing text; values wrap into int8_t, and
+  // the value is read back signed (upstream #3615 made getTxPower() an int8_t)
   EXPECT_EQ("> 21", radioCli(p, "get tx foo"));
   EXPECT_EQ("OK", accepted("set tx -5"));
   EXPECT_EQ(-5, p.tx_power_dbm);
   EXPECT_EQ(-5, radio_driver.tx_power);
-  EXPECT_EQ("> 251", radioCli(p, "get tx"));           // odd: printed as unsigned
+  EXPECT_EQ("> -5", radioCli(p, "get tx"));
   EXPECT_EQ("OK", accepted("set tx 300"));
   EXPECT_EQ(44, p.tx_power_dbm);
 
