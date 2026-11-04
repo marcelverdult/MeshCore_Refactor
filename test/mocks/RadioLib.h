@@ -14,6 +14,7 @@
 
 #define RADIOLIB_ERR_NONE      0
 #define RADIOLIB_CHANNEL_FREE  (-2)
+#define RADIOLIB_ERR_LORA_HEADER_DAMAGED (-24)  // the value in RadioLib 7.8.1 TypeDef.h
 
 class PhysicalLayer {
 public:
@@ -35,7 +36,8 @@ public:
   int16_t startTransmit(uint8_t*, size_t) { return RADIOLIB_ERR_NONE; }
   int16_t finishTransmit() { return RADIOLIB_ERR_NONE; }
   size_t getPacketLength() { return packet_length; }
-  int16_t readData(uint8_t*, size_t) { return RADIOLIB_ERR_NONE; }
+  int16_t read_result = RADIOLIB_ERR_NONE;  // what readData() returns
+  int16_t readData(uint8_t*, size_t) { return read_result; }
   float getRSSI() { return rssi; }
   float getSNR() { return snr; }
   uint32_t getTimeOnAir(size_t) { return time_on_air; }

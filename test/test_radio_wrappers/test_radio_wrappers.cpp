@@ -140,6 +140,59 @@ TEST_F(RadioWrapperFixture, ScoreMatchesTheFormulaByHand) {
   EXPECT_FLOAT_EQ(w.packetScore(-14.5f, 64), 0.0375f);
 }
 
+// What recvRaw() does with a received packet: a payload CRC the header says was
+// never sent (upstream c79500e6) and a failed readData() (upstream f688d99b)
+// both drop the packet and count one receive error; a good packet counts as received.
+class RxStubBoard : public StubBoard {
+public:
+  uint8_t getStartupReason() const override { return BD_STARTUP_RX_PACKET; }  // begin() flags a packet as waiting
+};
+
+class CrcWrapper : public RadioLibWrapper {
+public:
+  bool crc = true;
+  CrcWrapper(PhysicalLayer& r, mesh::MainBoard& b) : RadioLibWrapper(r, b) { }
+  void setParams(float, float, uint8_t, uint8_t) override { }
+  bool isReceivingPacket() override { return false; }
+  float getCurrentRSSI() override { return -100.0f; }
+  bool lastRxHadCRC() override { return crc; }
+};
+
+struct RecvFixture : public ::testing::Test {
+  PhysicalLayer radio;
+  RxStubBoard board;
+  CrcWrapper w{radio, board};
+  uint8_t buf[256];
+
+  void SetUp() override { radio.packet_length = 10; w.begin(); }
+};
+
+TEST_F(RecvFixture, PacketWithCrcIsDelivered) {
+  EXPECT_EQ(w.recvRaw(buf, sizeof(buf)), 10);
+  EXPECT_EQ(w.getPacketsRecv(), 1u);
+  EXPECT_EQ(w.getPacketsRecvErrors(), 0u);
+}
+
+TEST_F(RecvFixture, PacketWithoutCrcInTheHeaderIsDropped) {
+  w.crc = false;
+  EXPECT_EQ(w.recvRaw(buf, sizeof(buf)), 0);
+  EXPECT_EQ(w.getPacketsRecv(), 0u);
+  EXPECT_EQ(w.getPacketsRecvErrors(), 1u);
+}
+
+TEST_F(RecvFixture, FailedReadIsCountedAsAnError) {
+  radio.read_result = RADIOLIB_ERR_LORA_HEADER_DAMAGED;
+  EXPECT_EQ(w.recvRaw(buf, sizeof(buf)), 0);
+  EXPECT_EQ(w.getPacketsRecvErrors(), 1u);
+}
+
+TEST_F(RecvFixture, ResetStatsClearsTheErrorCounter) {
+  w.crc = false;
+  w.recvRaw(buf, sizeof(buf));
+  w.resetStats();
+  EXPECT_EQ(w.getPacketsRecvErrors(), 0u);
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {

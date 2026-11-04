@@ -107,6 +107,7 @@ TYPED_TEST(ChipWrapperTest, SetParamsCallsTheChipInOrder) {
   Log expect = {"setFrequency(869.618)", "setSpreadingFactor(8)", "setBandwidth(62.5)",
                 "setCodingRate(8)", "setPreambleLength(32)"};
   if (TypeParam::family == LR2021_) {
+    expect.insert(expect.begin(), "standby()");   // LR2021 takes modem commands in STANDBY only
     expect.push_back("setSideDetector(0)");
     expect.push_back("standby()");
   }
@@ -116,10 +117,29 @@ TYPED_TEST(ChipWrapperTest, SetParamsCallsTheChipInOrder) {
   expect = {"setFrequency(869.525)", "setSpreadingFactor(11)", "setBandwidth(250)",
             "setCodingRate(5)", "setPreambleLength(16)"};
   if (TypeParam::family == LR2021_) {
+    expect.insert(expect.begin(), "standby()");
     expect.push_back("setSideDetector(0)");
     expect.push_back("standby()");
   }
   EXPECT_EQ(this->take(), expect);
+}
+
+// The header of the last packet says whether a payload CRC was sent. Every
+// wrapper asks its chip, except SX1276, which keeps the default (true) as upstream does.
+TYPED_TEST(ChipWrapperTest, LastRxHadCRC) {
+  struct Probe : TypeParam::Wrapper {
+    using TypeParam::Wrapper::Wrapper;
+    bool crc() { return this->lastRxHadCRC(); }
+  };
+  Probe p(this->radio, this->board);
+  this->radio.rx_has_crc = true;
+  EXPECT_TRUE(p.crc());
+  this->radio.rx_has_crc = false;
+  if (TypeParam::family == SX127X) {
+    EXPECT_TRUE(p.crc());
+  } else {
+    EXPECT_FALSE(p.crc());
+  }
 }
 
 // The receive detection: through isReceivingPacket() the wrapper asks the chip

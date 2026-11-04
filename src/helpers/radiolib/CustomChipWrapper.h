@@ -35,6 +35,13 @@ public:
   bool isReceivingPacket() override {
     return chip()->isReceiving();
   }
+  // The LoRa header of the last packet says whether a payload CRC was sent
+  // (upstream c79500e6). SX1276 overrides this back to true, as upstream leaves it.
+  bool lastRxHadCRC() override {
+    bool crc = true;
+    chip()->getLoRaRxHeaderInfo(NULL, &crc);
+    return crc;
+  }
   float getLastRSSI() const override { return chip()->getRSSI(); }
   float getLastSNR() const override { return chip()->getSNR(); }
 };
