@@ -49,8 +49,8 @@ public:
   uint8_t getRxGain() const { return _f->rx_boosted_gain; }
   void setRxGain(uint8_t g) { _f->rx_boosted_gain = g; markDirty(); }
 
-  uint8_t getTxPower() const { return _f->tx_power_dbm; }
-  void setTxPower(uint8_t dbm) { _f->tx_power_dbm = dbm; markDirty(); }
+  int8_t getTxPower() const { return _f->tx_power_dbm; }
+  void setTxPower(int8_t dbm) { _f->tx_power_dbm = dbm; markDirty(); }
 
   float getRxDelay() const { return _f->rx_delay_base; }
   void setRxDelay(float d) { _f->rx_delay_base = d; markDirty(); }

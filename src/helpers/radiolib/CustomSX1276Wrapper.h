@@ -16,6 +16,10 @@ public:
     setModemParams(freq, bw, sf, cr);
   }
 
+  // SX127x does have getLoRaRxHeaderInfo(), but upstream c79500e6 leaves the SX1276
+  // wrapper at the default (true), so it keeps accepting every packet
+  bool lastRxHadCRC() override { return true; }
+
   float getCurrentRSSI() override {
     return chip()->getRSSI(false);
   }
