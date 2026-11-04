@@ -1,0 +1,327 @@
+name: Nightly Firmwares
+
+# Builds companion, repeater and room-server firmwares of the default branch every
+# night and publishes one prerelease per role (tag nightly-<role>-YYYYMMDD).
+# Each role is split into shards that build in parallel.
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      roles:
+        description: 'Comma-separated roles to build (companion,repeater,room-server)'
+        default: 'companion,repeater,room-server'
+        type: string
+      branch:
+        description: 'Branch to build (empty = default branch)'
+        default: ''
+        type: string
+      dry_run:
+        description: 'Build only, skip release creation and prune'
+        default: false
+        type: boolean
+      force:
+        description: 'Build even if the branch has not changed since the last nightly'
+        default: false
+        type: boolean
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  RETENTION: 7
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.cfg.outputs.branch }}
+      sha: ${{ steps.cfg.outputs.sha }}
+      sha7: ${{ steps.cfg.outputs.sha7 }}
+      roles: ${{ steps.cfg.outputs.roles }}
+      matrix: ${{ steps.cfg.outputs.matrix }}
+      run_date: ${{ steps.cfg.outputs.run_date }}
+      run_ts: ${{ steps.cfg.outputs.run_ts }}
+      skip: ${{ steps.cfg.outputs.skip }}
+    steps:
+      - name: Resolve build input
+        id: cfg
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          INPUT_ROLES: ${{ inputs.roles }}
+          INPUT_BRANCH: ${{ inputs.branch }}
+          FORCE: ${{ inputs.force }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          BRANCH="${INPUT_BRANCH:-}"
+          [ -z "$BRANCH" ] && BRANCH="${{ github.event.repository.default_branch }}"
+          ROLES_INPUT="${INPUT_ROLES:-companion,repeater,room-server}"
+          ROLES_JSON=$(echo "$ROLES_INPUT" | jq -Rc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))')
+          # Public repo: max 20 concurrent jobs.
+          MATRIX=$(echo "$ROLES_JSON" | jq -c '{include: [.[] as $r
+            | ({"companion":10,"repeater":5,"room-server":5}[$r] // 4) as $n
+            | range(0; $n) | {role: $r, shard: ., shards: $n}]}')
+          SHA=$(gh api "repos/${REPO}/commits/${BRANCH}" --jq '.sha')
+          SHA7="${SHA:0:7}"
+          # Scheduled runs skip when the newest nightly already holds this commit.
+          SKIP=false
+          if [ "$EVENT" = "schedule" ] && [ "${FORCE:-false}" != "true" ]; then
+            LAST=$(gh release list -R "$REPO" -L 50 --json tagName,name,createdAt \
+              --jq '[.[] | select(.tagName | startswith("nightly-"))] | sort_by(.createdAt) | last | .name // ""')
+            case "$LAST" in
+              *"(${SHA7})"*) SKIP=true ;;
+            esac
+          fi
+          {
+            echo "branch=$BRANCH"
+            echo "sha=$SHA"
+            echo "sha7=$SHA7"
+            echo "roles=$ROLES_JSON"
+            echo "matrix=$MATRIX"
+            echo "run_date=$(date -u +%Y%m%d)"
+            echo "run_ts=$(date -u +"%Y-%m-%d %H:%M")"
+            echo "skip=$SKIP"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: branch=$BRANCH sha=$SHA roles=$ROLES_JSON skip=$SKIP"
+
+  build:
+    name: build (${{ matrix.role }} ${{ matrix.shard }}/${{ matrix.shards }})
+    needs: prepare
+    if: ${{ needs.prepare.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+
+      # Toolchains and platforms are identical across all roles, so they share one cache key.
+      - name: Cache PlatformIO packages and platforms
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            ~/.platformio/.cache
+          key: pio-pkg-${{ hashFiles('platformio.ini', 'variants/**/platformio.ini', 'library.json') }}
+          restore-keys: |
+            pio-pkg-
+
+      - name: Setup build environment
+        uses: ./.github/actions/setup-build-environment
+
+      - name: Build firmwares
+        env:
+          FIRMWARE_VERSION: nightly-${{ needs.prepare.outputs.run_date }}-${{ needs.prepare.outputs.sha7 }}
+          ROLE: ${{ matrix.role }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ matrix.shards }}
+        run: |
+          set -euo pipefail
+          case "$ROLE" in
+            companion)
+              mapfile -t ALL < <(bash build.sh list | grep -E "_companion_radio_(usb|ble)$" | sort)
+              ;;
+            repeater)
+              mapfile -t ALL < <(bash build.sh list | grep -E "_repeater$" | sort)
+              ;;
+            room-server)
+              mapfile -t ALL < <(bash build.sh list | grep -E "_room_server$" | sort)
+              ;;
+            *)
+              echo "Unknown role: $ROLE" >&2; exit 1 ;;
+          esac
+          if [ ${#ALL[@]} -eq 0 ]; then
+            echo "No envs matched for role=$ROLE" >&2; exit 1
+          fi
+          # Round-robin split so similar boards (alphabetical families) spread across shards.
+          ENVS=()
+          for i in "${!ALL[@]}"; do
+            [ $((i % SHARDS)) -eq "$SHARD" ] && ENVS+=("${ALL[$i]}")
+          done
+          TOTAL=${#ENVS[@]}
+          # build.sh wipes ./out at every invocation, so collect outputs in a sibling dir.
+          # One broken env must not sink the whole role: record it and keep going.
+          SHARD_DIR="$(pwd)/../shard-out"
+          rm -rf "$SHARD_DIR"
+          mkdir -p "$SHARD_DIR/firmware"
+          printf '%s\n' "${ENVS[@]}" > "$SHARD_DIR/envs.txt"
+          : > "$SHARD_DIR/failed.txt"
+          FAILED=0
+          echo "Shard $SHARD/$SHARDS: building $TOTAL of ${#ALL[@]} envs for role=$ROLE"
+          for i in "${!ENVS[@]}"; do
+            IDX=$((i+1))
+            ENV="${ENVS[$i]}"
+            echo "::group::[$IDX/$TOTAL] $ENV"
+            if ! bash build.sh build-firmware "$ENV"; then
+              FAILED=$((FAILED+1))
+              echo "$ENV" >> "$SHARD_DIR/failed.txt"
+              echo "::endgroup::"
+              echo "::warning title=Build failed::$ENV failed to build (skipped)"
+              continue
+            fi
+            if [ -d out ]; then
+              shopt -s nullglob dotglob
+              files=(out/*)
+              shopt -u dotglob
+              if [ ${#files[@]} -gt 0 ]; then
+                cp -- "${files[@]}" "$SHARD_DIR/firmware/"
+              fi
+            fi
+            echo "::endgroup::"
+          done
+          mv "$SHARD_DIR" shard-out
+          echo "Built $((TOTAL - FAILED))/$TOTAL firmwares; $(ls shard-out/firmware | wc -l) files"
+
+      - name: Upload shard firmwares
+        uses: actions/upload-artifact@v4
+        with:
+          name: fw-${{ matrix.role }}-${{ matrix.shard }}
+          path: shard-out/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  # Collect all shards of a role into one release.
+  release:
+    needs: [prepare, build]
+    if: ${{ always() && needs.prepare.result == 'success' && needs.prepare.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        role: ${{ fromJson(needs.prepare.outputs.roles) }}
+    steps:
+      - name: Download shard firmwares
+        uses: actions/download-artifact@v4
+        with:
+          path: shards
+          pattern: fw-${{ matrix.role }}-*
+
+      - name: Merge shards
+        env:
+          ROLE: ${{ matrix.role }}
+          MATRIX: ${{ needs.prepare.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          EXPECTED=$(echo "$MATRIX" | jq --arg r "$ROLE" '[.include[] | select(.role == $r)] | length')
+          mkdir -p out shards
+          : > failed.txt
+          : > missing-shards.txt
+          TOTAL=0
+          for k in $(seq 0 $((EXPECTED - 1))); do
+            d="shards/fw-${ROLE}-${k}"
+            if [ ! -f "$d/envs.txt" ]; then
+              echo "$k" >> missing-shards.txt
+              continue
+            fi
+            TOTAL=$((TOTAL + $(grep -c . "$d/envs.txt" || true)))
+            cat "$d/failed.txt" >> failed.txt
+            shopt -s nullglob
+            files=("$d"/firmware/*)
+            [ ${#files[@]} -gt 0 ] && mv -- "${files[@]}" out/
+          done
+          sort -o failed.txt failed.txt
+          NFAILED=$(grep -c . failed.txt || true)
+          NMISSING=$(grep -c . missing-shards.txt || true)
+          echo "role=$ROLE: $((TOTAL - NFAILED))/$TOTAL envs built, $NMISSING of $EXPECTED shards missing, $(ls out | wc -l) files"
+          {
+            echo "### ${ROLE}: $((TOTAL - NFAILED))/$TOTAL envs built"
+            [ "$NFAILED" -gt 0 ] && sed 's/^/- failed: `/; s/$/`/' failed.txt
+            [ "$NMISSING" -gt 0 ] && echo "- **$NMISSING of $EXPECTED shards did not finish** (their boards are missing)"
+            true
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$(ls out | wc -l)" -eq 0 ]; then
+            echo "No firmware produced for role=$ROLE" >&2; exit 1
+          fi
+
+      - name: Build release body
+        if: ${{ inputs.dry_run != true }}
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          TS: ${{ needs.prepare.outputs.run_ts }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Source: ${REPO}@${SHA} (${BRANCH})"
+            echo "Built: ${TS} UTC"
+            echo
+            if [ -s failed.txt ]; then
+              echo "Failed to build (not attached):"
+              sed 's/^/- /' failed.txt
+              echo
+            fi
+            if [ -s missing-shards.txt ]; then
+              echo "Warning: $(grep -c . missing-shards.txt) build shard(s) did not finish; some boards are missing."
+              echo
+            fi
+            echo "Firmware artifacts attached below."
+          } > release-body.md
+          cat release-body.md
+
+      - name: Create release
+        if: ${{ inputs.dry_run != true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ROLE: ${{ matrix.role }}
+          DATE: ${{ needs.prepare.outputs.run_date }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+          SHA7: ${{ needs.prepare.outputs.sha7 }}
+        run: |
+          set -euo pipefail
+          TAG="nightly-${ROLE}-${DATE}"
+          NAME="Nightly ${ROLE} ${DATE} (${SHA7})"
+
+          if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
+            echo "Existing release for $TAG found; deleting before recreate."
+            gh release delete "$TAG" -R "$REPO" --cleanup-tag --yes
+          fi
+
+          shopt -s nullglob
+          ARTIFACTS=(out/*)
+          gh release create "$TAG" "${ARTIFACTS[@]}" \
+            -R "$REPO" \
+            --title "$NAME" \
+            --notes-file release-body.md \
+            --target "$SHA" \
+            --prerelease \
+            --latest=false
+
+  prune:
+    needs: [prepare, release]
+    if: ${{ always() && inputs.dry_run != true && needs.prepare.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune old nightly releases per role
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for role in companion repeater room-server; do
+            echo "Pruning role=$role keep=$RETENTION"
+            gh release list -R "$GITHUB_REPOSITORY" -L 200 --json tagName,createdAt \
+              | jq -r --arg p "nightly-${role}-" --argjson keep "$RETENTION" '
+                  [.[] | select(.tagName | startswith($p))]
+                  | sort_by(.createdAt) | reverse
+                  | .[$keep:]
+                  | .[].tagName
+                ' \
+              | while read -r tag; do
+                  [ -z "$tag" ] && continue
+                  echo "Deleting $tag"
+                  gh release delete "$tag" -R "$GITHUB_REPOSITORY" --cleanup-tag --yes || \
+                    echo "Failed to delete $tag (continuing)"
+                done
+          done
