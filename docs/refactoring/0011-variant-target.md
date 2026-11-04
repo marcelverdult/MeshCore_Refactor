@@ -6,7 +6,8 @@ handler) implemented, each its own pull request, B stacked on A. Cut C (one defa
 A and B. Cut D (the radio, wrapper and RTC globals) is implemented as two pull requests,
 D1 (31 nRF52 variants) and D2 (22 ESP32 variants) on top of it, see "Cut D". Cut E is
 designed; E1 (display and user button of 48 variants) is implemented, E2 (GPS and
-sensors) is recommended not to be built now, see "Cut E". Behaviour change: none.
+sensors) is not built while upstream reworks the same lines (meshcore-dev/MeshCore#3753),
+see "Cut E". Behaviour change: none.
 
 ## Context
 
@@ -1765,6 +1766,18 @@ Alternatives considered:
   display; not chosen.
 
 Decision (Marcel, 22.10.2026): build E1 anyway; E2 stays as recommended above.
+
+Update 04.11.2026: #1799 was closed on 01.11.2026 without a merge. Its last
+comment (fdlamotte) says the GPS code should be refactored again from the start,
+with a `GpsDriver` class instead of a hierarchy of location providers. That
+refactor is open as meshcore-dev/MeshCore#3753 ("WIP: GPS refactor", fdlamotte,
+opened 02.11.2026): 89 files, 65 of them under `variants/`, new classes
+`GpsDriver`, `NmeaGpsDriver`, `RakI2cGpsDriver` and `AirohaGpsDriver`, and a new
+`CommonGpsPrefs` next to this fork's shared GPS settings from step 1. It rewrites
+the E2 lines again, in a different shape. The condition above ("#1799 merged or
+closed") is therefore met only in form, and E2 stays not built. What would change
+this now: #3753 merged (then E2 on top of the result) or closed without a
+successor.
 
 ### E1: what changes
 

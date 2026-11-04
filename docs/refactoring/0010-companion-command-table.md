@@ -1,7 +1,7 @@
 # 0010: A command table for the companion protocol
 
 Status: steps 10a (host harness and characterization), 10b (the table) and 10c
-(a bounded frame reader) ready for review; 10d is a proposal.
+(a bounded frame reader) ready for review; 10d is a proposal, see "Step 10d".
 Behaviour change: none.
 
 ## Context
@@ -104,7 +104,8 @@ Codes 0, 44 to 49, 53 and 67 to 255 are not commands and are answered
 
 Observations that the inventory makes visible, recorded and not changed:
 
-- "Too short" and "not a command" are the same answer for 54 codes. Only
+- "Too short" and "not a command" are the same answer for 43 codes (the
+  rows with "unsupported" under "Short" above). Only
   `SEND_CHANNEL_DATA` answers `ILLEGAL_ARG`. The minimums are therefore not
   observable as such by a client, which is why the table below may not change
   the answer.
@@ -225,7 +226,7 @@ needs a reviewer to read each one.
   one list, but is harder to read and to step through in a debugger than a plain
   array, for the saving of one declaration per command.
 - **Answer `ILLEGAL_ARG` from the central check.** Rejected for this series: it
-  changes the answer of 54 commands, which the length fixes already rejected for
+  changes the answer of 43 commands, which the length fixes already rejected for
   the same reason. Listed as 10d.
 - **The frame reader first (10c before 10b).** It fixes the class of bug more
   directly, but it rewrites every branch inside a 1,000 line function that cannot
@@ -955,3 +956,119 @@ Each needs its own fix and proposal; 10c leaves the code as it is.
    of 10c did. All 17 host environments: 616 of 616 on macOS and on Linux.
 4. **`SEND_TRACE_PATH`'s upper bound is dead code.** `len - 10 >= MAX_PACKET_PAYLOAD - 5`
    needs 189 bytes; a frame has at most 176.
+
+## Step 10d: answer a too short frame with `ILLEGAL_ARG` (proposal)
+
+Status: proposal, not built. Behaviour change: yes, visible to apps.
+
+### What changes
+
+One line in `MyMesh::handleCmdFrame()`: a known command whose frame is shorter
+than its row's minimum gets `ERR_CODE_ILLEGAL_ARG` (6) instead of
+`ERR_CODE_UNSUPPORTED_CMD` (1).
+
+```c
+for (const CmdHandler& c : CMD_TABLE) {
+  if (c.code != cmd_frame[0]) continue;
+  if (len < c.min_len) { writeErrFrame(ERR_CODE_ILLEGAL_ARG); return; }
+  if ((this->*c.handle)(len)) return;
+  break;
+}
+writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
+```
+
+Unchanged:
+
+- An unknown code still gets `UNSUPPORTED_CMD`. Apps that detect an older
+  firmware by sending a command it does not know see the same answer.
+- A handler that returns `false` still gets `UNSUPPORTED_CMD`. These are the sub
+  commands a firmware does not know, for example `SET_CHANNEL` with 66 bytes or
+  more, `SEND_TELEMETRY_REQ` with 5 to 35 bytes, `SET_FLOOD_SCOPE_KEY` with a
+  byte 1 other than 0 and 1, or `REBOOT` without `reboot`.
+- The 16 rows with a minimum of 1 cannot be too short.
+
+Counted on f1d9c42e: 59 rows in `CMD_TABLE`, 43 with a minimum above 1. These
+are the 43 codes the inventory lists as "unsupported" under "Short".
+`SEND_CHANNEL_DATA` already answers `ILLEGAL_ARG` from its own length check.
+
+### Why
+
+- `docs/companion_protocol.md` ("Error Codes") already describes code 6 as
+  "Invalid argument (bad length, out-of-range value, reserved field, etc.)" and
+  code 1 as "Unknown or unsupported command byte / sub-command". The firmware
+  answers a bad length with code 1. 10d makes the firmware match its own
+  documentation.
+- An app developer who sends a frame one byte short today is told the firmware
+  does not know the command. With 10d the answer names the cause.
+- Since 10b the minimum is data in the table, so the answer can come from one
+  place instead of 43 branches.
+
+### Effect on clients
+
+Read on 04.11.2026, only the clients below; the MeshCore apps for Android and
+iOS and the web client were not checked.
+
+| Client | Reads the code | Treats 1 and 6 differently | Feature detection through code 1 |
+|---|---|---|---|
+| meshcore.js 1.15.0 (`src/connection/connection.js`) | yes, passed on as `errCode` | no, no caller reads it | no |
+| meshcore_py, GitHub HEAD (`src/meshcore/reader.py`) | yes, passed on in the event payload | no | no |
+| meshcore-cli, GitHub HEAD (`src/meshcore_cli/meshcore_cli.py`) | yes | yes | yes, `set_flood_scope`: code 1 sets `has_scope = False` |
+| KiekR (`core-lib/src/companion/session/`) | yes | only for the wording (6 out of range, 1 unsupported) | autoadd config and custom vars treat any error as refused, whatever the code |
+
+The one detection through code 1 (meshcore-cli `set_flood_scope`) is not
+affected: meshcore_py's `set_flood_scope()` (`commands/messaging.py`) always
+sends 2 bytes (`[code, 0x01]`) or 18 (`[code, 0x00] + key`), and the minimum of
+`SET_FLOOD_SCOPE_KEY` is 2. An older firmware without the command still answers
+code 1, because the code is unknown there.
+
+A client is affected only if it sends a known command too short and relies on
+code 1 for that. None of the clients above does. KiekR has a host test that
+expects `ERR_UNSUPPORTED_CMD` for a CLI frame under 3 bytes; that test would
+change with 10d, the app's behaviour would not.
+
+### Risks
+
+- Clients not checked here (the MeshCore apps, third party tools) may show a
+  different message or take a different path on code 6. A client that follows
+  `docs/companion_protocol.md` already expects code 6 for a bad length.
+- A firmware and an app of different ages: an app that sends a short form of a
+  command whose minimum a later firmware raised gets code 6 instead of 1. The
+  steps of this series keep every minimum (10b and 10c, the sweep is unchanged).
+  Whether an earlier firmware release accepted a shorter form of a command was
+  not checked.
+
+### Verification plan
+
+- Host: in the frame sweep of 10a (`frame_sweep.golden`, one line per code,
+  fill and length range, for example `0d 00 1-32: 0101`) exactly the length
+  ranges below the minimum of the 43 codes change, from `0101` to `0106`; every
+  other line and every packet and file digest stays the same. The golden file is regenerated in the
+  same commit and its diff is read line by line.
+- A test per row: a frame of `min_len - 1` bytes answers code 6, a frame of
+  `min_len` bytes answers what it answers today.
+- Mutation: with the old line back, the new tests fail.
+- Builds: the companion matrix of 10b (nRF52, ESP32, RP2040, STM32), flash
+  compared with integration.
+- Hardware: one companion board, short frames sent over USB serial, answer read
+  back.
+
+### Upstream
+
+Checked on 04.11.2026: no open or merged pull request on meshcore-dev/MeshCore
+proposes central length answers for companion frames (`gh search prs` for
+`ILLEGAL_ARG`, `handleCmdFrame` length and `ERR_CODE_UNSUPPORTED_CMD`; the only
+hit is #3643, merged, which adds a minimum to `SEND_CHANNEL_TXT_MSG`). Upstream
+has no command table yet, so 10d on upstream would mean 43 branches answering
+code 6 each, or 10b first.
+
+### Alternatives considered
+
+- **A new error code for "too short".** Clearer, but code 6 already says "bad
+  length" in the documentation, and every client would need to learn a new
+  value.
+- **Leave it as it is.** No risk for unchecked clients; the firmware keeps
+  contradicting its documentation.
+- **Code 6 also when a handler returns `false`.** Rejected: those cases are sub
+  commands the firmware does not know, which is what code 1 is documented for.
+
+Decision: open. Building 10d needs Marcel's go, since it changes what apps see.
