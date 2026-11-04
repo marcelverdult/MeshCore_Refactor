@@ -132,7 +132,7 @@ jobs:
               mapfile -t ALL < <(bash build.sh list | grep -E "_companion_radio_(usb|ble)$" | sort)
               ;;
             repeater)
-              mapfile -t ALL < <(bash build.sh list | grep -E "_repeater$" | sort)
+              mapfile -t ALL < <(bash build.sh list | grep -E "_repeater$" | grep -v "^native_" | sort)
               ;;
             room-server)
               mapfile -t ALL < <(bash build.sh list | grep -E "_room_server$" | sort)
