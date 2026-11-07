@@ -7,6 +7,7 @@ class CustomLLCC68Wrapper : public CustomSX126xWrapper<CustomLLCC68> {
 public:
   CustomLLCC68Wrapper(CustomLLCC68& radio, mesh::MainBoard& board) : CustomSX126xWrapper(radio, board) { }
 
+  bool supportsRxBoostedGain() const override { return true; }
   bool setRxBoostedGainMode(bool en) override {
     return chip()->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
   }

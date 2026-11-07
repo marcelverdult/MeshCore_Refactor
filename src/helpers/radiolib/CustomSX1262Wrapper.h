@@ -15,6 +15,7 @@ public:
     chip()->sleep(false);
   }
 
+  bool supportsRxBoostedGain() const override { return true; }
   bool setRxBoostedGainMode(bool en) override {
     return chip()->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
   }

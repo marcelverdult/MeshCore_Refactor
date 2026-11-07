@@ -32,6 +32,7 @@ public:
 
   uint8_t getSpreadingFactor() const override { return this->chip()->getSpreadingFactor(); }
 
+  bool supportsRxBoostedGain() const override { return true; }
   bool setRxBoostedGainMode(bool en) override {
     return this->chip()->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
   }
