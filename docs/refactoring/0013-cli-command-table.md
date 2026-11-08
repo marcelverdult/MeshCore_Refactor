@@ -1,8 +1,9 @@
 # 0013: A command table for the text CLI
 
-Status: 13a (host harness and characterization) built, 13b (the table) not started.
-Behaviour change: none. 13a adds tests and build environments only; no file under
-`src/` is touched.
+Status: 13a (host harness and characterization) and 13b (the table) built.
+Behaviour change: none. 13a adds tests and build environments only; 13b replaces
+the `else if` chains in `src/helpers/CommonCLI.cpp` with const tables, adds three
+tests and leaves the 13a tests unchanged.
 
 ## Context
 
@@ -184,9 +185,11 @@ single precision noise (`869.6179809` for 869.618).
 | `test_cli_sensor.cpp` | 39 | `sensor get\|set\|list` with paging, `gps ...` (GPS build) or "Unknown command" (others) |
 | `test_cli_flood_type.cpp` | 19 | `set` and `get flood.max.type`: names and numbers, sorted list, `off`, range and type errors, damaged stored list, full list |
 | `test_common_cli.cpp` | 1 | `main()` and a smoke test |
+| `test_cli_table.cpp` | 3 | added in 13b: `log start` on the serial console, `clock` from a remote sender, `get loop.detect` needs the whole key |
 
 Counts are `TEST_F` bodies; the number of cases a run reports differs per environment
-because of the variant specific tests:
+because of the variant specific tests (the numbers are the 13a ones; 13b adds the
+three tests of `test_cli_table.cpp` to each, so a run reports 179, 199, 179, 186 and 187):
 
 | Environment | Cases |
 |---|---|
@@ -301,12 +304,154 @@ Things the harness cannot or does not cover; they are real risks for 13b:
 - **Hardware**: serial console behaviour, over the air delivery and persistence are not
   touched by 13a.
 
-## Next steps
+## 13b: the tables
 
-13b replaces the chain with a table, one row per command: name, match rule (exact,
-word, prefix), serial only flag, minimum arguments, handler. The match rules in the
-inventory above are the part to preserve first. The five environments run the same
-tests before and after.
+`CommonCLI::handleCommand()`, `handleSetCmd()`, `handleGetCmd()` and
+`handleRegionCmd()` keep their signatures. Their `else if` chains are now four const
+tables and a short search loop. `grep -cE "memcmp|strcmp" src/helpers/CommonCLI.cpp`
+counts 124 before and 19 after; what remains are the search loop, the `loop.detect`
+and `gps advert` value checks, the `region def` pre-parse and the region sub command
+match. The file got longer (1067 to 1444 lines) because every handler is now its own
+function with its own signature.
+
+### Shape
+
+```cpp
+struct CliCmd { const char* name; uint8_t len; uint8_t match; uint8_t flags; CliFn fn; };
+// match: CLI_PREFIX, CLI_WORD (end of line or a space after the name), CLI_EXACT (end of line)
+// flags: CLI_SERIAL (only when sender_timestamp == 0)
+CLI_CMD("advert.zerohop", CLI_WORD, CLI_ANY, CommonCLIImpl::advertZerohop),
+```
+
+- `kTopCmds` (42 rows in a GPS build), `kSetCmds`, `kGetCmds` are searched top to
+  bottom, first match wins. The order is the order of the old chain and is part of the
+  behaviour; a comment above the tables says so.
+- `CLI_CMD` computes `len` from the string literal, so a name and its length cannot
+  drift apart. The names of `time `, `set` keys and the other commands that need an
+  argument include the trailing space, as the old `memcmp()` literals did.
+- A serial-only row that does not apply to a remote sender is skipped and the search
+  continues, which is what `sender_timestamp == 0 && memcmp(...)` did in the chain.
+- A handler gets `CommonCLI&` and a `CliCall` (sender timestamp, the text searched,
+  the text after the matched name, the reply buffer). The handlers are static members of
+  `struct CommonCLIImpl`, which is a friend of `CommonCLI` (one line in the header), so
+  they reach the private members without any new public API.
+- `set` and `get` are still reached through the top level rows `set ` and `get `,
+  which call `handleSetCmd` and `handleGetCmd`; those search their own table on the text
+  after the four characters and write the old fallback (`unknown config: ...`, `??: ...`).
+- `region` has `kRegionCmds`: name, minimum and maximum number of words, handler.
+  Rows with the same name and different word counts (`home`, `default`) replace the
+  old `n >= 3` and `n == 2` branches. `region` alone and `region def ...` are handled
+  before the table, because `def` has to run before `parseTextParts()` changes the buffer.
+- The `#if` guards (`ENV_INCLUDE_GPS`, `WITH_BRIDGE`, `WITH_RS232_BRIDGE`,
+  `WITH_ESPNOW_BRIDGE`, `USE_LR2021`, `NRF52_*`, `ESP32`) sit around the handlers and
+  around the rows, in the same places as before. The five `native_common_cli*`
+  environments build all of those variants.
+- The tables are `const` and hold only pointers and small integers, so they are
+  placed in flash. There is no heap, no RTTI, no `std::function` and no virtual call.
+
+### Alternatives and why not
+
+| Alternative | Why not |
+|---|---|
+| Pointers to `CommonCLI` member functions | Needs about 120 new private declarations in `CommonCLI.h`, which every role includes. Pointer to member is also two words on ARM. |
+| A friend struct of static functions (chosen) | One line in the header; handlers are plain function pointers. |
+| Non capturing lambdas in the table | Lambdas defined at namespace scope have no friend access, so they would need public accessors. Each lambda is also an anonymous type, which makes the rows harder to read in a diff. |
+| An X macro that generates the table and the dispatcher | Smaller source, but the rows are no longer greppable by name, and the `#if` guards become hard to read inside macro lists. |
+| One table for all four levels | Matching differs (`set` keys end in a space, `get` keys do not, `region` matches the second word and a word count). A single row type for all would need a mode field per row and hide that. |
+| A hash or sorted table with binary search | The old behaviour is order dependent (prefixes). A sorted table would change which of two overlapping names wins. About 130 rows are cheap to scan; the commands are typed by people. |
+| Matching with a `strncmp` instead of `memcmp` | `memcmp` on a fixed length is what the chain did; keeping it keeps the behaviour for lines that end early. |
+
+### Behaviour kept on purpose
+
+Everything in "Quirks pinned as is" is unchanged: prefix matching without a word end
+check, the order dependent pairs, `set flood.max 300` storing 44, the clock error texts
+with and without brackets, and so on. No 13a test file was edited.
+
+### Not fixed (still open)
+
+13b does not change these, and does not make them worse. The handlers contain the
+same code as before.
+
+- `tempradio` and `set extra.sf` copy the command into the 132 byte `tmp` with `strcpy()`
+  and no length check.
+- `gps` with no sub command calls `strcmp()` on `getSettingByKey("gps")` without a
+  check for NULL.
+- `get <key>` with an argument of 157 or more characters can run past the 160 byte reply
+  in the `??: %s` fallback.
+
+A row now exists for each of these, so a later step can add the length or NULL check in
+one place per handler. That is a behaviour change (a refused or shortened command) and
+should be its own, announced step.
+
+### Verification of 13b
+
+- **Host tests.** The 23 native environments of `.github/workflows/run-unit-tests.yml`
+  all pass. With the 13a tests unchanged the run reported 1752 cases, 1 skipped, 1751
+  passed, 0 failed (the same total as the 13a note). After adding the three tests below
+  the run reports 1767 cases, 1 skipped, 1766 passed, 0 failed. The five
+  `native_common_cli*` environments report 179, 199, 179, 186 and 187 cases (176, 196,
+  176, 183, 184 plus three), all passed.
+- **Same tests against both implementations.** The three new tests also pass on the old
+  chain (`native_common_cli` and `native_common_cli_nrf52` on the code of `integration`
+  `592b7472`: 378 cases passed).
+- **Mutation tests on the table.** 67 single edits of `CommonCLI.cpp`, each run against
+  the matching `native_common_cli*` environment, then the file restored (checked with
+  `diff`).
+
+  | Group | Mutations | Result |
+  |---|---|---|
+  | Row removed (top, set, get, bridge, `extra.sf`, `gps`, region) | 16 | all caught |
+  | Order swapped (`advert.zerohop`, `clock sync`, `log start`, `powersaving on`, `flood.max` in set and get, `advert.interval`, two `gps` pairs) | 12 | 8 caught, 4 alive (1 real gap, 3 equivalent, see below) |
+  | Wrong handler (`ver`, `poweroff`, `stats-radio`, `set lat`, `get lat`, region `default`, `load`, `denyf`) | 8 | all caught |
+  | Name or match length wrong (`reboot`, `neighbors`, `owner.info`, `time` without its space, `loop.detect`) | 5 | 4 caught, 1 alive (real gap) |
+  | Match rule changed to PREFIX (`advert.zerohop`, `stats-packets`, `power`, `erase`, `gps diag`) | 5 | all caught |
+  | Serial flag dropped or added (`log`, `stats-radio`, `clock`, `set freq`, `get prv.key`) | 5 | 4 caught, 1 alive (real gap) |
+  | Search loop (serial check removed or inverted, WORD check removed, EXACT check removed, WORD accepts only end of line, compare one character less, argument offset, text of `Unknown command`) | 8 | all caught |
+  | Region table (minimum words of `allowf` and `get`, `home` query minimum, `strcmp` prefix, early return for `region`, fallback text) | 6 | 5 caught, 1 alive (equivalent) |
+  | Fallback texts of `set` and `get` | 2 | all caught |
+
+  Total 67 mutations, 60 caught on the first run, 7 alive.
+
+  The first run left seven mutations alive:
+
+  | Mutation | What it is | Handled by |
+  |---|---|---|
+  | `log` above `log start` | real gap: nobody ran `log start` on the serial console | new test `LogStartStopEraseOnTheSerialConsoleAreNotTheDump`; the mutation is now caught |
+  | serial flag added to `clock` | real gap: no test sent `clock` from a remote sender | new test `ClockAnswersOverTheAirToo`; now caught |
+  | `get loop.detect` matched on 4 characters | real gap: only the full key was tested | new test `GetKeyNeedsTheWholeNameNotJustItsFirstLetters`; now caught |
+  | `set flood.max ` above `flood.max.advert ` | equivalent: the key ends in a space, so `flood.max.advert 5` never starts with `flood.max ` | not a defect, no test possible |
+  | `set flood.max ` above `flood.max.unscoped ` | equivalent, same reason | same |
+  | `get advert.interval` above `get flood.advert.interval` | equivalent: neither name starts with the other | same |
+  | `region home` query row with minimum 1 word | equivalent: one word never reaches the table | same |
+
+  These mutations were chosen by the author, as in 13a, so they cover what was tried.
+- **Flash and RAM** (`pio run`, same toolchain state before and after, no other change):
+
+  | Environment | Platform, role | Flash before | Flash after | Flash delta | RAM before -> after |
+  |---|---|---|---|---|---|
+  | `Xiao_nrf52_repeater` | nRF52, repeater | 364752 | 367008 | +2256 | 34692 -> 34692 (+0) |
+  | `Xiao_nrf52_room_server` | nRF52, room server | 357184 | 359424 | +2240 | 38380 -> 38380 (+0) |
+  | `RAK_4631_repeater` | nRF52, repeater | 448684 | 451676 | +2992 | 37448 -> 37448 (+0) |
+  | `RAK_4631_sensor` | nRF52, sensor | 445148 | 448140 | +2992 | 35536 -> 35536 (+0) |
+  | `heltec_v4_r8_repeater` | ESP32-S3/C6, repeater | 1178913 | 1182065 | +3152 | 62488 -> 62488 (+0) |
+  | `heltec_v4_r8_room_server` | ESP32-S3/C6, room server | 1174109 | 1177261 | +3152 | 66176 -> 66176 (+0) |
+  | `heltec_v4_r8_sensor` | ESP32-S3/C6, sensor | 1185481 | 1188613 | +3132 | 60576 -> 60576 (+0) |
+  | `heltec_rc32_repeater_bridge_espnow` | ESP32-S3/C6, repeater+ESP-NOW bridge | 1181833 | 1185229 | +3396 | 64096 -> 64096 (+0) |
+  | `wio-e5-mini_repeater` | STM32WL, repeater | 205944 | 207168 | +1224 | 17260 -> 17260 (+0) |
+  | `wio-e5-mini_sensor` | STM32WL, sensor | 205456 | 206680 | +1224 | 15364 -> 15364 (+0) |
+  | `waveshare_rp2040_lora_repeater` | RP2040, repeater | 270528 | 271600 | +1072 | 24904 -> 24904 (+0) |
+  | `waveshare_rp2040_lora_room_server` | RP2040, room server | 266480 | 267552 | +1072 | 28608 -> 28608 (+0) |
+  | `waveshare_rp2040_lora_repeater_bridge_rs232` | RP2040, repeater+RS232 bridge | 275036 | 276244 | +1208 | 26796 -> 26796 (+0) |
+
+  RAM is unchanged in all 13 builds (the tables are const data in flash). Flash grows by
+  1.1 to 3.4 KB. The growth is the tables themselves (one name, one length and one
+  function pointer per row) plus the handler functions' own prologues. The smallest
+  margin is `wio-e5-mini_repeater` on STM32WL: 89.8 percent of flash before, 90.3 after
+  (1224 bytes, of 229376 available).
+  Hardware was not touched: **not run on devices.**
+
+
+## Next steps
 
 The companion has its own text CLI, `MyMesh::handleCommand()`
 (`examples/companion_radio/MyMesh.cpp`, from about line 2389): 38 commands in a chain
