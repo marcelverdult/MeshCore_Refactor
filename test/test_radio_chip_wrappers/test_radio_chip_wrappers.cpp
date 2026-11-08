@@ -218,7 +218,10 @@ TYPED_TEST(ChipWrapperTest, SpreadingFactorIsTheChips) {
 // Boosted gain: SX1262, SX1268, LLCC68 set it on the chip and read register
 // 0x8AC back; LR1110 and LR1121 set it and remember it; LR2021 sets a level
 // from standby; STM32WLx and SX1276 have no override and report false.
+// supportsRxBoostedGain() (upstream #3496, the KISS modem offers the gain
+// control only where it is true) is true for exactly the wrappers with an override.
 TYPED_TEST(ChipWrapperTest, BoostedGain) {
+  EXPECT_EQ(this->w.supportsRxBoostedGain(), TypeParam::boost != NONE);
   this->radio.regs[RADIOLIB_SX126X_REG_RX_GAIN] = RADIOLIB_SX126X_RX_GAIN_BOOSTED;
   switch (TypeParam::boost) {
     case NONE:

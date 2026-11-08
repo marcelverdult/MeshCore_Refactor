@@ -11,6 +11,7 @@ class CustomSX1268Wrapper : public CustomSX126xWrapper<CustomSX1268> {
 public:
   CustomSX1268Wrapper(CustomSX1268& radio, mesh::MainBoard& board) : CustomSX126xWrapper(radio, board) { }
 
+  bool supportsRxBoostedGain() const override { return true; }
   bool setRxBoostedGainMode(bool en) override {
     return chip()->setRxBoostedGainMode(en) == RADIOLIB_ERR_NONE;
   }

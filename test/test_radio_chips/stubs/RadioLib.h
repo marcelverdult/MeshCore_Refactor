@@ -79,6 +79,9 @@ enum {
 #define RADIOLIB_LR2021_IRQ_LORA_HDR_CRC_ERROR  (0x01UL << 9)
 #define RADIOLIB_LR2021_RX_TIMEOUT_INF          (0xFFFFFFUL)
 #define RADIOLIB_LR2021_LORA_SYNC_WORD_PRIVATE  (0x12)
+#define RADIOLIB_LR2021_LF_CUTOFF_FREQ          (1500.0f)
+#define RADIOLIB_LR2021_RX_BOOST_LF             (0x00UL << 0)
+#define RADIOLIB_LR2021_RX_BOOST_HF             (0x04UL << 0)
 
 // LR2021.h
 struct LR2021LoRaSideDetector_t {
@@ -342,6 +345,15 @@ class LR2021 : public StubChip {
 public:
   using StubChip::StubChip;
   uint8_t irqDioNum = 0;
+  std::vector<int16_t> gain_results;
+  // RadioLib takes a boost level here, not a flag, and a failed call leaves its cached level changed
+  int16_t setRxBoostedGainMode(uint8_t level) {
+    calls.push_back(stubCall("setRxBoostedGainMode", (int)level));
+    if (gain_results.empty()) return RADIOLIB_ERR_NONE;
+    int16_t r = gain_results.front();
+    gain_results.erase(gain_results.begin());
+    return r;
+  }
   int16_t setSideDetector(LR2021LoRaSideDetector_t* det, uint8_t num) {
     std::string c = stubCall("setSideDetector", num);
     for (uint8_t i = 0; i < num; i++) c += ":" + std::to_string(det[i].sf);

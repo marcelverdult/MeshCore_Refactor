@@ -42,8 +42,9 @@ class CustomLR11x0 : public Base {
     float getFreqMHz() const { return this->freqMHz; }
 
     int16_t setRxBoostedGainMode(bool en) {
-      _rx_boosted = en;
-      return Base::setRxBoostedGainMode(en);
+      int16_t status = Base::setRxBoostedGainMode(en);
+      if (status == RADIOLIB_ERR_NONE) _rx_boosted = en;   // keep the last gain that was applied (upstream #3496)
+      return status;
     }
 
     bool getRxBoostedGainMode() const { return _rx_boosted; }
