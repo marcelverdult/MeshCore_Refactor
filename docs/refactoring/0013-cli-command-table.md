@@ -125,6 +125,7 @@ falls through to the next branch and, in the end, to "Unknown command".
 | `repeat` | `OK - repeat is now OFF` or `... ON` | `disable_fwd` is on only for a value starting `off`, save | |
 | `lat`, `lon` | `OK` | `atof`, save | no validation: text gives 0 |
 | `flood.max.unscoped`, `flood.max.advert`, `flood.max` | `OK` or `Error, max 64` | `uint8_t`, save | the cast happens before the check, see quirks |
+| `flood.max.type <type> <hops\|off>` | `OK`, `Error, unknown packet type`, `Error, hops 0..64 or off`, or `Error, type list full` | edits `flood_max_types` (stored as `f_max_pt`, for example `6:4,9:3`, sorted by type), save only on `OK` | type by name (`req` to `raw`, see `RoutingPolicy.h`) or number 0 to 15; hops 0 to 64 or `off` to remove; the type is checked first; needs the space after the key; `type list full` cannot be reached |
 | `owner.info` | `OK` | `\|` becomes newline, cut at 119 characters, save | |
 | `loop.detect` | `OK` or `Error, must be: off, minimal, moderate, or strict` | mode, save | prefix of the word is enough |
 | `freq` | `OK - reboot to apply` | `atof`, save | ts 0 |
@@ -142,7 +143,8 @@ falls through to the next branch and, in the end, to "Unknown command".
 
 All replies start with `> `. Keys: `allow.read.only` (on or off),
 `flood.advert.interval`, `advert.interval` (minutes), `guest.password`, `prv.key`
-(ts 0, uppercase hex), `name`, `repeat`, `lat`, `lon`, `flood.max.advert`,
+(ts 0, uppercase hex), `name`, `repeat`, `lat`, `lon`, `flood.max.type`
+(`> grpdata:4 trace:3`, `> none` when empty, unnamed types as numbers), `flood.max.advert`,
 `flood.max.unscoped`, `flood.max`, `owner.info` (newline shown as `|`, cut at 159
 characters), `loop.detect`, `public.key` (uppercase hex), `role`, `bridge.type`
 (`rs232`, `espnow` or `none`), `bridge.enabled|delay|source|baud|channel|secret`
@@ -180,6 +182,7 @@ single precision noise (`869.6179809` for 869.618).
 | `test_cli_get.cpp` | 24 | every `get` key, prefix order, hex output, variants, fallback |
 | `test_cli_region.cpp` | 34 | every `region` sub command, limits, errors, callbacks |
 | `test_cli_sensor.cpp` | 39 | `sensor get\|set\|list` with paging, `gps ...` (GPS build) or "Unknown command" (others) |
+| `test_cli_flood_type.cpp` | 19 | `set` and `get flood.max.type`: names and numbers, sorted list, `off`, range and type errors, damaged stored list, full list |
 | `test_common_cli.cpp` | 1 | `main()` and a smoke test |
 
 Counts are `TEST_F` bodies; the number of cases a run reports differs per environment
@@ -187,11 +190,11 @@ because of the variant specific tests:
 
 | Environment | Cases |
 |---|---|
-| `native_common_cli` | 157 |
-| `native_common_cli_nrf52` | 177 |
-| `native_common_cli_esp32` | 157 |
-| `native_common_cli_rs232` | 164 |
-| `native_common_cli_espnow` | 165 |
+| `native_common_cli` | 176 |
+| `native_common_cli_nrf52` | 196 |
+| `native_common_cli_esp32` | 176 |
+| `native_common_cli_rs232` | 183 |
+| `native_common_cli_espnow` | 184 |
 
 ## Quirks pinned as is
 
@@ -209,6 +212,9 @@ must keep them, or change them as a separate, announced step.
 - `savePrefs()` sets `advert_interval` to 0 when it would be below 60 seconds, so any
   save in a state with a short interval clears it.
 - `set flood.max 300` stores 44: the value is cast to `uint8_t` before the check.
+- `set flood.max.type` on a damaged stored list (for example `6:4,x:1,9:3`) keeps only
+  the entries before the damage and writes that back, so the rest is lost on the next set.
+- `get flood.max.type` matches by prefix and ignores arguments, like the other `get` keys.
 - `set name` cuts at 31 characters and `set owner.info` at 119 without an error.
 - `set prv.key` works over the air (only `get prv.key` is serial only).
 - `neighbor.remove` with an empty key or `zz` is accepted.
@@ -224,8 +230,9 @@ must keep them, or change them as a separate, announced step.
 ## Mutation tests
 
 For each command group one line of `CommonCLI.cpp` was broken, the matching
-environment run, and the file restored with `git checkout`. Two batches, 35 mutations
-that applied cleanly:
+environment run, and the file restored. Three batches, 48 mutations
+that applied cleanly (35 on the first state, 13 added with `flood.max.type`; the
+first 35 were run again after merging `integration` and gave the same result):
 
 | Group | Mutations | Result |
 |---|---|---|
@@ -243,8 +250,11 @@ that applied cleanly:
 | region | `not empty`; `unknown parent`; `table full`; `save failed` | caught |
 | gps (nRF52 env) | `advert share` stores `prefs`; `gps on` stores 0 | caught |
 | bridge (RS232 env) | `bridge.type` text | caught |
+| `flood.max.type` (CLI) | type error text; hops error text; set does not save; set key literal; get key literal; get reply cap | caught |
+| `flood.max.type` (`RoutingPolicy.h`) | hop upper bound; `off` keyword; name table entry; empty list text; numeric type limit; sorted output | caught |
+| `flood.max.type` (CLI) | text of `Error, type list full` | not caught: the branch cannot be reached |
 
-Not caught: none of the 35. Not applied: one planned mutation (the `Error: unsupported`
+Not caught: the `type list full` text (unreachable, see gaps); none of the other 47. Not applied: one planned mutation (the `Error: unsupported`
 text of `set adc.multiplier`) because the string occurs twice and the script only
 mutates unique matches; it was not retried by hand. These mutations were chosen by the
 author of the tests, so they cover only what was tried; lines nobody mutated may
@@ -253,11 +263,11 @@ still be unpinned. The inventory above is the list to check 13b against.
 ## Verification
 
 - All five `native_common_cli*` environments pass (table above).
-- Every other native environment passes unchanged on this branch (32 environments,
-  including `native`: 116 cases).
-- The same tests pass on the current `integration` (merged in a throwaway worktree,
-  not committed): `native` 139 cases and the five CLI environments with the same
-  counts as above.
+- Every other native environment passes (32 environments in all, including `native`:
+  139 cases).
+- The branch contains `integration` at `f2e7c454` (merge commit, no conflicts), which
+  brought `set|get flood.max.type` and the key `f_max_pt`. Before that merge the 13a
+  tests also passed against that state in a throwaway worktree.
 - `git diff integration...HEAD -- src` is empty.
 
 ## Gaps
@@ -276,6 +286,10 @@ Things the harness cannot or does not cover; they are real risks for 13b:
   calendar.
 - **Missing name or value in `sensor list`**: the `?` and empty fallbacks cannot be
   reached through the mock, which hands out `c_str()` pointers.
+- **`Error, type list full`** of `set flood.max.type` cannot be reached: the buffer holds the
+  longest possible list (`FLOOD_MAX_TYPES_LEN`), so a set that passes the range checks
+  always fits. `test_routing_policy` pins the parser and the list functions themselves;
+  the CLI tests here pin the path through `CommonCLI`.
 - **Radio settings** (`set radio`, `tx`, `rxdelay`, ...) are pinned in
   `test/mocks/RadioPrefsChecks.h`; only their precedence over the chain is tested here.
 - **Variant `board->handleCommand()` hooks** of real boards are not run; the hook is
