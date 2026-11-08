@@ -12,8 +12,9 @@
 // replies byte for byte, the packets queued for the air, the files stored, the
 // calls to the board, radio, clock and sensors.
 //
-// A second test pins the answer one byte below each minimum, the case step 10d
-// would change and step 10c must not.
+// Further tests pin the answer below each minimum: ILLEGAL_ARG since step 10d (step 10c
+// kept UNSUPPORTED_CMD there, which is how the series proved that it changed no answer),
+// and what the frame of exactly the minimum gets.
 
 #include "CompanionHarness.h"
 #include <helpers/FrameReader.h>
@@ -194,6 +195,7 @@ std::vector<Case> catalog() {
   add("SET_DEFAULT_FLOOD_SCOPE", cat({{SET_DEFAULT_FLOOD_SCOPE}, fieldOf("scope", 31), fill(16, 0x24)}));
   // no zero anywhere in the frame: the name runs into the key and past the end
   add("SET_DEFAULT_FLOOD_SCOPE unterminated", cat({{SET_DEFAULT_FLOOD_SCOPE}, fill(47, 0x61)}));
+  add("SEND_RAW_PACKET min", {SEND_RAW_PACKET, 0, 0x01, 0});
   add("SEND_RAW_PACKET flood", {SEND_RAW_PACKET, 0, 0x11, 0, 0x55});
   // route type 0 carries 4 transport code bytes, which tryParsePacket() read
   // before it tested the length (docs/fixes/packet-parse-len.md)
@@ -276,45 +278,174 @@ TEST(FrameBounds, NoCommandReadsThePreviousFrame) {
   }
 }
 
-// One byte below each command's minimum the answer is UNSUPPORTED_CMD, as for a
-// code that is not a command (SEND_CHANNEL_DATA, without a minimum in the table,
-// answers ILLEGAL_ARG itself); the minimum itself is accepted, which the catalog
-// above shows with a real frame of exactly that length for each of these codes.
-TEST(FrameBounds, OneByteBelowEachMinimum) {
-  const struct { uint8_t code; size_t min; } MINIMUMS[] = {
-    {APP_START, 8}, {SEND_TXT_MSG, 14}, {SEND_CHANNEL_TXT_MSG, 7}, {SET_DEVICE_TIME, 5},
-    {SET_ADVERT_NAME, 2}, {ADD_UPDATE_CONTACT, 136}, {SET_RADIO_PARAMS, 11},
-    {SET_RADIO_TX_POWER, 2}, {RESET_PATH, 33}, {SET_ADVERT_LATLON, 9},
-    {REMOVE_CONTACT, 33}, {SHARE_CONTACT, 33}, {IMPORT_CONTACT, 99}, {REBOOT, 7},
-    {SET_TUNING_PARAMS, 9}, {DEVICE_QUERY, 2}, {IMPORT_PRIVATE_KEY, 65},
-    {SEND_RAW_DATA, 6}, {SEND_LOGIN, 33}, {SEND_STATUS_REQ, 33}, {HAS_CONNECTION, 33},
-    {LOGOUT, 33}, {GET_CONTACT_BY_KEY, 33}, {GET_CHANNEL, 2}, {SET_CHANNEL, 50},
-    {SIGN_DATA, 2}, {SEND_TRACE_PATH, 11}, {SET_DEVICE_PIN, 5}, {SET_OTHER_PARAMS, 2},
-    {SEND_TELEMETRY_REQ, 4}, {SET_CUSTOM_VAR, 4}, {GET_ADVERT_PATH, 34},
-    {SEND_BINARY_REQ, 34}, {FACTORY_RESET, 6}, {SEND_PATH_DISCOVERY_REQ, 34},
-    {SET_FLOOD_SCOPE_KEY, 2}, {SEND_CONTROL_DATA, 2}, {GET_STATS, 2}, {SEND_ANON_REQ, 34},
-    {SET_AUTOADD_CONFIG, 2}, {SET_PATH_HASH_MODE, 3}, {SEND_RAW_PACKET, 4},
-    {RUN_CLI_COMMAND, 3}, {SEND_CHANNEL_DATA, 4},
-  };
+// Step 10d: a known command whose frame is shorter than its row's minimum in CMD_TABLE
+// answers ILLEGAL_ARG ("bad length" in docs/companion_protocol.md), at every length
+// below the minimum. Before 10d the answer was UNSUPPORTED_CMD, the same as for a code
+// that is not a command. The frame of exactly the minimum is accepted: the catalog frame
+// of that length gets the reply a valid frame gets, pinned here by its first bytes (they
+// are what the frame was answered before 10d, which the frame sweep pins as well).
+//
+// These are the 43 rows of CMD_TABLE with a minimum above 1. The other 16 rows have a
+// minimum of 1 and cannot be too short; SEND_CHANNEL_DATA is one of them and answers
+// ILLEGAL_ARG below 4 bytes from its own length test (last check below).
+namespace {
+
+enum : uint8_t {
+  RESP_OK = 0, RESP_ERR = 1, RESP_CONTACT = 3, RESP_SELF_INFO = 5, RESP_SENT = 6,
+  RESP_DEVICE_INFO = 13, RESP_CHANNEL_INFO = 18, RESP_STATS = 24, RESP_CLI_REPLY = 29,
+  PUSH_TELEMETRY_RESPONSE = 0x8B,
+  ERR_NOT_FOUND = 2, ERR_TABLE_FULL = 3,
+};
+
+struct Minimum {
+  uint8_t code;
+  size_t min;           // the whole frame, code byte included
+  const char* frame;    // the catalog frame of exactly that length
+  Bytes reply;          // the first bytes of its reply; none: the board restarts
+};
+
+const Minimum MINIMUMS[] = {
+  {APP_START, 8, "APP_START min", {RESP_SELF_INFO}},
+  {SEND_TXT_MSG, 14, "SEND_TXT_MSG min", {RESP_SENT}},
+  {SEND_CHANNEL_TXT_MSG, 7, "SEND_CHANNEL_TXT_MSG min", {RESP_OK}},
+  {SET_DEVICE_TIME, 5, "SET_DEVICE_TIME min", {RESP_OK}},
+  {SET_ADVERT_NAME, 2, "SET_ADVERT_NAME min", {RESP_OK}},
+  {ADD_UPDATE_CONTACT, 136, "ADD_UPDATE_CONTACT min", {RESP_OK}},
+  {SET_RADIO_PARAMS, 11, "SET_RADIO_PARAMS min", {RESP_OK}},
+  {SET_RADIO_TX_POWER, 2, "SET_RADIO_TX_POWER min", {RESP_OK}},
+  {RESET_PATH, 33, "RESET_PATH min", {RESP_OK}},
+  {SET_ADVERT_LATLON, 9, "SET_ADVERT_LATLON min", {RESP_OK}},
+  {REMOVE_CONTACT, 33, "REMOVE_CONTACT min", {RESP_OK}},
+  // a contact added over the protocol has no stored advert to share
+  {SHARE_CONTACT, 33, "SHARE_CONTACT min", {RESP_ERR, ERR_TABLE_FULL}},
+  {IMPORT_CONTACT, 99, "IMPORT_CONTACT min", {RESP_OK}},
+  {REBOOT, 7, "REBOOT min", {}},
+  {SET_TUNING_PARAMS, 9, "SET_TUNING_PARAMS min", {RESP_OK}},
+  {DEVICE_QUERY, 2, "DEVICE_QUERY min", {RESP_DEVICE_INFO}},
+  {IMPORT_PRIVATE_KEY, 65, "IMPORT_PRIVATE_KEY min", {RESP_OK}},
+  {SEND_RAW_DATA, 6, "SEND_RAW_DATA min", {RESP_OK}},
+  {SEND_LOGIN, 33, "SEND_LOGIN min", {RESP_SENT}},
+  {SEND_STATUS_REQ, 33, "SEND_STATUS_REQ min", {RESP_SENT}},
+  {HAS_CONNECTION, 33, "HAS_CONNECTION min", {RESP_ERR, ERR_NOT_FOUND}},
+  {LOGOUT, 33, "LOGOUT min", {RESP_OK}},
+  {GET_CONTACT_BY_KEY, 33, "GET_CONTACT_BY_KEY min", {RESP_CONTACT}},
+  {GET_CHANNEL, 2, "GET_CHANNEL min", {RESP_CHANNEL_INFO}},
+  {SET_CHANNEL, 50, "SET_CHANNEL min", {RESP_OK}},
+  {SIGN_DATA, 2, "SIGN_START then DATA", {RESP_OK}},
+  {SEND_TRACE_PATH, 11, "SEND_TRACE_PATH min", {RESP_SENT}},
+  {SET_DEVICE_PIN, 5, "SET_DEVICE_PIN min", {RESP_OK}},
+  {SET_OTHER_PARAMS, 2, "SET_OTHER_PARAMS min", {RESP_OK}},
+  {SEND_TELEMETRY_REQ, 4, "SEND_TELEMETRY_REQ self", {PUSH_TELEMETRY_RESPONSE}},
+  {SET_CUSTOM_VAR, 4, "SET_CUSTOM_VAR min", {RESP_OK}},
+  {GET_ADVERT_PATH, 34, "GET_ADVERT_PATH min", {RESP_ERR, ERR_NOT_FOUND}},
+  {SEND_BINARY_REQ, 34, "SEND_BINARY_REQ min", {RESP_SENT}},
+  {FACTORY_RESET, 6, "FACTORY_RESET min", {RESP_OK}},
+  {SEND_PATH_DISCOVERY_REQ, 34, "SEND_PATH_DISCOVERY_REQ min", {RESP_SENT}},
+  {SET_FLOOD_SCOPE_KEY, 2, "SET_FLOOD_SCOPE_KEY min", {RESP_OK}},
+  {SEND_CONTROL_DATA, 2, "SEND_CONTROL_DATA min", {RESP_OK}},
+  {GET_STATS, 2, "GET_STATS core", {RESP_STATS}},
+  {SEND_ANON_REQ, 34, "SEND_ANON_REQ min", {RESP_SENT}},
+  {SET_AUTOADD_CONFIG, 2, "SET_AUTOADD_CONFIG min", {RESP_OK}},
+  {SET_PATH_HASH_MODE, 3, "SET_PATH_HASH_MODE min", {RESP_OK}},
+  {SEND_RAW_PACKET, 4, "SEND_RAW_PACKET min", {RESP_OK}},
+  {RUN_CLI_COMMAND, 3, "RUN_CLI_COMMAND min", {RESP_CLI_REPLY}},
+};
+static_assert(sizeof(MINIMUMS) / sizeof(MINIMUMS[0]) == 43, "the rows of CMD_TABLE with a minimum above 1");
+
+const Case& catalogFrame(const std::vector<Case>& cat, const Minimum& m) {
+  for (const Case& c : cat)
+    if (c.name == m.frame) return c;
+  ADD_FAILURE() << "no catalog frame " << m.frame;
+  return cat[0];
+}
+
+}  // namespace
+
+// The answer comes from the dispatcher, before any handler runs, so it does not depend on
+// what the frame holds: the prefixes of the real frame (behind each stale tail) and frames
+// of one repeated byte (the fills of the frame sweep) all get it, and no handler reads
+// anything: the frame reader counts no overrun, which a handler running on the short
+// frame would cause for most of these commands.
+TEST(FrameBounds, AFrameBelowTheMinimumAnswersIllegalArg) {
+  const std::vector<Case> cat = catalog();
+  const uint8_t fills[] = {0x00, 0x01, 0x81, 0xFF};
   Harness h;
-  for (const Case& c : catalog()) {
-    for (auto m : MINIMUMS) {
-      if (c.frame[0] != m.code || c.frame.size() != m.min) continue;
-      for (const Bytes& tail : TAILS) {
-        prepare(h);
-        h.send(staleFrame(tail));
-        Bytes shorter(c.frame.begin(), c.frame.end() - 1);
-        uint8_t expected = m.code == SEND_CHANNEL_DATA ? ERR_ILLEGAL_ARG : ERR_UNSUPPORTED_CMD;
-        EXPECT_EQ(h.reply(shorter), Bytes({1, expected})) << c.name << " minus one, tail " << hex(tail);
-        EXPECT_EQ(h.mesh().outboundTotal(), 0) << c.name << " minus one";
+  auto refused = [&](const Bytes& stale, const Bytes& f, const std::string& what) {
+    prepare(h);
+    h.send(staleFrame(stale));
+    int overruns = frame_reader_overruns;
+    EXPECT_EQ(h.reply(f), Bytes({RESP_ERR, ERR_ILLEGAL_ARG})) << what;
+    EXPECT_EQ(h.mesh().outboundTotal(), 0) << what;
+    EXPECT_EQ(board.reboot_calls, 0) << what;
+    EXPECT_EQ(frame_reader_overruns, overruns) << what;
+  };
+  for (const Minimum& m : MINIMUMS) {
+    const Case& c = catalogFrame(cat, m);
+    ASSERT_EQ(c.frame.size(), m.min) << m.frame;
+    ASSERT_EQ(c.frame[0], m.code) << m.frame;
+    // every length from the code byte alone up to one byte short
+    for (size_t len = 1; len < m.min; len++) {
+      Bytes prefix(c.frame.begin(), c.frame.begin() + len);
+      for (const Bytes& tail : TAILS)
+        refused(tail, prefix, std::string(m.frame) + " cut to " + std::to_string(len) + ", tail " + hex(tail));
+      for (uint8_t fill : fills) {
+        Bytes f(1, m.code);
+        putFill(f, len - 1, fill);
+        refused(TAILS[0], f, std::string("code ") + std::to_string(m.code) + " length " + std::to_string(len) + " fill " + hex({fill}));
       }
     }
   }
-  // every minimum has a catalog frame of exactly that length
-  for (auto m : MINIMUMS) {
-    bool found = false;
-    for (const Case& c : catalog()) found |= c.frame[0] == m.code && c.frame.size() == m.min;
-    EXPECT_TRUE(found) << "no catalog frame at the minimum of code " << (int)m.code;
+}
+
+TEST(FrameBounds, TheMinimumItselfIsAccepted) {
+  const std::vector<Case> cat = catalog();
+  Harness h;
+  for (const Minimum& m : MINIMUMS) {
+    const Case& c = catalogFrame(cat, m);
+    for (const Bytes& tail : TAILS) {
+      prepare(h);
+      h.send(staleFrame(tail));
+      std::vector<Bytes> out = h.send(c.frame);
+      if (m.reply.empty()) {
+        EXPECT_TRUE(out.empty()) << m.frame << ", tail " << hex(tail);
+        EXPECT_EQ(board.reboot_calls, 1) << m.frame;
+        continue;
+      }
+      ASSERT_FALSE(out.empty()) << m.frame << ", tail " << hex(tail);
+      ASSERT_GE(out[0].size(), m.reply.size()) << m.frame;
+      EXPECT_EQ(Bytes(out[0].begin(), out[0].begin() + m.reply.size()), m.reply)
+          << m.frame << ", tail " << hex(tail);
+    }
+  }
+}
+
+// What 10d leaves alone: SEND_CHANNEL_DATA (minimum 1 in its row) answers ILLEGAL_ARG
+// below 4 bytes from its own length test, as it did before 10d.
+TEST(FrameBounds, SendChannelDataKeepsItsOwnLengthTest) {
+  Harness h;
+  for (size_t len = 1; len < 4; len++) {
+    prepare(h);
+    Bytes f = {SEND_CHANNEL_DATA, 0, 0xFF};
+    f.resize(len);
+    EXPECT_EQ(h.reply(f), Bytes({RESP_ERR, ERR_ILLEGAL_ARG})) << "length " << len;
+  }
+}
+
+// SEND_RAW_PACKET takes a packet from the pool before it parses the frame, so without the
+// minimum in its row a frame of 1 to 3 bytes would answer TABLE_FULL once the pool is
+// empty, and ILLEGAL_ARG otherwise. With the minimum it is ILLEGAL_ARG in both cases.
+TEST(FrameBounds, ARawPacketBelowTheMinimumIsRefusedBeforeItTakesAPacket) {
+  Harness h;
+  prepare(h);
+  Bytes valid = {SEND_RAW_PACKET, 0, 0x01, 0};
+  int accepted = 0;
+  while (accepted < 64 && h.reply(valid) == Bytes({RESP_OK})) accepted++;
+  ASSERT_LT(accepted, 64) << "the pool never ran out";
+  EXPECT_EQ(h.reply(valid), Bytes({RESP_ERR, ERR_TABLE_FULL}));     // the pool is empty now
+  for (size_t len = 1; len < 4; len++) {
+    Bytes f = valid;
+    f.resize(len);
+    EXPECT_EQ(h.reply(f), Bytes({RESP_ERR, ERR_ILLEGAL_ARG})) << "length " << len;
   }
 }
 
