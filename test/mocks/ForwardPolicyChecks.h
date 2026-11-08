@@ -116,6 +116,28 @@ TEST_F(ForwardPolicyTest, TheAdvertLimitStopsOnlyAdverts) {
   EXPECT_TRUE(node->forwards(&other));
 }
 
+// A limit from the per payload type exception list joins the three above on the same
+// terms, so the strictest one that applies wins.
+TEST_F(ForwardPolicyTest, APerTypeLimitStopsOnlyThatPayloadType) {
+  ASSERT_TRUE(mesh::setFloodMaxForType(node->prefs().flood_max_types,
+                                       sizeof(node->prefs().flood_max_types),
+                                       PAYLOAD_TYPE_GRP_DATA, 2));
+  mesh::Packet at_limit = packet(ROUTE_TYPE_TRANSPORT_FLOOD, 2, PAYLOAD_TYPE_GRP_DATA);
+  mesh::Packet under = packet(ROUTE_TYPE_TRANSPORT_FLOOD, 1, PAYLOAD_TYPE_GRP_DATA);
+  mesh::Packet other_type = packet(ROUTE_TYPE_TRANSPORT_FLOOD, 2, PAYLOAD_TYPE_TXT_MSG);
+  EXPECT_FALSE(node->forwards(&at_limit)) << "the limit is compared with >=";
+  EXPECT_TRUE(node->forwards(&under));
+  EXPECT_TRUE(node->forwards(&other_type));
+}
+
+TEST_F(ForwardPolicyTest, AnEmptyTypeListRefusesNothing) {
+  ASSERT_EQ(node->prefs().flood_max_types[0], 0) << "a fresh node carries no exceptions";
+  for (uint8_t type = 0; type < FLOOD_MAX_TYPE_SLOTS; type++) {
+    mesh::Packet pkt = packet(ROUTE_TYPE_TRANSPORT_FLOOD, 8, type);
+    EXPECT_TRUE(node->forwards(&pkt)) << "payload type " << int(type);
+  }
+}
+
 TEST_F(ForwardPolicyTest, HopLimitsDoNotApplyToDirectRoutes) {
   node->prefs().flood_max = 0;
   node->prefs().flood_max_unscoped = 0;
