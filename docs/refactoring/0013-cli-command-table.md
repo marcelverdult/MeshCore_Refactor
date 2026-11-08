@@ -358,19 +358,18 @@ CLI_CMD("advert.zerohop", CLI_WORD, CLI_ANY, CommonCLIImpl::advertZerohop),
 | Non capturing lambdas in the table | Lambdas defined at namespace scope have no friend access, so they would need public accessors. Each lambda is also an anonymous type, which makes the rows harder to read in a diff. |
 | An X macro that generates the table and the dispatcher | Smaller source, but the rows are no longer greppable by name, and the `#if` guards become hard to read inside macro lists. |
 | One table for all four levels | Matching differs (`set` keys end in a space, `get` keys do not, `region` matches the second word and a word count). A single row type for all would need a mode field per row and hide that. |
-| A hash or sorted table with binary search | The old behaviour is order dependent (prefixes). A sorted table would change which of two overlapping names wins. About 130 rows are cheap to scan; the commands are typed by people. |
+| A hash or sorted table with binary search | The old behaviour depends on order (prefixes), and a sorted table would change which of two overlapping names wins. About 130 rows are cheap to scan. |
 | Matching with a `strncmp` instead of `memcmp` | `memcmp` on a fixed length is what the chain did; keeping it keeps the behaviour for lines that end early. |
 
 ### Behaviour kept on purpose
 
-Everything in "Quirks pinned as is" is unchanged: prefix matching without a word end
-check, the order dependent pairs, `set flood.max 300` storing 44, the clock error texts
-with and without brackets, and so on. No 13a test file was edited.
+Everything in "Quirks pinned as is" is unchanged, including prefix matching without a
+word end check, the order dependent pairs, `set flood.max 300` storing 44 and the two
+clock error texts. No 13a test file was edited.
 
 ### Not fixed (still open)
 
-13b does not change these, and does not make them worse. The handlers contain the
-same code as before.
+13b leaves these as they were. The handlers contain the same code as before.
 
 - `tempradio` and `set extra.sf` copy the command into the 132 byte `tmp` with `strcpy()`
   and no length check.
@@ -379,9 +378,9 @@ same code as before.
 - `get <key>` with an argument of 157 or more characters can run past the 160 byte reply
   in the `??: %s` fallback.
 
-A row now exists for each of these, so a later step can add the length or NULL check in
-one place per handler. That is a behaviour change (a refused or shortened command) and
-should be its own, announced step.
+Each of these now has its own handler, so a later step can add the length or NULL check
+in one place. That changes behaviour (a refused or shortened command), so it should be a
+separate, announced step.
 
 ### Verification of 13b
 
@@ -410,9 +409,7 @@ should be its own, announced step.
   | Region table (minimum words of `allowf` and `get`, `home` query minimum, `strcmp` prefix, early return for `region`, fallback text) | 6 | 5 caught, 1 alive (equivalent) |
   | Fallback texts of `set` and `get` | 2 | all caught |
 
-  Total 67 mutations, 60 caught on the first run, 7 alive.
-
-  The first run left seven mutations alive:
+  Of the 67 mutations, 60 were caught on the first run and 7 stayed alive:
 
   | Mutation | What it is | Handled by |
   |---|---|---|
@@ -444,12 +441,10 @@ should be its own, announced step.
   | `waveshare_rp2040_lora_repeater_bridge_rs232` | RP2040, repeater+RS232 bridge | 275036 | 276244 | +1208 | 26796 -> 26796 (+0) |
 
   RAM is unchanged in all 13 builds (the tables are const data in flash). Flash grows by
-  1.1 to 3.4 KB. The growth is the tables themselves (one name, one length and one
-  function pointer per row) plus the handler functions' own prologues. The smallest
-  margin is `wio-e5-mini_repeater` on STM32WL: 89.8 percent of flash before, 90.3 after
-  (1224 bytes, of 229376 available).
-  Hardware was not touched: **not run on devices.**
-
+  1.1 to 3.4 KB; the growth was not broken down further. Each row holds a name, a length
+  and a function pointer. The smallest margin is `wio-e5-mini_repeater` on STM32WL:
+  89.8 percent of flash before, 90.3 after (1224 bytes, of 229376 available).
+- **Hardware.** Not run on devices.
 
 ## Next steps
 
