@@ -397,18 +397,66 @@ TYPED_TEST(LR11x0ChipTest, FrequencyAndSpreadingFactorAreTheChipsMembers) {
   EXPECT_EQ(this->radio.getSpreadingFactor(), 7);
 }
 
-TYPED_TEST(LR11x0ChipTest, BoostedGainFlagIsStoredBeforeTheChipAnswers) {
+// Upstream #3496 changed this: the flag follows the chip. A refused call used to
+// leave the new value stored (the flag said "on" while the chip stayed off), and
+// the gain reapplied after an AGC reset then differed from the one in use.
+TYPED_TEST(LR11x0ChipTest, BoostedGainFlagIsStoredOnlyWhenTheChipAccepts) {
   EXPECT_FALSE(this->radio.getRxBoostedGainMode());
   EXPECT_EQ(this->radio.setRxBoostedGainMode(true), RADIOLIB_ERR_NONE);
   EXPECT_TRUE(this->radio.getRxBoostedGainMode());
   this->radio.gain_results = {-1};
   EXPECT_EQ(this->radio.setRxBoostedGainMode(false), -1);
-  EXPECT_FALSE(this->radio.getRxBoostedGainMode());  // stored although the chip failed
+  EXPECT_TRUE(this->radio.getRxBoostedGainMode());  // refused: still on
+  EXPECT_EQ(this->radio.setRxBoostedGainMode(false), RADIOLIB_ERR_NONE);
+  EXPECT_FALSE(this->radio.getRxBoostedGainMode());
   this->radio.gain_results = {-1};
   EXPECT_EQ(this->radio.setRxBoostedGainMode(true), -1);
-  EXPECT_TRUE(this->radio.getRxBoostedGainMode());
-  Log want = {"setRxBoostedGainMode(1)", "setRxBoostedGainMode(0)", "setRxBoostedGainMode(1)"};
+  EXPECT_FALSE(this->radio.getRxBoostedGainMode());  // refused: still off
+  Log want = {"setRxBoostedGainMode(1)", "setRxBoostedGainMode(0)", "setRxBoostedGainMode(0)",
+              "setRxBoostedGainMode(1)"};
   EXPECT_EQ(this->radio.calls, want);
+}
+
+// LR2021 keeps the applied boost level for each RX path (below and above
+// RADIOLIB_LR2021_LF_CUTOFF_FREQ) and reports "boosted" for any level but 0.
+// RadioLib's defaults are 0 for the low and 4 for the high path.
+struct LR2021Gain : public ::testing::Test {
+  Module mod;
+  CustomLR2021 radio{&mod};
+  static constexpr float LOW_BAND = 869.525f;
+  static constexpr float HIGH_BAND = 2400.0f;
+};
+
+TEST_F(LR2021Gain, StartsWithRadioLibsDefaultOfEachPath) {
+  radio.freqMHz = LOW_BAND;
+  EXPECT_FALSE(radio.isHighFreqPath());
+  EXPECT_FALSE(radio.getRxBoostedGainMode());
+  radio.freqMHz = HIGH_BAND;
+  EXPECT_TRUE(radio.isHighFreqPath());
+  EXPECT_TRUE(radio.getRxBoostedGainMode());
+}
+
+TEST_F(LR2021Gain, LevelIsKeptForThePathInUse) {
+  radio.freqMHz = LOW_BAND;
+  EXPECT_EQ(radio.setRxBoostedGainMode(7), RADIOLIB_ERR_NONE);
+  EXPECT_TRUE(radio.getRxBoostedGainMode());
+  radio.freqMHz = HIGH_BAND;
+  EXPECT_EQ(radio.setRxBoostedGainMode(0), RADIOLIB_ERR_NONE);
+  EXPECT_FALSE(radio.getRxBoostedGainMode());
+  radio.freqMHz = LOW_BAND;
+  EXPECT_TRUE(radio.getRxBoostedGainMode());  // the other path is untouched
+}
+
+TEST_F(LR2021Gain, RefusedLevelPutsTheOldOneBack) {
+  radio.freqMHz = LOW_BAND;
+  radio.setRxBoostedGainMode(7);
+  radio.calls.clear();
+  radio.gain_results = {-1};
+  EXPECT_EQ(radio.setRxBoostedGainMode(0), -1);
+  EXPECT_TRUE(radio.getRxBoostedGainMode());
+  // RadioLib caches the level before it sends it, so the old one is sent again
+  Log want = {"setRxBoostedGainMode(0)", "setRxBoostedGainMode(7)"};
+  EXPECT_EQ(radio.calls, want);
 }
 
 // The output power: LR1110 leaves it to RadioLib; LR1121 clips it to the range of

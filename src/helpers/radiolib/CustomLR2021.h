@@ -6,7 +6,9 @@
 
 class CustomLR2021 : public LR2021 {
   RxActivityTracker _rxActivity;
-  bool _rx_boosted = false;
+  // last applied gain level per RX path, mirroring RadioLib's gainModeLf/gainModeHf defaults
+  uint8_t _rx_gain_lf = RADIOLIB_LR2021_RX_BOOST_LF;
+  uint8_t _rx_gain_hf = RADIOLIB_LR2021_RX_BOOST_HF;
 
   public:
     CustomLR2021(Module *mod) : LR2021(mod) { irqDioNum = LR2021_IRQ_DIO; }
@@ -66,7 +68,21 @@ class CustomLR2021 : public LR2021 {
     
     float getFreqMHz() const { return freqMHz; }
 
-    bool getRxBoostedGainMode() const { return _rx_boosted; }
+    bool isHighFreqPath() const { return freqMHz > RADIOLIB_LR2021_LF_CUTOFF_FREQ; }
+
+    int16_t setRxBoostedGainMode(uint8_t level) {
+      uint8_t& applied = isHighFreqPath() ? _rx_gain_hf : _rx_gain_lf;
+      int16_t status = LR2021::setRxBoostedGainMode(level);
+      if (status == RADIOLIB_ERR_NONE) {
+        applied = level;
+      } else {
+        // RadioLib caches the level before sending it; restore it so the next startReceive keeps the old gain
+        LR2021::setRxBoostedGainMode(applied);
+      }
+      return status;
+    }
+
+    bool getRxBoostedGainMode() const { return (isHighFreqPath() ? _rx_gain_hf : _rx_gain_lf) != 0; }
 
     int16_t startReceive() override {
       // include the PREAMBLE_DETECTED irq bit in reported flags

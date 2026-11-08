@@ -86,6 +86,7 @@ public:
 
   uint8_t getSpreadingFactor() const override { return chip()->getSpreadingFactor(); }
   
+  bool supportsRxBoostedGain() const override { return true; }
   bool setRxBoostedGainMode(bool en) override {
     chip()->standby(); // LR2021 must be in standby to accept setRxBoostedGainMode
     int16_t status = chip()->setRxBoostedGainMode(en ? LR2021_RX_BOOST_LEVEL: 0);

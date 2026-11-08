@@ -85,6 +85,7 @@ public:
   // happen to run at that factor, and it silently stays wrong.
   float packetScore(float snr, int packet_len) override { return packetScoreInt(snr, getSpreadingFactor(), packet_len); }
 
+  virtual bool supportsRxBoostedGain() const { return false; }
   virtual bool setRxBoostedGainMode(bool) { return false; }
   virtual bool getRxBoostedGainMode() const { return false; }
   
