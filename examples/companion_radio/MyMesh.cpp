@@ -1032,9 +1032,9 @@ static size_t pathByteLen(uint8_t path_len) {
 }
 
 // One row per command: the code, the shortest frame the command accepts (code byte
-// included), and its handler. A frame below the minimum, a code without a row, and
-// a handler that returns false ("not this command") all get the answer the if chain
-// this table replaced gave them: ERR_CODE_UNSUPPORTED_CMD.
+// included), and its handler. A frame below the minimum gets ERR_CODE_ILLEGAL_ARG
+// (bad length). A code without a row, and a handler that returns false ("not this
+// command", a sub command this firmware does not know), get ERR_CODE_UNSUPPORTED_CMD.
 const MyMesh::CmdHandler MyMesh::CMD_TABLE[] = {
   { CMD_DEVICE_QUERY,            2,                                                 &MyMesh::cmdDeviceQuery },
   { CMD_APP_START,               8,                                                 &MyMesh::cmdAppStart },
@@ -1100,7 +1100,11 @@ const MyMesh::CmdHandler MyMesh::CMD_TABLE[] = {
 void MyMesh::handleCmdFrame(size_t len) {
   for (const CmdHandler& c : CMD_TABLE) {
     if (c.code != cmd_frame[0]) continue;
-    if (len >= c.min_len && (this->*c.handle)(len)) return;
+    if (len < c.min_len) {                 // a known command, too short: the frame is wrong
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+      return;
+    }
+    if ((this->*c.handle)(len)) return;    // false: "not this command", answered below
     break;
   }
   writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);

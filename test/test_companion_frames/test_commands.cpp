@@ -6,8 +6,10 @@
 //
 // Expectations describe the firmware as it is (the current upstream behaviour plus
 // the length guards of docs/fixes/companion-cmd-frame-min-len.md and
-// docs/fixes/companion-channel-txt-min-len.md), including what looks odd; such
-// places say so.
+// docs/fixes/companion-channel-txt-min-len.md, and step 10d: a known command whose
+// frame is shorter than its minimum answers ILLEGAL_ARG, a code that is not a
+// command and a sub command the firmware does not know answer UNSUPPORTED_CMD),
+// including what looks odd; such places say so.
 
 #include "CompanionHarness.h"
 
@@ -141,12 +143,12 @@ TEST_F(CommandTest, AppStartReportsTheNodeAndItsRadio) {
 TEST_F(CommandTest, AppStartNeedsTheReservedBytes) {
   Bytes f = {APP_START, 3};
   putFill(f, 6, 0);
-  EXPECT_EQ(h.reply(prefix(f, 7)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 7)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f)[0], RESP_SELF_INFO);              // 8 bytes, no app name
 }
 
 TEST_F(CommandTest, DeviceQueryReportsTheFirmware) {
-  EXPECT_EQ(h.reply({DEVICE_QUERY}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({DEVICE_QUERY}), err(ERR_ILLEGAL_ARG));
   Bytes r = h.reply({DEVICE_QUERY, 3});
   ASSERT_EQ(r.size(), 82u);
   EXPECT_EQ(r[0], RESP_DEVICE_INFO);
@@ -169,7 +171,7 @@ TEST_F(CommandTest, PrivateKeyExportAndImport) {
 
   Bytes f = {IMPORT_PRIVATE_KEY};
   putFill(f, 64, 0x11);
-  EXPECT_EQ(h.reply(prefix(f, 64)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 64)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), OK);
   Bytes after = h.reply({EXPORT_PRIVATE_KEY});
   EXPECT_EQ(after[1], 0x11);
@@ -178,7 +180,7 @@ TEST_F(CommandTest, PrivateKeyExportAndImport) {
 }
 
 TEST_F(CommandTest, SetAdvertNameIsStoredAndTruncated) {
-  EXPECT_EQ(h.reply({SET_ADVERT_NAME}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({SET_ADVERT_NAME}), err(ERR_ILLEGAL_ARG));
   Bytes f = {SET_ADVERT_NAME};
   putStr(f, "a-name-that-is-longer-than-thirty-one-bytes");
   EXPECT_EQ(h.reply(f), OK);
@@ -190,7 +192,7 @@ TEST_F(CommandTest, SetAdvertLatLon) {
   Bytes f = {SET_ADVERT_LATLON};
   putI32(f, 52500000);
   putI32(f, -13400000);
-  EXPECT_EQ(h.reply(prefix(f, 8)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 8)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), OK);
   Bytes r = selfInfo();
   EXPECT_EQ((int32_t)u32At(r, 36), 52500000);
@@ -205,7 +207,7 @@ TEST_F(CommandTest, SetAdvertLatLon) {
 TEST_F(CommandTest, DevicePin) {
   Bytes f = {SET_DEVICE_PIN};
   putU32(f, 123456);
-  EXPECT_EQ(h.reply(prefix(f, 4)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 4)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), OK);
   EXPECT_EQ(u32At(h.reply({DEVICE_QUERY, 3}), 4), 123456u);
 
@@ -224,7 +226,7 @@ TEST_F(CommandTest, DeviceTime) {
 
   Bytes f = {SET_DEVICE_TIME};
   putU32(f, RTC0 + 60);
-  EXPECT_EQ(h.reply(prefix(f, 4)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 4)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), OK);
   EXPECT_EQ(rtc_clock.now, RTC0 + 60);
 
@@ -249,7 +251,7 @@ Bytes radioParams(uint32_t freq, uint32_t bw, uint8_t sf, uint8_t cr, int repeat
 TEST_F(CommandTest, SetRadioParams) {
   Bytes f = radioParams(869525, 250000, 11, 5);
   int at_boot = radio_driver.set_params_calls;               // begin() applies the stored ones
-  EXPECT_EQ(h.reply(prefix(f, 10)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 10)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(radio_driver.set_params_calls, at_boot);
   EXPECT_EQ(h.reply(f), OK);
   EXPECT_FLOAT_EQ(radio_driver.freq, 869.525f);
@@ -269,7 +271,7 @@ TEST_F(CommandTest, SetRadioParams) {
 }
 
 TEST_F(CommandTest, SetTxPower) {
-  EXPECT_EQ(h.reply({SET_RADIO_TX_POWER}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({SET_RADIO_TX_POWER}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SET_RADIO_TX_POWER, 10}), OK);
   EXPECT_EQ(radio_driver.tx_power, 10);
   EXPECT_EQ(selfInfo()[2], 10);
@@ -288,7 +290,7 @@ TEST_F(CommandTest, TuningParamsRoundTrip) {
   Bytes f = {SET_TUNING_PARAMS};
   putU32(f, 2500);
   putU32(f, 3000);
-  EXPECT_EQ(h.reply(prefix(f, 8)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 8)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), OK);
   r = h.reply({GET_TUNING_PARAMS});
   EXPECT_EQ(u32At(r, 1), 2500u);
@@ -296,7 +298,7 @@ TEST_F(CommandTest, TuningParamsRoundTrip) {
 }
 
 TEST_F(CommandTest, SetOtherParamsHasOptionalTail) {
-  EXPECT_EQ(h.reply({SET_OTHER_PARAMS}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({SET_OTHER_PARAMS}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SET_OTHER_PARAMS, 1}), OK);
   Bytes r = selfInfo();
   EXPECT_EQ(r[47], 1);                                   // manual_add_contacts
@@ -311,7 +313,7 @@ TEST_F(CommandTest, SetOtherParamsHasOptionalTail) {
 }
 
 TEST_F(CommandTest, AutoAddConfig) {
-  EXPECT_EQ(h.reply({SET_AUTOADD_CONFIG}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({SET_AUTOADD_CONFIG}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SET_AUTOADD_CONFIG, 0x1E, 100}), OK);
   EXPECT_EQ(h.reply({GET_AUTOADD_CONFIG}), Bytes({RESP_AUTOADD_CONFIG, 0x1E, 64}));
   EXPECT_EQ(h.reply({SET_AUTOADD_CONFIG, 0x02}), OK);  // max hops stays
@@ -319,7 +321,7 @@ TEST_F(CommandTest, AutoAddConfig) {
 }
 
 TEST_F(CommandTest, PathHashMode) {
-  EXPECT_EQ(h.reply({SET_PATH_HASH_MODE, 0}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({SET_PATH_HASH_MODE, 0}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SET_PATH_HASH_MODE, 1, 2}), err(ERR_UNSUPPORTED_CMD));
   EXPECT_EQ(h.reply({SET_PATH_HASH_MODE, 0, 3}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SET_PATH_HASH_MODE, 0, 2}), OK);
@@ -336,7 +338,7 @@ TEST_F(CommandTest, AllowedRepeatFrequencies) {
 }
 
 TEST_F(CommandTest, Stats) {
-  EXPECT_EQ(h.reply({GET_STATS}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({GET_STATS}), err(ERR_ILLEGAL_ARG));
   Bytes core = h.reply({GET_STATS, 0});
   ASSERT_EQ(core.size(), 11u);
   EXPECT_EQ(core[0], RESP_STATS);
@@ -363,7 +365,7 @@ TEST_F(CommandTest, CustomVars) {
   EXPECT_EQ(h.reply({GET_CUSTOM_VARS}), Bytes({RESP_CUSTOM_VARS}));
   Bytes f = {SET_CUSTOM_VAR};
   putStr(f, "a:1");
-  EXPECT_EQ(h.reply(prefix(f, 3)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 3)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), OK);                             // the mock accepts any name
   Bytes nocolon = {SET_CUSTOM_VAR};
   putStr(nocolon, "abc");
@@ -375,7 +377,7 @@ TEST_F(CommandTest, CustomVars) {
 TEST_F(CommandTest, AddContactNeedsEveryMandatoryField) {
   Bytes f = contactFrame(peerKey(), "peer", 0xFF, false);
   ASSERT_EQ(f.size(), 136u);
-  EXPECT_EQ(h.reply(prefix(f, 135)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 135)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), OK);
 }
 
@@ -390,7 +392,7 @@ TEST_F(CommandTest, ContactRoundTrip) {
   sent[0] = RESP_CONTACT;
   EXPECT_EQ(r, sent);
 
-  EXPECT_EQ(h.reply(prefix(withKey(GET_CONTACT_BY_KEY, peerKey()), 32)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(withKey(GET_CONTACT_BY_KEY, peerKey()), 32)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(withKey(GET_CONTACT_BY_KEY, peerKey(0x50))), err(ERR_NOT_FOUND));
 }
 
@@ -434,12 +436,12 @@ TEST_F(CommandTest, ContactListingSince) {
 
 TEST_F(CommandTest, ResetPathAndRemove) {
   addPeer(peerKey(), 0);
-  EXPECT_EQ(h.reply(prefix(withKey(RESET_PATH, peerKey()), 32)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(withKey(RESET_PATH, peerKey()), 32)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(withKey(RESET_PATH, peerKey())), OK);
   EXPECT_EQ(h.reply(withKey(GET_CONTACT_BY_KEY, peerKey()))[35], 0xFF);
   EXPECT_EQ(h.reply(withKey(RESET_PATH, peerKey(0x50))), err(ERR_NOT_FOUND));
 
-  EXPECT_EQ(h.reply(prefix(withKey(REMOVE_CONTACT, peerKey()), 32)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(withKey(REMOVE_CONTACT, peerKey()), 32)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(withKey(REMOVE_CONTACT, peerKey())), OK);
   EXPECT_EQ(h.reply(withKey(REMOVE_CONTACT, peerKey())), err(ERR_NOT_FOUND));
   EXPECT_EQ(h.reply(withKey(GET_CONTACT_BY_KEY, peerKey())), err(ERR_NOT_FOUND));
@@ -462,7 +464,7 @@ TEST_F(CommandTest, AZeroKeyNamesNoContact) {
 
 TEST_F(CommandTest, ShareContact) {
   addPeer();
-  EXPECT_EQ(h.reply(prefix(withKey(SHARE_CONTACT, peerKey()), 32)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(withKey(SHARE_CONTACT, peerKey()), 32)), err(ERR_ILLEGAL_ARG));
   // Sharing resends the contact's stored advert; one added by hand has none, which
   // the firmware reports as "unable to send".
   EXPECT_EQ(h.reply(withKey(SHARE_CONTACT, peerKey())), err(ERR_TABLE_FULL));
@@ -480,7 +482,7 @@ TEST_F(CommandTest, ExportSelfThenSendItAsRawPacket) {
   // The advert is a whole packet, so the raw packet command takes it as is.
   Bytes raw = {SEND_RAW_PACKET, 1};
   put(raw, &r[1], r.size() - 1);
-  EXPECT_EQ(h.reply(prefix(raw, 3)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(raw, 3)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(raw), OK);
   EXPECT_GT(h.mesh().outboundTotal(), 0);
   EXPECT_EQ(h.reply({SEND_RAW_PACKET, 1, 0xFF, 0xFF}), err(ERR_ILLEGAL_ARG));
@@ -538,7 +540,7 @@ TEST_F(CommandTest, ExportAndImportAContact) {
   // Importing needs more than 98 bytes; a packet that is not an advert is refused.
   Bytes f = {IMPORT_CONTACT};
   putFill(f, 97, 0);
-  EXPECT_EQ(h.reply(f), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(f), err(ERR_ILLEGAL_ARG));
   putU8(f, 0);
   EXPECT_EQ(h.reply(f), err(ERR_ILLEGAL_ARG));
 }
@@ -546,7 +548,7 @@ TEST_F(CommandTest, ExportAndImportAContact) {
 TEST_F(CommandTest, AdvertPath) {
   Bytes f = {GET_ADVERT_PATH, 0};
   put(f, peerKey().data(), PUB_KEY_SIZE);
-  EXPECT_EQ(h.reply(prefix(f, 33)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 33)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), err(ERR_NOT_FOUND));
 }
 
@@ -563,7 +565,7 @@ Bytes textMsg(uint8_t txt_type, const Bytes& key, const char* text) {
 TEST_F(CommandTest, SendTextMessage) {
   addPeer();
   Bytes f = textMsg(0, peerKey(), "hi");
-  EXPECT_EQ(h.reply(prefix(f, 13)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 13)), err(ERR_ILLEGAL_ARG));
   Bytes r = h.reply(f);
   ASSERT_EQ(r.size(), 10u);
   EXPECT_EQ(r[0], RESP_SENT);
@@ -585,7 +587,7 @@ Bytes channelMsg(uint8_t txt_type, uint8_t idx, const char* text) {
 }
 
 TEST_F(CommandTest, SendChannelText) {
-  EXPECT_EQ(h.reply(prefix(channelMsg(0, 0, ""), 6)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(channelMsg(0, 0, ""), 6)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(channelMsg(0, 0, "")), OK);
   EXPECT_EQ(h.reply(channelMsg(0, 0, "hello")), OK);
   EXPECT_GT(h.mesh().outboundTotal(), 0);
@@ -602,7 +604,8 @@ Bytes channelData(uint8_t idx, uint8_t path_len, uint16_t data_type, size_t payl
 }
 
 TEST_F(CommandTest, SendChannelData) {
-  // This command answers a short frame with ILLEGAL_ARG, not UNSUPPORTED_CMD.
+  // Its table row has a minimum of 1: a short frame gets ILLEGAL_ARG from the
+  // handler's own length test, not from the dispatcher.
   EXPECT_EQ(h.reply({SEND_CHANNEL_DATA, 0, 0xFF}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SEND_CHANNEL_DATA, 0, 0xFF, 0x34}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(channelData(0, 0xFF, 0x1234, 0)), OK);
@@ -614,7 +617,7 @@ TEST_F(CommandTest, SendChannelData) {
 
 TEST_F(CommandTest, SendRawData) {
   Bytes f = {SEND_RAW_DATA, 1, 0x44, 1, 2, 3, 4};
-  EXPECT_EQ(h.reply(prefix(f, 5)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 5)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(prefix(f, 6)), err(ERR_ILLEGAL_ARG));   // payload below 4
   EXPECT_EQ(h.reply(f), OK);
   EXPECT_EQ(h.reply({SEND_RAW_DATA, 0xFF, 1, 2, 3, 4}), err(ERR_UNSUPPORTED_CMD));  // flood
@@ -626,22 +629,22 @@ TEST_F(CommandTest, RequestsToAPeer) {
   addPeer();
   Bytes login = withKey(SEND_LOGIN, peerKey());
   putStr(login, "pw");
-  EXPECT_EQ(h.reply(prefix(login, 32)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(login, 32)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(login)[0], RESP_SENT);
   EXPECT_EQ(h.reply(withKey(SEND_LOGIN, peerKey(0x50))), err(ERR_NOT_FOUND));
 
-  EXPECT_EQ(h.reply(prefix(withKey(SEND_STATUS_REQ, peerKey()), 32)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(withKey(SEND_STATUS_REQ, peerKey()), 32)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(withKey(SEND_STATUS_REQ, peerKey()))[0], RESP_SENT);
   EXPECT_EQ(h.reply(withKey(SEND_STATUS_REQ, peerKey(0x50))), err(ERR_NOT_FOUND));
 
   Bytes bin = withKey(SEND_BINARY_REQ, peerKey());
-  EXPECT_EQ(h.reply(bin), err(ERR_UNSUPPORTED_CMD));         // needs at least one data byte
+  EXPECT_EQ(h.reply(bin), err(ERR_ILLEGAL_ARG));         // needs at least one data byte
   putU8(bin, 0x07);
   EXPECT_EQ(h.reply(bin)[0], RESP_SENT);
 
   Bytes disc = {SEND_PATH_DISCOVERY_REQ, 0};
   put(disc, peerKey().data(), PUB_KEY_SIZE);
-  EXPECT_EQ(h.reply(prefix(disc, 33)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(disc, 33)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(disc)[0], RESP_SENT);
   disc[1] = 1;
   EXPECT_EQ(h.reply(disc), err(ERR_UNSUPPORTED_CMD));
@@ -661,12 +664,12 @@ TEST_F(CommandTest, TelemetryHasTwoForms) {
   // Between the two forms the frame matches neither.
   EXPECT_EQ(h.reply(prefix(peer, 5)), err(ERR_UNSUPPORTED_CMD));
   EXPECT_EQ(h.reply(prefix(peer, 35)), err(ERR_UNSUPPORTED_CMD));
-  EXPECT_EQ(h.reply(prefix(peer, 3)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(peer, 3)), err(ERR_ILLEGAL_ARG));
 }
 
 TEST_F(CommandTest, AnonRequestAddsATransientContact) {
   Bytes f = withKey(SEND_ANON_REQ, peerKey(0x50));
-  EXPECT_EQ(h.reply(f), err(ERR_UNSUPPORTED_CMD));           // needs at least one data byte
+  EXPECT_EQ(h.reply(f), err(ERR_ILLEGAL_ARG));           // needs at least one data byte
   putU8(f, 0x01);
   Bytes r = h.reply(f);
   ASSERT_EQ(r.size(), 10u);
@@ -676,9 +679,9 @@ TEST_F(CommandTest, AnonRequestAddsATransientContact) {
 }
 
 TEST_F(CommandTest, ConnectionsAndLogout) {
-  EXPECT_EQ(h.reply(prefix(withKey(HAS_CONNECTION, peerKey()), 32)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(withKey(HAS_CONNECTION, peerKey()), 32)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(withKey(HAS_CONNECTION, peerKey())), err(ERR_NOT_FOUND));
-  EXPECT_EQ(h.reply(prefix(withKey(LOGOUT, peerKey()), 32)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(withKey(LOGOUT, peerKey()), 32)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(withKey(LOGOUT, peerKey())), OK);
 }
 
@@ -687,7 +690,7 @@ TEST_F(CommandTest, TracePath) {
   putU32(f, 0x11223344);
   putU32(f, 0);
   putU8(f, 0);                                               // one byte hashes
-  EXPECT_EQ(h.reply(f), err(ERR_UNSUPPORTED_CMD));           // no path
+  EXPECT_EQ(h.reply(f), err(ERR_ILLEGAL_ARG));           // no path
   putU8(f, 0x7A);
   Bytes r = h.reply(f);
   ASSERT_EQ(r.size(), 10u);
@@ -698,7 +701,7 @@ TEST_F(CommandTest, TracePath) {
 }
 
 TEST_F(CommandTest, ControlData) {
-  EXPECT_EQ(h.reply({SEND_CONTROL_DATA}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({SEND_CONTROL_DATA}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SEND_CONTROL_DATA, 0x10}), err(ERR_UNSUPPORTED_CMD));   // high bit needed
   EXPECT_EQ(h.reply({SEND_CONTROL_DATA, 0x80, 1, 2}), OK);
   EXPECT_GT(h.mesh().outboundTotal(), 0);
@@ -724,14 +727,14 @@ Bytes setChannel(uint8_t idx, const char* name, uint8_t secret_byte) {
 }
 
 TEST_F(CommandTest, Channels) {
-  EXPECT_EQ(h.reply({GET_CHANNEL}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({GET_CHANNEL}), err(ERR_ILLEGAL_ARG));
   Bytes pub = h.reply({GET_CHANNEL, 0});
   ASSERT_EQ(pub.size(), 50u);
   EXPECT_EQ(pub[0], RESP_CHANNEL_INFO);
   EXPECT_EQ(std::string((const char*)&pub[2]), "Public");
 
   Bytes f = setChannel(1, "#test", 0x5C);
-  EXPECT_EQ(h.reply(prefix(f, 49)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 49)), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply(f), OK);
   Bytes back = h.reply({GET_CHANNEL, 1});
   f[0] = RESP_CHANNEL_INFO;
@@ -745,7 +748,7 @@ TEST_F(CommandTest, Channels) {
 }
 
 TEST_F(CommandTest, FloodScopeKey) {
-  EXPECT_EQ(h.reply({SET_FLOOD_SCOPE_KEY}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({SET_FLOOD_SCOPE_KEY}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SET_FLOOD_SCOPE_KEY, 0}), OK);
   Bytes f = {SET_FLOOD_SCOPE_KEY, 0};
   putFill(f, 16, 0x42);
@@ -780,7 +783,7 @@ TEST_F(CommandTest, Signing) {
   ASSERT_EQ(start.size(), 6u);
   EXPECT_EQ(start[0], RESP_SIGN_START);
   EXPECT_EQ(u32At(start, 2), 8u * 1024);
-  EXPECT_EQ(h.reply({SIGN_DATA}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({SIGN_DATA}), err(ERR_ILLEGAL_ARG));
   EXPECT_EQ(h.reply({SIGN_DATA, 1, 2, 3}), OK);
   Bytes sig = h.reply({SIGN_FINISH});
   ASSERT_EQ(sig.size(), 1u + SIGNATURE_SIZE);
@@ -791,7 +794,7 @@ TEST_F(CommandTest, Signing) {
 // ---- CLI, reboot, reset ----------------------------------------------------
 
 TEST_F(CommandTest, RunCliCommand) {
-  EXPECT_EQ(h.reply({RUN_CLI_COMMAND, 'x'}), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply({RUN_CLI_COMMAND, 'x'}), err(ERR_ILLEGAL_ARG));
   Bytes f = {RUN_CLI_COMMAND};
   putStr(f, "get name");
   Bytes r = h.reply(f);
@@ -802,7 +805,7 @@ TEST_F(CommandTest, RunCliCommand) {
 TEST_F(CommandTest, RebootNeedsTheWord) {
   Bytes f = {REBOOT};
   putStr(f, "reboot");
-  EXPECT_EQ(h.reply(prefix(f, 6)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 6)), err(ERR_ILLEGAL_ARG));
   Bytes other = {REBOOT};
   putStr(other, "rebooX");
   EXPECT_EQ(h.reply(other), err(ERR_UNSUPPORTED_CMD));
@@ -814,7 +817,7 @@ TEST_F(CommandTest, RebootNeedsTheWord) {
 TEST_F(CommandTest, FactoryResetNeedsTheWord) {
   Bytes f = {FACTORY_RESET};
   putStr(f, "reset");
-  EXPECT_EQ(h.reply(prefix(f, 5)), err(ERR_UNSUPPORTED_CMD));
+  EXPECT_EQ(h.reply(prefix(f, 5)), err(ERR_ILLEGAL_ARG));
   EXPECT_FALSE(h.fs.files.empty());
   EXPECT_EQ(h.reply(f), OK);
   EXPECT_TRUE(h.fs.files.empty());

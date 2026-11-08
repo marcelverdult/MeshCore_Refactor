@@ -1,8 +1,10 @@
 # 0010: A command table for the companion protocol
 
-Status: steps 10a (host harness and characterization), 10b (the table) and 10c
-(a bounded frame reader) ready for review; 10d is a proposal, see "Step 10d".
-Behaviour change: none.
+Status: steps 10a (host harness and characterization), 10b (the table), 10c (a
+bounded frame reader) and 10d (a too short frame answers `ILLEGAL_ARG`) ready for
+review.
+Behaviour change: none in 10a to 10c; 10d changes the error code of a too short
+frame, see "Step 10d".
 
 ## Context
 
@@ -202,7 +204,7 @@ to member function is 8 bytes, so a row is 12).
 | 10a | Host harness for `MyMesh.cpp`, frame sweep, per command tests | none |
 | 10b | `CMD_TABLE` and one method per command, bodies moved unchanged | none, the sweep must stay byte identical |
 | 10c | A bounded frame reader (`FrameReader r(cmd_frame, len); r.u8(); r.u32(); r.bytes(n)`) in the handlers, replacing the hand counted offsets | none; a reader that runs out reports it instead of reading the tail |
-| 10d | Optional, a protocol change: answer a too short frame with `ILLEGAL_ARG` | visible to apps, needs its own proposal |
+| 10d | A protocol change: answer a too short frame with `ILLEGAL_ARG` | visible to apps: code 6 instead of code 1 for a frame below its row's minimum |
 
 10b and 10c are kept apart because 10b is a pure move whose diff can be read with
 `git diff --color-moved`, while 10c rewrites the parsing in every handler and
@@ -749,7 +751,8 @@ again against the handlers of `68e0fcdc` after the step (60 of 60 pass there too
 - `OneByteBelowEachMinimum`: for each of the 44 rows with a minimum above 1, the
   catalog frame at the minimum minus one byte answers `UNSUPPORTED`
   (`SEND_CHANNEL_DATA`: `ILLEGAL_ARG`) behind every tail and queues nothing; and the
-  catalog has a frame of exactly each minimum.
+  catalog has a frame of exactly each minimum. (Step 10d replaced it: below the
+  minimum the answer is now `ILLEGAL_ARG`.)
 - `OnlyAnAnnouncedPathRunsOut`: every code 0 to 69 at every length with six
   fills, and every catalog frame; the reader may run out only for an announced
   path in `SEND_RAW_DATA` and `SEND_CHANNEL_DATA`.
@@ -957,79 +960,105 @@ Each needs its own fix and proposal; 10c leaves the code as it is.
 4. **`SEND_TRACE_PATH`'s upper bound is dead code.** `len - 10 >= MAX_PACKET_PAYLOAD - 5`
    needs 189 bytes; a frame has at most 176.
 
-## Step 10d: answer a too short frame with `ILLEGAL_ARG` (proposal)
+## Step 10d: answer a too short frame with `ILLEGAL_ARG` (built)
 
-Status: proposal, not built. Behaviour change: yes, visible to apps.
+Status: built on 08.11.2026 on top of `integration` (`ef708534`), after Marcel's go.
+Behaviour change: yes, visible to apps.
 
-### What changes
+### What changed
 
-One line in `MyMesh::handleCmdFrame()`: a known command whose frame is shorter
-than its row's minimum gets `ERR_CODE_ILLEGAL_ARG` (6) instead of
-`ERR_CODE_UNSUPPORTED_CMD` (1).
+`MyMesh::handleCmdFrame()` gets a block of four lines. A known command whose frame
+is shorter than its row's minimum answers `ERR_CODE_ILLEGAL_ARG` (6) instead of
+`ERR_CODE_UNSUPPORTED_CMD` (1):
 
 ```c
 for (const CmdHandler& c : CMD_TABLE) {
   if (c.code != cmd_frame[0]) continue;
-  if (len < c.min_len) { writeErrFrame(ERR_CODE_ILLEGAL_ARG); return; }
-  if ((this->*c.handle)(len)) return;
+  if (len < c.min_len) {                 // a known command, too short: the frame is wrong
+    writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    return;
+  }
+  if ((this->*c.handle)(len)) return;    // false: "not this command", answered below
   break;
 }
 writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
 ```
 
-Unchanged:
+The proposal called this one line; the built change is the same with the early
+return spelled out, and the comment above `CMD_TABLE` follows it.
+
+Unchanged, and pinned by tests:
 
 - An unknown code still gets `UNSUPPORTED_CMD`. Apps that detect an older
-  firmware by sending a command it does not know see the same answer.
+  firmware by sending a command it does not know see the same answer
+  (`CommandTest.UnknownCodes`).
 - A handler that returns `false` still gets `UNSUPPORTED_CMD`. These are the sub
   commands a firmware does not know, for example `SET_CHANNEL` with 66 bytes or
   more, `SEND_TELEMETRY_REQ` with 5 to 35 bytes, `SET_FLOOD_SCOPE_KEY` with a
-  byte 1 other than 0 and 1, or `REBOOT` without `reboot`.
+  byte 1 other than 0 and 1, or `REBOOT` without `reboot`. The assertions in
+  `test_commands.cpp` that still expect 1 are these and the unknown codes.
 - The 16 rows with a minimum of 1 cannot be too short.
+- `SEND_CHANNEL_DATA` has a minimum of 1 in its row and answers `ILLEGAL_ARG` below
+  4 bytes from its own length test, as before
+  (`FrameBounds.SendChannelDataKeepsItsOwnLengthTest`).
 
-Counted on f1d9c42e: 59 rows in `CMD_TABLE`, 43 with a minimum above 1. These
-are the 43 codes the inventory lists as "unsupported" under "Short".
-`SEND_CHANNEL_DATA` already answers `ILLEGAL_ARG` from its own length check.
+Counted by script on `ef708534`: 59 rows in `CMD_TABLE`, 43 with a minimum above 1,
+16 with a minimum of 1. The 43 are the codes whose short frames the sweep recorded
+as `0101`.
 
 ### Why
 
 - `docs/companion_protocol.md` ("Error Codes") already describes code 6 as
   "Invalid argument (bad length, out-of-range value, reserved field, etc.)" and
   code 1 as "Unknown or unsupported command byte / sub-command". The firmware
-  answers a bad length with code 1. 10d makes the firmware match its own
-  documentation.
-- An app developer who sends a frame one byte short today is told the firmware
-  does not know the command. With 10d the answer names the cause.
-- Since 10b the minimum is data in the table, so the answer can come from one
-  place instead of 43 branches.
+  answered a bad length with code 1. With 10d it matches its own documentation, so
+  that file needed no change.
+- An app developer who sends a frame one byte short was told the firmware does not
+  know the command. Now the answer names the cause.
+- Since 10b the minimum is data in the table, so the answer comes from one place
+  instead of 43 branches.
 
 ### Effect on clients
 
-Read on 04.11.2026, only the clients below; the MeshCore apps for Android and
-iOS and the web client were not checked.
+Read on 04.11.2026 (meshcore.js, meshcore_py, meshcore-cli, KiekR) and on
+08.11.2026 (the rest), from public sources only: nothing was downloaded, cloned or
+run. The statements hold for the commits named; none was tested against a firmware.
 
-| Client | Reads the code | Treats 1 and 6 differently | Feature detection through code 1 |
+| Client | Reads the code | Treats 1 and 6 differently | Sends a command too short |
 |---|---|---|---|
-| meshcore.js 1.15.0 (`src/connection/connection.js`) | yes, passed on as `errCode` | no, no caller reads it | no |
-| meshcore_py, GitHub HEAD (`src/meshcore/reader.py`) | yes, passed on in the event payload | no | no |
-| meshcore-cli, GitHub HEAD (`src/meshcore_cli/meshcore_cli.py`) | yes | yes | yes, `set_flood_scope`: code 1 sets `has_scope = False` |
-| KiekR (`core-lib/src/companion/session/`) | yes | only for the wording (6 out of range, 1 unsupported) | autoadd config and custom vars treat any error as refused, whatever the code |
+| meshcore.js 1.15.0 (`src/connection/connection.js`) | yes, passed on as `errCode` | no, no caller reads it | not checked |
+| meshcore_py, GitHub HEAD (`src/meshcore/reader.py`) | yes, in the event payload | no | not checked |
+| meshcore-cli, GitHub HEAD (`src/meshcore_cli/meshcore_cli.py`) | yes | yes, `set_flood_scope`: code 1 sets `has_scope = False` | no, see below |
+| KiekR (`core-lib/src/companion/session/`) | yes | only the wording (6 out of range, 1 unsupported); autoadd config and custom vars treat any error as refused | no |
+| meshcore-open `f81f2686` | yes, as `FirmwareCommandException(errCode)` | only code 2 (`NOT_FOUND`) for get channel | an empty advert name sends 1 byte, the minimum is 2: the answer changes from 1 to 6, both are a generic error |
+| MeshCoreOne `6aa5385b` | yes, as `MeshCoreError.deviceError` | 6 only in the CLI tool's custom variable path, where the frame always has at least 4 bytes; retry codes are 3, 2 and 10 | none found |
+| meshcore-web `ea624cf7` (last push 05.05.2025) | no, the app only shows alerts | no | frame lengths come from meshcore.js 1.2.0, which was not read |
+| meshcore-sar `a96bf8e6` (meshcore_client `0bb339f6`) | yes | yes, by text: "unsupported command" for `GET_AUTOADD_CONFIG` (code 59, minimum 1, never short) clears the feature flag | `SET_RADIO_PARAMS` is built with 9 or 10 bytes instead of 11 or more: it fails today with code 1 and will with code 6, the app shows the text |
+| mesh-client `5dabc5ee` | yes, codes 2 and 3 and the raw frame | yes: code 1 on a `GET_AUTOADD_CONFIG` frame means unsupported (code 59, minimum 1, unaffected) | an empty room post is 13 bytes, the minimum is 14: 1 becomes 6; whether the UI lets an empty post through was not found |
 
-The one detection through code 1 (meshcore-cli `set_flood_scope`) is not
-affected: meshcore_py's `set_flood_scope()` (`commands/messaging.py`) always
-sends 2 bytes (`[code, 0x01]`) or 18 (`[code, 0x00] + key`), and the minimum of
+The one detection through code 1 in the first group (meshcore-cli `set_flood_scope`)
+is not affected: meshcore_py's `set_flood_scope()` always sends 2 bytes
+(`[code, 0x01]`) or 18 (`[code, 0x00] + key`), and the minimum of
 `SET_FLOOD_SCOPE_KEY` is 2. An older firmware without the command still answers
-code 1, because the code is unknown there.
+code 1, because the code is unknown there. Where clients read code 1 as "the
+firmware does not know the command" (meshcore-sar, mesh-client), a short frame was
+a false alarm before; now only an unknown code gives it.
 
-A client is affected only if it sends a known command too short and relies on
-code 1 for that. None of the clients above does. KiekR has a host test that
-expects `ERR_UNSUPPORTED_CMD` for a CLI frame under 3 bytes; that test would
-change with 10d, the app's behaviour would not.
+The check read the protocol, builder and error paths of each repository, found by
+file tree and search; it did not read every file. "No branch on code 1 found" means
+not found in the files read.
+
+Not checked: the official MeshCore apps for Android and iOS. No public source was
+found: github.com/liamcottle (41 public repositories) and github.com/meshcore-dev
+(11) hold the firmware, meshcore.js, meshcore_py, meshcore-cli, meshcore-ha and web
+tools, but no app. Private repositories are not visible. KiekR has a host test that
+expects `ERR_UNSUPPORTED_CMD` for a CLI frame under 3 bytes; that test changes with
+10d, the app's behaviour does not.
 
 ### Risks
 
-- Clients not checked here (the MeshCore apps, third party tools) may show a
-  different message or take a different path on code 6. A client that follows
+- The two apps and the third party tools not read here may show a different
+  message or take a different path on code 6. A client that follows
   `docs/companion_protocol.md` already expects code 6 for a bad length.
 - A firmware and an app of different ages: an app that sends a short form of a
   command whose minimum a later firmware raised gets code 6 instead of 1. The
@@ -1037,20 +1066,120 @@ change with 10d, the app's behaviour would not.
   Whether an earlier firmware release accepted a shorter form of a command was
   not checked.
 
-### Verification plan
+### Verification
 
-- Host: in the frame sweep of 10a (`frame_sweep.golden`, one line per code,
-  fill and length range, for example `0d 00 1-32: 0101`) exactly the length
-  ranges below the minimum of the 43 codes change, from `0101` to `0106`; every
-  other line and every packet and file digest stays the same. The golden file is regenerated in the
-  same commit and its diff is read line by line.
-- A test per row: a frame of `min_len - 1` bytes answers code 6, a frame of
-  `min_len` bytes answers what it answers today.
-- Mutation: with the old line back, the new tests fail.
-- Builds: the companion matrix of 10b (nRF52, ESP32, RP2040, STM32), flash
-  compared with integration.
-- Hardware: one companion board, short frames sent over USB serial, answer read
-  back.
+Host tests.
+
+- `native_companion`: 62 test cases before, 65 after. The 43 assertions that
+  expected 1 for a short frame expect 6 (`test_commands.cpp`).
+  `OneByteBelowEachMinimum` is replaced by four tests in `test_frame_bounds.cpp`:
+  - `AFrameBelowTheMinimumAnswersIllegalArg`: for each of the 43 rows, every length
+    from the code byte alone up to one byte short, as the prefix of the catalog
+    frame behind each of four stale tails and as four fills (`00`, `01`, `81`,
+    `ff`). Each answers `{RESP_ERR, ERR_ILLEGAL_ARG}`, queues nothing, does not
+    reboot and leaves the frame reader's overrun counter alone, so no handler ran.
+  - `TheMinimumItselfIsAccepted`: the catalog frame of exactly the minimum gets the
+    reply it got before (a table of the first reply bytes per row; `REBOOT` gets
+    none and reboots).
+  - `SendChannelDataKeepsItsOwnLengthTest`.
+  - `ARawPacketBelowTheMinimumIsRefusedBeforeItTakesAPacket`: `SEND_RAW_PACKET`
+    takes a packet from the pool before it parses the frame, so a frame of 1 to 3
+    bytes answers `TABLE_FULL` with an empty pool unless the row's minimum refuses
+    it first. The catalog gets a frame of exactly 4 bytes for this row.
+- Frame sweep (`frame_sweep.golden`): 225,280 cells, 4,215 changed, all `0101` to
+  `0106`. That is 43 codes, lengths 1 up to the minimum minus one, five passes
+  (sum of the 43 largest changed lengths times five is 4,215). The 1,280 digest
+  lines (packets and files) are identical. Checked with a script that expands the
+  length ranges of the old and the new file and compares cell by cell.
+- All 27 host environments (`[env:native*]` in `platformio.ini`; the CI workflow
+  runs 18, the earlier text of this note said 17), the environment list passed as
+  a bash array: integration 939 test cases (938 passed, 1 skipped), 10d 942 (941
+  passed, 1 skipped). The skipped case is the same on both sides:
+  `ChipWrapperTest/7.SetParamsGivesTheChipItsDeadlines`.
+
+Mutation, on a copy of the tree, shown red:
+
+| Change to the dispatcher | Result |
+|---|---|
+| the old line back (`len >= min && handler`) | 40 red: 37 `CommandTest`, `AFrameBelowTheMinimumAnswersIllegalArg`, `ARawPacketBelowTheMinimumIsRefusedBeforeItTakesAPacket`, the sweep |
+| `len <= c.min_len` instead of `<` | 45 red: 42 `CommandTest`, `TheMinimumItselfIsAccepted`, the pool test, the sweep |
+| a handler that returns `false` answers `ILLEGAL_ARG` | 7 red: 6 `CommandTest`, the sweep |
+| the minimum of one row lowered by one, 43 builds | all 43 detected |
+
+The red counts come from the test binary's own list of failed tests. Of the 43
+single row mutations, 30 fail an assertion: 29 of them in
+`AFrameBelowTheMinimumAnswersIllegalArg` among other tests, `SEND_RAW_PACKET` only
+in the pool test. The other 13 end in a SIGSEGV of the test binary inside an existing
+`CommandTest`: with the minimum lowered, the handler reads a frame it should never
+see (`SEND_CHANNEL_TXT_MSG`, `RESET_PATH`, `REMOVE_CONTACT`, `SHARE_CONTACT`,
+`GET_CONTACT_BY_KEY`, `REBOOT`, `IMPORT_PRIVATE_KEY`, `SEND_LOGIN`,
+`SEND_STATUS_REQ`, `SEND_PATH_DISCOVERY_REQ`, `LOGOUT`, `GET_ADVERT_PATH`,
+`FACTORY_RESET`). A crash stops the run, so the tests behind it do not run in that
+case; the run is red all the same.
+
+One mutant is equivalent apart from an empty pool: `SEND_RAW_PACKET` with the
+minimum 3 instead of 4. The handler answers `ILLEGAL_ARG` itself for fewer than 2
+raw bytes, so only the empty pool shows the difference, and the pool test covers it.
+It is the same kind of finding as `SET_CHANNEL`'s `has(48)` in 10c.
+
+### Builds
+
+18 environments built from `ef708534` and from the code commit `d10dfabf`, each in
+its own worktree with the same toolchain and `SOURCE_DATE_EPOCH=1760000000`. All
+build on both sides. `PicoW_companion_radio_wifi`, listed in the 10c table, does not
+exist in the tree any more (`UnknownEnvNamesError` on both sides); the wifi
+companion environments for the other RP2040 variants are commented out.
+
+| Environment | Flash before | Flash after | Delta | RAM delta |
+|---|---:|---:|---:|---:|
+| `Heltec_v3_companion_radio_ble` | 1,674,545 | 1,674,545 | +0 | +0 |
+| `Heltec_v3_companion_radio_wifi` | 1,110,641 | 1,110,641 | +0 | +0 |
+| `Heltec_v3_companion_radio_usb` | 661,017 | 661,021 | +4 | +0 |
+| `RAK_4631_companion_radio_ble` | 473,272 | 473,288 | +16 | +0 |
+| `RAK_4631_companion_radio_usb` | 464,264 | 464,280 | +16 | +0 |
+| `ProMicro_companion_radio_usb` | 363,724 | 363,740 | +16 | +0 |
+| `LilyGo_T-Echo_companion_radio_ble` | 380,680 | 380,696 | +16 | +0 |
+| `LilyGo_T-Echo_companion_radio_usb` | 373,256 | 373,272 | +16 | +0 |
+| `PicoW_companion_radio_ble` | 700,792 | 700,792 | +0 | +0 |
+| `PicoW_companion_radio_usb` | 529,488 | 529,488 | +0 | +0 |
+| `LilyGo_Tlora_C6_companion_radio_ble_` | 1,447,113 | 1,447,117 | +4 | +0 |
+| `M5Stack_Unit_C6L_companion_radio_usb` | 546,991 | 546,995 | +4 | +0 |
+| `wio-e5-mini_companion_radio_usb` | 213,312 | 213,312 | +0 | +0 |
+| `Xiao_C3_companion_radio_ble` | 1,257,260 | 1,257,264 | +4 | +0 |
+| `Xiao_C3_companion_radio_usb` | 545,200 | 545,204 | +4 | +0 |
+| `Xiao_C3_companion_radio_wifi` | 1,012,626 | 1,012,630 | +4 | +0 |
+| `Heltec_v3_repeater` | 1,175,481 | 1,175,481 | +0 | +0 |
+| `RAK_4631_repeater` | 446,172 | 446,172 | +0 | +0 |
+
+The repeater builds are a control: they do not contain the companion code and do
+not move. Why some companion builds grow by 4 or 16 bytes and others by none was
+not analysed.
+
+### Hardware
+
+One LilyGo T-Echo (nRF52840) over USB serial, on 08.11.2026 from 15:05 to 15:21,
+claimed with `kb device claim` and released afterwards. Two images of
+`LilyGo_T-Echo_companion_radio_usb` with a build marker (see
+`tools/refactoring/README.md`), flashed with `nodetool.py dfu`: `c10d-base` from
+`ef708534` and `c10d-code` from `d10dfabf`.
+
+- `companion_session.py` (39 frames the commands accept) on both images: the two
+  outputs differ in two lines, the `DEVICE_QUERY` reply and the `ver` reply, which
+  carry the marker.
+- `nodetool.py compinfo` (self info and tuning parameters) after each flash:
+  identical.
+- `companion_sweep.py` on the 10d image, against the new golden file: 7,668 frames
+  sent, 7,668 answered as on the host, 0 different, 0 without a reply (5,393
+  compared byte for byte, 2,275 by reply code), 251 codes covered, 846 seconds.
+  1,843 of the frames expect the new `0106`, 1,446 expect `0101` (unknown codes and
+  declining handlers).
+- The board was flashed back to the official 1.18.0 BLE companion image (zip
+  sha256 prefix `6d602a54`). Its pairing with the phone was not checked.
+
+The sweep ran on the 10d image only. The old answer on hardware was not measured
+again; it is the `0101` of the golden file before this step, which the 10c run
+matched on this board. That run sent 6,502 frames; why this one sent 7,668 was not
+analysed (the sweep takes its frames from the golden file).
 
 ### Upstream
 
@@ -1070,5 +1199,16 @@ code 6 each, or 10b first.
   contradicting its documentation.
 - **Code 6 also when a handler returns `false`.** Rejected: those cases are sub
   commands the firmware does not know, which is what code 1 is documented for.
+  The third mutation above is this variant, and seven tests turn red.
 
-Decision: open. Building 10d needs Marcel's go, since it changes what apps see.
+### Not verified
+
+- The official MeshCore apps for Android and iOS: no public source found.
+- meshcore-web's frame lengths (they come from meshcore.js 1.2.0, not read), and
+  the callers of the room post function in mesh-client.
+- Anything in the client check beyond the files read, and any runtime behaviour of
+  a client against a firmware with 10d.
+- Whether an earlier firmware release accepted a shorter form of a command.
+- Why the flash delta is 4 or 16 bytes in some builds and 0 in others.
+
+Decision: built. Marcel gave the go to build 10d on 08.11.2026.
