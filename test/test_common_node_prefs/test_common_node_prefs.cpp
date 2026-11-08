@@ -59,15 +59,19 @@ const char* kPrefsJson =
 }  // namespace
 
 TEST(CommonNodePrefs, WritesTheKnownPrefsJson) {
-  // The v1.18.0 file with the prefs version in front, the only key added since.
+  // The v1.18.0 file with the two keys added since: the prefs version in front, and the
+  // per payload type flood limits behind f_max_adv, empty while no type is limited.
   NodePrefs prefs;
   fillAll(prefs);
   prefs.prefs_version = NODE_PREFS_VERSION;
 
+  std::string expected = "{ver:" + std::to_string(NODE_PREFS_VERSION) + "," + std::string(kPrefsJson + 1);
+  const std::string behind = "f_max_adv:8,";
+  expected.insert(expected.find(behind) + behind.size(), "f_max_pt:\"\",");
+
   CaptureStream out;
   ASSERT_TRUE(prefs.saveSerial(out));
-  EXPECT_EQ("{ver:" + std::to_string(NODE_PREFS_VERSION) + "," + std::string(kPrefsJson + 1),
-            out.text());
+  EXPECT_EQ(expected, out.text());
 }
 
 TEST(CommonNodePrefs, AFileWithoutAVersionReadsAsVersionZero) {
@@ -118,6 +122,48 @@ TEST(CommonNodePrefs, ReadsEveryPersistedFieldBack) {
   EXPECT_EQ(expected.allow_read_only, loaded.allow_read_only);
   EXPECT_FLOAT_EQ(expected.adc_multiplier, loaded.adc_multiplier);
   EXPECT_EQ(expected.powersaving_enabled, loaded.powersaving_enabled);
+}
+
+TEST(CommonNodePrefs, AFileWithoutTheTypeListLoadsWithNoExceptions) {
+  NodePrefs loaded;
+  ReplayStream in(kPrefsJson);
+  ASSERT_TRUE(loaded.loadSerial(in));
+  EXPECT_STREQ("", loaded.flood_max_types) << "v1.18.0 wrote no f_max_pt, so no type is limited";
+}
+
+TEST(CommonNodePrefs, TheTypeListSurvivesSaveAndLoad) {
+  NodePrefs written;
+  ASSERT_TRUE(mesh::setFloodMaxForType(written.flood_max_types, sizeof(written.flood_max_types),
+                                       PAYLOAD_TYPE_GRP_DATA, 4));
+  ASSERT_TRUE(mesh::setFloodMaxForType(written.flood_max_types, sizeof(written.flood_max_types),
+                                       PAYLOAD_TYPE_TRACE, 3));
+  ASSERT_STREQ("6:4,9:3", written.flood_max_types);
+
+  CaptureStream out;
+  ASSERT_TRUE(written.saveSerial(out));
+  std::string json = out.text();
+  EXPECT_NE(json.find("f_max_pt:\"6:4,9:3\""), std::string::npos) << json;
+
+  NodePrefs loaded;
+  ReplayStream in(json.c_str());
+  ASSERT_TRUE(loaded.loadSerial(in));
+  EXPECT_STREQ(written.flood_max_types, loaded.flood_max_types);
+}
+
+TEST(CommonNodePrefs, EverySlotAtItsLongestStillFitsThePref) {
+  NodePrefs written;
+  for (uint8_t type = 0; type < FLOOD_MAX_TYPE_SLOTS; type++) {
+    ASSERT_TRUE(mesh::setFloodMaxForType(written.flood_max_types, sizeof(written.flood_max_types),
+                                         type, 64)) << "type " << int(type);
+  }
+  CaptureStream out;
+  ASSERT_TRUE(written.saveSerial(out));
+  std::string json = out.text();
+
+  NodePrefs loaded;
+  ReplayStream in(json.c_str());
+  ASSERT_TRUE(loaded.loadSerial(in));
+  EXPECT_STREQ(written.flood_max_types, loaded.flood_max_types);
 }
 
 TEST(CommonNodePrefs, RadioCliReadsAndWritesTheNodeFields) {

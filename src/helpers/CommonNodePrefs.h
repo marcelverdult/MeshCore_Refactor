@@ -4,6 +4,7 @@
 #include <helpers/CommonRadioPrefs.h>
 #include <helpers/CommonGPSPrefs.h>
 #include <helpers/DynamicConfigSerializer.h>
+#include <helpers/RoutingPolicy.h>
 
 #define ADVERT_LOC_NONE       0
 #define ADVERT_LOC_SHARE      1
@@ -42,6 +43,9 @@ public:
   uint8_t flood_max = 0;
   uint8_t flood_max_unscoped = 0;
   uint8_t flood_max_advert = 0;
+  // Per payload type hop limits, as an exception list: "<type>:<hops>" entries separated by commas,
+  // eg. "6:4,9:3". Empty means no exceptions, which is exactly the behaviour before this pref existed.
+  char flood_max_types[FLOOD_MAX_TYPES_LEN];
   // Bridge settings
   uint8_t bridge_enabled = 0; // boolean
   uint16_t bridge_delay = 0;  // milliseconds (default 500 ms)
@@ -99,6 +103,7 @@ private:
       def("f_max", _parent->flood_max);
       def("f_max_uns", _parent->flood_max_unscoped);
       def("f_max_adv", _parent->flood_max_advert);
+      def("f_max_pt", _parent->flood_max_types, sizeof(_parent->flood_max_types));
       def("loop", _parent->loop_detect);
     }
   public:
@@ -150,6 +155,7 @@ public:
     password[0] = 0;
     guest_password[0] = 0;
     bridge_secret[0] = 0;
+    flood_max_types[0] = 0;
     owner_info[0] = 0;
     memset(extra_sf, 0, sizeof(extra_sf));
   }
