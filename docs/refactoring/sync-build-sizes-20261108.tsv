@@ -1,0 +1,18 @@
+# Firmware sizes of the 08.11.2026 sync (bytes). Sync = claude/sync-upstream-dev-20261108-c70387 (merge 33b92405), base = integration d899a08d.
+# Both trees built with SOURCE_DATE_EPOCH=1760000000. Only the 15 environments listed in the note were built, not the full matrix.
+# status: ok, or FAIL. Columns: env, sync_status, sync_flash, sync_ram, base_status, base_flash, base_ram
+Heltec_v3_companion_radio_ble	ok	1674553	194876	ok	1674545	194876
+Heltec_v3_companion_radio_usb	ok	661029	103444	ok	661021	103444
+Heltec_v3_companion_radio_wifi	ok	1110649	172424	ok	1110641	172424
+Heltec_v3_repeater	ok	1175481	62512	ok	1175481	62512
+MeshTracker_X1_companion_radio_ble	ok	329340	146432	ok	329324	146432
+MeshTracker_X1_companion_radio_usb	ok	323692	142000	ok	323692	142000
+MeshTracker_X1_kiss_modem	ok	245348	19148	ok	245348	19148
+MeshTracker_X1_repeater	ok	302496	32956	ok	302496	32956
+MeshTracker_X1_room_server	ok	295012	36660	ok	295012	36660
+PicoW_companion_radio_ble	ok	700800	174996	ok	700792	174996
+PicoW_companion_radio_usb	ok	529496	150336	ok	529488	150336
+RAK_4631_companion_radio_ble	ok	473304	149928	ok	473288	149928
+RAK_4631_companion_radio_usb	ok	464280	103016	ok	464280	103016
+RAK_4631_repeater	ok	446172	37360	ok	446172	37360
+wio-e5-mini_companion_radio_usb	ok	213320	33392	ok	213312	33392

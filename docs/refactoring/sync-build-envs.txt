@@ -1,4 +1,4 @@
-# Firmware build matrix of the upstream syncs (list kept from the 07.11.2026 sync).
+# Firmware build matrix of the upstream syncs (list kept from the 07.11.2026 sync, extended on 08.11.2026).
 # One PlatformIO environment per line. Build each with: pio run -e <env>.
 # Groups are comment lines; the next sync can reuse this file and add the variants it touches.
 
@@ -217,3 +217,8 @@ LilyGo_Tlora_C6_kiss_modem
 ThinkNode_M1_kiss_modem
 ThinkNode_M3_kiss_modem
 ThinkNode_M4_kiss_modem
+
+# companion controls added by the 08.11. sync (MyMesh.cpp null guard): one ESP32 USB and WiFi companion, one STM32WL companion
+Heltec_v3_companion_radio_usb
+Heltec_v3_companion_radio_wifi
+wio-e5-mini_companion_radio_usb
