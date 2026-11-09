@@ -857,16 +857,186 @@ beyond them. The one unbounded copy, `board`, is listed under the gaps.
   all-three builds (see Build variants).
 - **The mutation list** is the author's choice (see above).
 
+## 13d-b: the tables
+
+`MyMesh::handleCommand()` keeps its signature and the order of its first steps: skip
+leading spaces, reflect the `xx|` prefix, the radio settings table, the board hook. The
+38 commands behind them, an `if` chain of 253 lines with 40 lines that compare text, are
+now three const tables and a search loop. `handleCommand()` is 23 lines. The file grew
+from 2884 to 3028 lines, because every command is its own function. Outside
+`MyMesh.cpp` the only change is one line in `MyMesh.h`: `friend struct MyMeshCli;`.
+
+### Shape
+
+```cpp
+struct CliCmd { const char* name; uint8_t len; uint8_t match; CliFn fn; };
+// match: CLI_PREFIX (memcmp of the first len characters), CLI_EXACT (strcmp, the whole text)
+CLI_CMD("wifi.clear", CLI_EXACT, MyMeshCli::setWifiClear),
+```
+
+- `kTopCmds` has 7 rows: `reboot`, `poweroff`, `shutdown`, `set `, `get `, `board`,
+  `ver`. `kSetCmds` and `kGetCmds` have 17 rows each when all three compile switches are
+  on, and 3 and 2 rows in the base build. The two shared commands `poweroff` and
+  `shutdown` are two rows with one handler.
+- The match rule is the one the chain used for that command. `CLI_PREFIX` is `memcmp()`
+  with the length of the literal, `CLI_EXACT` is `strcmp()`. The names of commands with
+  an argument include the space (`name `, `pin `, `wifi.ssid `), the `ui.` keys have none,
+  as before. `CLI_CMD` computes `len` from the literal.
+- `set ` and `get ` are top level rows, as in 13b. Their handlers search the text after
+  the four characters in their own table and return its answer. This is the only place a
+  handler can return `false`, which makes the caller append `Unknown command`. Because
+  the first match wins and `set ` and `get ` are not the start of any other top level
+  name, `set foo` ends there and is unknown, as it was.
+- A handler gets `MyMesh&` and a `CliCall` (the text after the matched name, the reply
+  buffer). The handlers are static members of `struct MyMeshCli`, a friend of `MyMesh`,
+  so the header gets no new public API and no list of private declarations.
+- The compile switches sit around the handlers and around the rows, in the same places:
+  `PIN_BUZZER` (1 row in `set`, 1 in `get`), `ENABLE_WIFI_INTERFACE` (4 and 5),
+  `DISPLAY_CLASS` (9 and 9).
+- The tables are `const` and hold pointers and small integers, so they live in flash.
+  No heap, no RTTI, no `std::function`, no virtual call.
+
+### Order of the rows
+
+The chain was searched top to bottom, so order is part of the behaviour wherever one name
+is the start of another. In this chain it is not: no name is the start of another name in
+the same table, and no exact name is the start of a prefix name. A one-off script (not
+committed) checked every pair of rows in the three tables with all switches on: no pair
+can match the same text. The 13d-a note already says the same about the `ui.` keys. A comment above the
+tables states the rule for the next row that is added: if it overlaps, the longer name
+goes above.
+
+The chain compared every `memcmp()` row against 8 to 25 characters of its name, even for
+a short command. The tables compare the four characters of `set ` or `get ` first. A text
+that does not start with `set ` or `get ` is therefore compared over fewer bytes than
+before. A text that does is compared over the same number.
+
+### Alternatives and why not
+
+| Alternative | Why not |
+|---|---|
+| Friend struct of static functions (chosen) | One line in `MyMesh.h`; handlers are plain function pointers; the same shape as 13b. |
+| Pointers to `MyMesh` member functions, as `CMD_TABLE` of step 10 does for the frame commands | Needs about 38 private declarations in `MyMesh.h`. Possible here because only the companion includes the header, but the handlers are small and the friend struct keeps the header unchanged. |
+| One flat table with the full text (`set name `, `get name`, ...) | Closest to the chain and one table less, but it repeats `set ` and `get ` 34 times and compares them in every row. The two level shape is the one 13b uses. |
+| A generic handler for the 18 `ui.*` commands (field pointer, format string) | The fields have three types (`uint8_t`, `uint32_t`, `int32_t`), the replies differ from command to command, and `backlight_delay` has three answers. A generic handler would need a field per row and would hide those differences. |
+| Non capturing lambdas in the rows | Lambdas at namespace scope have no friend access, and each is its own type. |
+| A `CLI_WORD` rule (end of line or a space after the name) | No command of the chain used it. Adding it would change which texts match. |
+
+### Behaviour kept on purpose
+
+Everything in "Quirks pinned as is" under 13d-a is unchanged: prefix matching of the
+`ui.*` keys without a space and without an end of word check, `set pin` without a range
+check, `set tz.offset nan`, the `get wifi.pwd` clear text answer, the whole word match of
+the other `get` commands, and the `strcpy()` in `board`. The handlers contain the same
+statements as the branches they replace, with `m._prefs` for `_prefs`, `m.savePrefs()`
+for `savePrefs()` and `k.arg` for `&command[n]`. No 13d-a test file was edited.
+
+### Verification of 13d-b
+
+- **13d-a tests, unchanged.** `git diff integration -- test/ platformio.ini .github/` is
+  empty. The five companion environments pass with the same number of cases as before
+  the change:
+
+  | Environment | Cases before | Cases after |
+  |---|---|---|
+  | `native_companion` | 123 | 123 |
+  | `native_companion_buzzer` | 128 | 128 |
+  | `native_companion_wifi` | 144 | 144 |
+  | `native_companion_display` | 138 | 138 |
+  | `native_companion_all` | 168 | 168 |
+
+- **CI list, 27 environments** (`pio test`, the list from `run-unit-tests.yml`, exit code
+  0): 2435 cases, 1 skipped, 2434 passed, 0 failed. The 13d-a run had the same totals.
+- **Mutation tests.** 24 single edits of `MyMesh.cpp`, each run against the environment
+  that builds the row, then the file restored with `git checkout`; `git status` was
+  clean afterwards. 22 turned at least one test red, 2 stayed green. The number of
+  failed cases that `pio` reported equals the number of distinct failing tests named in
+  the log for every one.
+
+  | # | Mutation | Environment | Red tests |
+  |---|---|---|---|
+  | T01 | rows `set ` and `get ` swapped in `kTopCmds` | `native_companion_all` | 0 (equivalent) |
+  | T02 | `set` key `name ` becomes `name` (prefix one shorter) | `native_companion` | 12 |
+  | T03 | `ver` row removed | `native_companion` | 2 |
+  | T04 | search loop compares every row with `strcmp()` | `native_companion` | 31 |
+  | T05 | `get name` matched by prefix | `native_companion` | 2 |
+  | T06 | `get buzzer` row under `ENABLE_WIFI_INTERFACE` | `native_companion_buzzer` | 5 |
+  | T07 | `set wifi.clear` row under `DISPLAY_CLASS` | `native_companion_wifi` | 2 |
+  | T08 | `shutdown` row removed, `poweroff` stays | `native_companion` | 1 |
+  | T09 | `poweroff` row removed, `shutdown` stays | `native_companion` | 3 |
+  | T10 | `reboot` row calls the power off handler | `native_companion` | 3 |
+  | T11 | `set ` row one character shorter | `native_companion` | 24 |
+  | T12 | `get ` row calls the `set` table | `native_companion` | 28 |
+  | T13 | `set ui.show_clock` key with a trailing space | `native_companion_display` | 3 |
+  | T14 | rows `ui.max_partial` and `ui.nd_name` swapped in `kSetCmds` | `native_companion_display` | 0 (equivalent) |
+  | T15 | `set wifi.clear` matched by prefix | `native_companion_wifi` | 1 |
+  | T16 | `set wifi.pwd` row calls the SSID handler | `native_companion_wifi` | 6 |
+  | T17 | argument starts one character late | `native_companion` | 33 |
+  | T18 | unknown `set` or `get` key reported as handled | `native_companion` | 9 |
+  | T19 | `get tz.offset` matched by prefix | `native_companion` | 1 |
+  | T20 | `set ui.nd_name` row removed | `native_companion_display` | 7 |
+  | T21 | `get wifi.ip` row removed | `native_companion_wifi` | 1 |
+  | T22 | `board` matched by prefix | `native_companion` | 1 |
+  | T23 | `set pin` row calls the `set tz.offset` handler | `native_companion` | 4 |
+  | T24 | `set buzzer` row removed | `native_companion_buzzer` | 4 |
+
+  The two green mutations are swaps of rows that cannot match the same text (see "Order
+  of the rows"), so the program behaves the same and no test can tell. They are not test
+  gaps. The other 22 were caught on the first run. The
+  author chose the mutations, as in 13a and 13d-a, so they cover what was tried.
+- **Flash and RAM** (`pio run`, `integration` `93d6a811` in a separate worktree against
+  this branch, same toolchain, no other change):
+
+  | Environment | Platform, switches set (from the build's defines) | Flash before | Flash after | Flash delta | RAM before and after |
+  |---|---|---|---|---|---|
+  | `Heltec_t114_without_display_companion_radio_ble` | nRF52, `DISPLAY_CLASS` (null driver) | 396936 | 397672 | +736 | 147804, +0 |
+  | `Heltec_t114_companion_radio_ble` | nRF52, `DISPLAY_CLASS` | 422560 | 423280 | +720 | 147892, +0 |
+  | `RAK_4631_companion_radio_ble` | nRF52, `DISPLAY_CLASS` | 473256 | 473976 | +720 | 149928, +0 |
+  | `WioTrackerL1_companion_radio_ble` | nRF52, `DISPLAY_CLASS` and `PIN_BUZZER` | 411280 | 411856 | +576 | 148624, +0 |
+  | `heltec_v4_companion_radio_wifi` | ESP32-S3, `DISPLAY_CLASS` and `ENABLE_WIFI_INTERFACE` | 1111137 | 1112093 | +956 | 172388, +0 |
+  | `heltec_v4_r8_companion_radio_wifi` | ESP32-S3, `DISPLAY_CLASS` and `ENABLE_WIFI_INTERFACE` | 1114657 | 1115601 | +944 | 172312, +0 |
+  | `heltec_v4_r8_tft_companion_radio_wifi` | ESP32-S3, all three | 1118733 | 1119757 | +1024 | 172464, +0 |
+
+  RAM is unchanged in all seven builds. Flash grows by 576 to 1024 bytes. The smallest
+  margin is the nRF52 `RAK_4631_companion_radio_ble`: 66.40 percent of flash before,
+  66.50 after. The growth was not broken down further. The compiler printed no warning
+  for `MyMesh.cpp` in the three builds that were checked for it before and after.
+- **Hardware.** No board was flashed.
+
+### Not fixed (still open)
+
+13d-b changes none of these; the handlers contain the same statements as before.
+
+- The three findings under "Not fixed (13d-a)": `set tz.offset nan`, the clear text
+  `get wifi.pwd`, `set pin` without a range check.
+- The unbounded `strcpy()` of `board.getManufacturerName()` in the `board` command. It now
+  has its own handler (`MyMeshCli::boardName`), so a later length check is a change in
+  one place.
+- The rescue console's own commands in `checkCLIRescueCmd()`. Its call into
+  `handleCommand()` goes through the tables now; its chain of `rebuild`, `erase`, `ls`
+  and the others is untouched.
+
+### Gaps and not verified
+
+- **No hardware run.** The tests run on the host (64 bit), and no board was flashed. Size
+  was measured on seven firmware builds, not on every companion variant. All seven
+  builds set `DISPLAY_CLASS`, so the size of a build without the display commands was not
+  measured.
+- **Stack use** of the handlers and of `cliRun()` was not measured. A handler call adds a
+  `MyMesh&` and a two pointer `CliCall` on the stack.
+- **Pairs of switches** are not built on their own in the host tests, as before. The
+  firmware builds above cover the pairs buzzer with display and WiFi with display and the
+  all-three case; buzzer with WiFi alone is not built anywhere.
+- **Mutations** are the author's choice (see above).
+
 ## Next steps
 
-13d-a pins the companion's text CLI. What is left is separate steps, in this order:
+13d-b moves the companion's text CLI onto tables. What is left is separate steps, in this
+order:
 
-- **13d-b:** replace the `if` chain in `MyMesh::handleCommand()` with const tables, as
-  13b did for `CommonCLI`. The 13d-a tests are the check and must pass unchanged in all
-  five environments. The three compile switches decide which rows exist, so the tables
-  need the same guards. The quirks listed above stay unless a step announces a change.
 - **13d-c:** decide about the three findings under "Not fixed (13d-a)" and about the
   unbounded `strcpy()` in the `board` command. Each one changes behaviour, so each needs
-  an announced decision.
+  an announced decision. The tables make each fix a change in one handler, and the 13d-a
+  tests that pin the current answers have to change with it.
 - **Later:** the rescue console's own commands in `checkCLIRescueCmd()` (`rebuild`,
   `erase`, `ls`, ...) have no tests yet.
