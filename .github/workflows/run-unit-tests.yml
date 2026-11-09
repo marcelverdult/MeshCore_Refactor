@@ -20,7 +20,7 @@ jobs:
         uses: ./.github/actions/setup-build-environment
 
       - name: Run Unit Tests
-        run: pio test -e native -e native_kiss_modem -e native_core -e native_ofast -e native_chat -e native_identity_store -e native_node_prefs -e native_radio_wrappers -e native_server -e native_sensor -e native_repeater -e native_repeater_full -e native_region -e native_radio_chips -e native_variant_target -e native_variant_target_override -e native_companion -e native_esp32_rtc_backup -e native_common_cli -e native_common_cli_nrf52 -e native_common_cli_esp32 -e native_common_cli_rs232 -e native_common_cli_espnow -vv
+        run: pio test -e native -e native_kiss_modem -e native_core -e native_ofast -e native_chat -e native_identity_store -e native_node_prefs -e native_radio_wrappers -e native_server -e native_sensor -e native_repeater -e native_repeater_full -e native_region -e native_radio_chips -e native_variant_target -e native_variant_target_override -e native_companion -e native_esp32_rtc_backup -e native_common_cli -e native_common_cli_nrf52 -e native_common_cli_esp32 -e native_common_cli_rs232 -e native_common_cli_espnow -e native_companion_buzzer -e native_companion_wifi -e native_companion_display -e native_companion_all -vv
 
       - name: Upload Test Results
         # Upload test results even if the test step failed.

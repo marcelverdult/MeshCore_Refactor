@@ -36,6 +36,12 @@
 
 using namespace companion;
 
+// The transcript digests the file system after every frame, and /prefs.json has a "wifi"
+// and a "ui" block only in builds with ENABLE_WIFI_INTERFACE or DISPLAY_CLASS. The
+// recorded transcript is the one of the plain build (and of the buzzer build, whose
+// prefs have the same shape); the variant builds of step 13d-a run every other suite.
+#if !defined(ENABLE_WIFI_INTERFACE) && !defined(DISPLAY_CLASS)
+
 namespace {
 
 const char* GOLDEN = "test/test_companion_frames/frame_sweep.golden";
@@ -217,3 +223,5 @@ TEST(FrameSweep, MatchesTheRecordedTranscript) {
   }
   FAIL() << "the frame sweep differs from " << GOLDEN;
 }
+
+#endif   // !ENABLE_WIFI_INTERFACE && !DISPLAY_CLASS

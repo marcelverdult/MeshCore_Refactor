@@ -1,6 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
+#include <functional>
+#include <string>
+#include <vector>
 
 #include <Mesh.h>
 
@@ -103,6 +107,18 @@ public:
   float adc_multiplier = 1.0f;
   uint32_t gpio = 0;
   int reboot_calls = 0;
+  int power_off_calls = 0;
+
+  // The variant hook of MainBoard, called by a text CLI before its own commands (the
+  // companion's MyMesh::handleCommand). It records every command and the sender
+  // timestamp, answers hook_reply and handles the command when hook_handles is set.
+  // hook_side_effect runs when the hook is called, so a test can change something the
+  // CLI checks afterwards (for example mark the prefs dirty).
+  bool hook_handles = false;
+  std::string hook_reply;
+  std::vector<std::string> hook_commands;
+  std::vector<uint32_t> hook_timestamps;
+  std::function<void()> hook_side_effect;
 
   uint16_t getBattMilliVolts() override { return batt_milli_volts; }
   float getMCUTemperature() override { return mcu_temperature; }
@@ -114,13 +130,25 @@ public:
   float getAdcMultiplier() const override { return adc_multiplier; }
   const char* getManufacturerName() const override { return "Mock"; }
   void reboot() override { reboot_calls++; }
+  void powerOff() override { power_off_calls++; }
+  bool handleCommand(const char* command, uint32_t sender_timestamp, char* reply) override {
+    hook_commands.push_back(command);
+    hook_timestamps.push_back(sender_timestamp);
+    if (hook_side_effect) hook_side_effect();
+    if (!hook_handles) return false;
+    strcpy(reply, hook_reply.c_str());
+    return true;
+  }
   uint8_t getStartupReason() const override { return 0; }
   uint32_t getGpio() override { return gpio; }
   void setGpio(uint32_t values) override { gpio = values; }
 
   // Not on MainBoard: the concrete variant boards declare it, and the role code
   // calls it on the concrete type (see helpers/NRF52Board.h and its siblings).
-  void attachDynamicPrefs(KeyValueStore* prefs) { logEvent("board.attachDynamicPrefs"); }
+  // The store is kept, so a test can change a setting through it the way a board's
+  // handleCommand() hook does (the companion hands it its own).
+  KeyValueStore* dynamic_prefs = nullptr;
+  void attachDynamicPrefs(KeyValueStore* prefs) { dynamic_prefs = prefs; logEvent("board.attachDynamicPrefs"); }
 
   void reset() {
     batt_milli_volts = 4100;
@@ -128,6 +156,13 @@ public:
     adc_multiplier = 1.0f;
     gpio = 0;
     reboot_calls = 0;
+    power_off_calls = 0;
+    hook_handles = false;
+    hook_reply.clear();
+    hook_commands.clear();
+    hook_timestamps.clear();
+    hook_side_effect = nullptr;
+    dynamic_prefs = nullptr;
   }
 };
 
