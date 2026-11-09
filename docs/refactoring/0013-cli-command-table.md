@@ -282,7 +282,7 @@ Things the harness cannot or does not cover; they are real risks for 13b:
   132 byte `tmp` with `strcpy` and no length check; `gps` with no sub command calls
   `strcmp` on `getSettingByKey("gps")` without a check for NULL; `get` with an
   argument of 157 or more characters can run past the 160 byte reply with the
-  `??: %s` fallback. A table in 13b should fix these, but as an announced change.
+  `??: %s` fallback. They are fixed in 13c.
 - **Absolute dates** of `clock` and `time` are not pinned: the host `RTClib` mock counts
   from 2000, the Adafruit library from 1970. The expected text is built from the same
   `DateTime` and format string, which pins the format and the arithmetic but not the
@@ -446,6 +446,84 @@ separate, announced step.
   89.8 percent of flash before, 90.3 after (1224 bytes, of 229376 available).
 - **Hardware.** Not run on devices.
 
+## 13c: the three memory risks
+
+13a and 13b named three memory risks and left them alone, because neither step was
+allowed to change behaviour. 13c fixes them. It is a behaviour change on input that was
+undefined before, so it is its own step.
+
+### What changed
+
+All changes are in `src/helpers/CommonCLI.cpp`, 19 lines added and 2 changed.
+
+- **`tmp` copies.** The commands that copy their argument into the 132 byte
+  `CommonCLI::tmp` now check `strlen(arg) < sizeof(tmp)` first. There are three of them,
+  not two as the earlier text said: `tempradio`, `sensor set` and, on LR2021 builds,
+  `set extra.sf`. A new helper `fitsTmp()` does the check. A longer argument gets the
+  failure answer the command already had: `Error, invalid params` for `tempradio`,
+  `can't find custom var` for `sensor set`, `Invalid extra SF config` for `set extra.sf`.
+  Nothing is copied, nothing is applied, nothing is saved. The longest argument that
+  still works is 131 characters.
+- **`gps` without a sub command** checks the result of `getSettingByKey("gps")` for NULL,
+  as `gps` diagnostics (`gpsDiag`) already did. A missing setting counts as not active,
+  so the reply is `on, deactivated, ...`.
+- **`get <unknown key>`** now writes the `??: ` fallback with `snprintf(reply, 160, ...)`.
+  The prefix takes 4 bytes and the terminator one, so a key of up to 155 characters is
+  echoed in full and a longer one is cut at 155. Before, 156 characters already wrote one
+  byte past the buffer, not 157 as the earlier text said (4 + 156 + 1 is 161 bytes). The arithmetic is checked by the tests from 156 characters up; the abort was seen with the whole loop, not with 156 alone.
+
+Replies to normal input are unchanged. No existing test was edited.
+
+### Why these answers
+
+The commands keep their own error text, so a caller that matches on it does not see a new
+string. For `sensor set` the text says the variable does not exist, which is true for a
+name that long. A new error text would be a protocol change, and the reply to an input
+that never worked does not justify one.
+
+### Tests
+
+`test/test_common_cli/test_cli_memory.cpp` is new. The fixture builds a second `CommonCLI`
+in a buffer with 512 canary bytes behind it (`tmp` is the last member, so an overflow
+lands in the canary), and runs commands of any length with guard bytes around the reply.
+It pins the 131 and 132 character limit of `tempradio`, a working `sensor set` with a
+100 character value, the longest key that `get` echoes in full, truncation at 155 for
+keys of 156, 157, 200 and 400 characters, and the NULL case of `gps` (GPS builds only).
+
+### Verification
+
+- **CI list, 23 environments** (`pio test`, the list from `run-unit-tests.yml`):
+  1799 cases, 1798 passed, 1 skipped, 0 failed. Base was 1767 cases, 1766 passed.
+- **Red before the fix.** With the tests in place and the fix not yet written,
+  `native_common_cli` failed the three `tmp` tests and then aborted with SIGABRT on the
+  `get` test (stack smashing detected in the test's own reply buffer).
+- **Mutation tests.** Each fix reverted on its own, with the environment that builds it:
+  `tempradio` 2 tests red, `sensor set` 1 red, `set extra.sf` 1 red (nRF52 build),
+  `gps` SIGSEGV (nRF52 build), `get` SIGABRT. A crash after a failed test is the
+  corrupted memory, not a flaw in the harness.
+- **Size**, measured with `pio run`, not flashed:
+
+  | Environment | Flash before | Flash after | Delta | RAM |
+  |---|---|---|---|---|
+  | `wio-e5-mini_repeater` | 207168 | 207216 | +48 | 17260, unchanged |
+  | `Heltec_v3_repeater` (ESP32) | 1180389 | 1180453 | +64 | 62600, unchanged |
+  | `RAK_4631_repeater` (nRF52) | 451676 | 451724 | +48 | 37448, unchanged |
+
+### Not verified
+
+- **On devices.** No board was flashed.
+- **The tests run on the host (64 bit).** Overflow sizes and the layout behind `tmp`
+  differ on the MCUs. The tests detect the write by canary, so they show the bug is gone,
+  not what it would have done on a given board.
+- **The other roles' callers.** The 160 byte reply buffer is what every role passes, as
+  the code already assumed; this step did not re-check each caller.
+
+### Upstream
+
+`upstream/dev` (4deb88df) has the same code in all three places: the `strcpy(tmp, ...)`
+calls (`tempradio`, `sensor set`, `extra.sf`), `strcmp(getSettingByKey("gps"), "1")` and
+`sprintf(reply, "??: %s", config)`. A fix there would be a separate pull request.
+
 ## Next steps
 
 The companion has its own text CLI, `MyMesh::handleCommand()`
@@ -456,4 +534,4 @@ of `if` blocks that match whole words with `strcmp()` or a prefix with a space
 The harness pattern carries over: mock board and callbacks, a reply buffer with
 canaries, one source set built in several environments. Step 10a already runs
 `MyMesh` on the host (`test/test_companion_frames`), so the dependencies exist. That
-makes it a 13c candidate; it has not been scoped beyond counting the commands.
+makes it a later candidate (13d or higher); it has not been scoped beyond counting the commands.
