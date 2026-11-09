@@ -83,6 +83,16 @@ public:
     }
     return out;
   }
+  // The text CLI the way BaseChatMesh reaches it for a text message from a contact:
+  // onCLICommandRecv() with the contact's flags, the sender's timestamp and a reply
+  // buffer of the caller's choosing. flags 0x10 is "remote CLI allowed"; without it the
+  // message is queued for the app instead and the buffer is not touched.
+  void cliRemote(uint8_t contact_flags, uint32_t sender_timestamp, const char* text, char* reply) {
+    ContactInfo from = {};
+    from.flags = contact_flags;
+    mesh::Packet pkt;   // queueMessage() reads its path and SNR when the message goes to the app
+    onCLICommandRecv(from, &pkt, sender_timestamp, text, reply);
+  }
   void freeOwned() {
     delete static_cast<StaticPoolPacketManager*>(_mgr);
     delete static_cast<ArduinoMillis*>(_ms);

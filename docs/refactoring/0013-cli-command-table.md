@@ -1,9 +1,12 @@
 # 0013: A command table for the text CLI
 
-Status: 13a (host harness and characterization) and 13b (the table) built.
-Behaviour change: none. 13a adds tests and build environments only; 13b replaces
-the `else if` chains in `src/helpers/CommonCLI.cpp` with const tables, adds three
-tests and leaves the 13a tests unchanged.
+Status: 13a (host harness and characterization), 13b (the table) and 13c (the three
+memory risks) are merged. 13d-a (a host harness for the companion's own text CLI) is
+built and ready for review.
+Behaviour change: none in 13a, 13b and 13d-a. 13a and 13d-a add tests and build
+environments only; 13b replaces the `else if` chains in `src/helpers/CommonCLI.cpp` with
+const tables, adds three tests and leaves the 13a tests unchanged. 13c changes the reply
+to input that was undefined before.
 
 ## Context
 
@@ -524,14 +527,346 @@ keys of 156, 157, 200 and 400 characters, and the NULL case of `gps` (GPS builds
 calls (`tempradio`, `sensor set`, `extra.sf`), `strcmp(getSettingByKey("gps"), "1")` and
 `sprintf(reply, "??: %s", config)`. A fix there would be a separate pull request.
 
+## 13d-a: a harness for the companion's text CLI
+
+The companion app has a text CLI of its own, `MyMesh::handleCommand()`
+(`examples/companion_radio/MyMesh.cpp`, about 250 lines). It is a chain of `if` blocks
+with 38 commands. Whole words are compared with `strcmp()`, commands with an argument
+with `memcmp()` and a trailing space (`set name `), and the `ui.*` commands by prefix
+with no space and no check for the end of the word. 13d-b will replace the chain with
+tables, as 13b did for `CommonCLI`. 13d-a comes first and pins the current behaviour with
+host tests.
+
+It adds tests, a mock and build environments, and changes no production code:
+`git diff integration...HEAD -- src examples` is empty. A defect found while testing is
+pinned as it is and listed under "Not fixed (13d-a)".
+
+### Reaching a private function
+
+`handleCommand()` is private and has three callers.
+
+| Caller | Timestamp | Reply buffer | Driven here |
+|---|---|---|---|
+| `onCLICommandRecv()`: a text message from a contact with the remote CLI flag (`0x10`) | the sender's | 161 bytes: `BaseChatMesh.cpp` hands over `&temp[5]` of a `uint8_t temp[166]` | yes, `CliTest::run()` |
+| `cmdRunCliCommand()`: the app's `CMD_RUN_CLI_COMMAND` frame (66), answered by `RESP_CODE_CLI_REPLY` (29) | 0 | `reply_buf[166]` | yes, `CliTest::runFrame()` |
+| `checkCLIRescueCmd()`: the rescue console on the serial port | 0 | `reply_buf[166]` | the call into `handleCommand()` is the same as the frame's; the rescue console's own commands (`rebuild`, `erase`, `ls`, ...) are not covered |
+
+Both driven callers append `Unknown command` when `handleCommand()` returns false. A
+contact without the CLI flag does not reach `handleCommand()`: the message is queued for
+the app and the reply buffer stays untouched (one test pins that).
+
+What was added, all under `test/`:
+
+- `Node::cliRemote()` in `CompanionHarness.h` calls the protected `onCLICommandRecv()`.
+- `CliHarness.h` holds the `CliTest` fixture. `run(cmd, timestamp)` gives the command a
+  161 byte reply buffer. It starts as an empty string, is filled with `Z` behind it, and
+  has 16 guard bytes on both sides. A command that writes too much, or leaves the reply
+  without a terminator, fails the test that sent it. `run()` also counts the saves as
+  `open:/prefs.json` events of the file system mock. `reboot()` builds the node again on
+  the same file system, so a test sees what was stored and not what the node still holds.
+- `MockBoard` in `test/mocks/target.h` got a `handleCommand()` with a configurable
+  answer and side effect that records the command text and the timestamp it was given, a
+  `powerOff()` counter, and `dynamic_prefs`, the key value store the node hands to the
+  board. A test uses it to make the node's preferences dirty from inside the hook.
+- `test/mocks/WiFi.h` is a stand in for the Arduino WiFi library: `WiFi.status()` and
+  `WiFi.localIP().toString()` return what a test sets.
+
+### Build variants
+
+38 commands are not all built in one environment. Three compile switches select them:
+`PIN_BUZZER` (2 commands), `ENABLE_WIFI_INTERFACE` (9) and `DISPLAY_CLASS` (18). Before
+13d-a, `native_companion` set none of them, so 29 of the 38 commands were not compiled
+at all. One source set is now built in five environments, all listed in
+`.github/workflows/run-unit-tests.yml`:
+
+| Environment | Defines | Commands built | `CliTest` tests | Cases reported by `pio` |
+|---|---|---|---|---|
+| `native_companion` | `RP2040_PLATFORM` | 9 | 58 | 123 |
+| `native_companion_buzzer` | plus `PIN_BUZZER=7` | 11 | 63 | 128 |
+| `native_companion_wifi` | plus `ENABLE_WIFI_INTERFACE=1` | 18 | 80 | 144 |
+| `native_companion_display` | plus `DISPLAY_CLASS=TestDisplay` | 27 | 74 | 138 |
+| `native_companion_all` | all three | 38 | 104 | 168 |
+
+The 123 cases of the base environment are 65 from before 13d-a and 58 new ones.
+
+Why `native_companion_all` exists. `prefs.json` has a `comp` block that is always there
+(it holds `buzz_q`), a `wifi` block only with `ENABLE_WIFI_INTERFACE` and a `ui` block
+only with `DISPLAY_CLASS`. Only the all-three build has all three blocks in the file at
+the same time, so only it can show that a command of one block leaves the others alone
+across a restart. Three tests do that. The pairs of switches (buzzer with WiFi, buzzer
+with display, WiFi with display) are not built on their own; the all-three build
+contains each of them.
+
+Two details of the environments:
+
+- Each new environment repeats the whole `build_flags` list of `native_companion`
+  instead of adding to it. With `extends`, `${this.__env__}` in the include path of the
+  `base64` library would point into the parent's library folder.
+- The display variant defines `DISPLAY_CLASS` only. `variant_display/target.h` cannot be
+  used, because it conflicts with `test/mocks/target.h`, and `handleCommand()` never
+  touches the display object.
+
+`test_frame_sweep.cpp` (step 10) digests the file system, and `prefs.json` has the WiFi
+and UI blocks only in the builds with those switches. Its golden digest therefore runs
+only in the builds without WiFi and without a display (8 added lines with a comment).
+The other 13d-a tests are not affected.
+
+### Inventory of the 38 commands
+
+Replies are exact; `%d` stands for the stored value. "Save" is `savePrefs()`, which
+writes `prefs.json` once. Matching is `strcmp` (the whole command) unless marked.
+
+#### Hooks and framing, before the commands
+
+1. Leading spaces are skipped (only the space character, not a tab).
+2. If the text is longer than 4 characters and the third character is `|`, the first
+   three characters are copied to the start of the reply and removed from the command.
+   Any two characters work as the prefix. No spaces are skipped after it.
+3. The radio settings table (`getRadioPrefs()->handleCommand`) comes first, and its
+   dirty flag causes a save.
+4. `board.handleCommand()` comes next, with the command as it is after steps 1 and 2 and
+   the sender's timestamp. If it answers, the node saves when its own preferences are
+   dirty. A change the hook makes without answering is not saved by the node.
+5. The commands, in source order.
+6. `Unknown command` is appended by the caller. With a prefix the reply is the prefix
+   followed by `Unknown command`.
+
+#### Always built (9)
+
+| Command | Match | Reply | Save |
+|---|---|---|---|
+| `reboot` | whole | none, calls `board.reboot()` | no |
+| `poweroff`, `shutdown` | whole | none, calls `board.powerOff()` | no |
+| `set name <name>` | prefix `set name ` | `OK`, or `Error, bad chars` | yes, on `OK` |
+| `get name` | whole | `> <name>` | no |
+| `set pin <n>` | prefix `set pin ` | `> pin is now %06d` | yes |
+| `board` | whole | the board's manufacturer name | no |
+| `ver` | whole | `<version> (Build: <date>)` | no |
+| `get tz.offset` | whole | `> %.2f` for an odd number of quarter hours, else `> %.1f` | no |
+| `set tz.offset <n>` | prefix `set tz.offset ` | `OK`, or `Error, must be from -12 to +14` | yes, on `OK` |
+
+#### `PIN_BUZZER` (2)
+
+| Command | Reply | Save |
+|---|---|---|
+| `get buzzer` | `> on` or `> off` | no |
+| `set buzzer on\|off` | `OK`, or `Error: state must be on or off` | yes, on `OK` |
+
+#### `ENABLE_WIFI_INTERFACE` (9)
+
+| Command | Reply | Save |
+|---|---|---|
+| `set wifi.ssid <s>` | `> wifi.ssid is now <s> (set wifi.pwd too, then reboot)` | yes |
+| `set wifi.pwd <p>` | `> wifi.pwd updated (reboot to apply)` | yes |
+| `get wifi.pwd` | `> <password>` in clear text | no |
+| `set wifi.clear` | `> wifi config cleared (reboot to apply)` | yes |
+| `get wifi.ssid` | `> <ssid>`, or `> (not set)` | no |
+| `set wifi.enabled <n>` | `> wifi.enabled is now %d (reboot to apply)` | yes |
+| `get wifi.enabled` | `> %d` | no |
+| `get wifi.status` | `> connected` for `WL_CONNECTED`, else `> disconnected` | no |
+| `get wifi.ip` | `> <address>` when connected, else `> (not connected)` | no |
+
+#### `DISPLAY_CLASS` (18, all matched by prefix with no space)
+
+| Key (`ui.` + ...) | `set` reply | `get` reply |
+|---|---|---|
+| `show_clock` | `> now %d` | `> %d` |
+| `auto_off_delay` | `> now %d seconds` | `> %d seconds` |
+| `backlight_delay` | `> now %d seconds`, `> now always on (-1)`, or `> now disabled (<-1)` | `> %d seconds`, `> always on (-1)`, or `> disabled (<-1)` |
+| `backlight_on_keys` | `> now %d` | `> %d` |
+| `backlight_on_msgs` | `> now %d` | `> %d` |
+| `auto_off_blank` | `> now %d` | `> %d` |
+| `auto_off_keep_msgs` | `> now %d` | `> %d` |
+| `max_partial` | `> now %d (applied at next screen wakeup)` | `> %d` |
+| `nd_name` | `> ui.nd_name is now %d` | `> %d` |
+
+Every `set ui.*` saves once; every `get ui.*` saves nothing.
+
+### Test coverage
+
+| File | Tests | Covers |
+|---|---|---|
+| `test_cli_core.cpp` | 58 | leading spaces, empty input, `Unknown command` without a save, the `xx\|` prefix and its limits, hook order (radio table, board hook, commands), the board hook's view of the command and its save rule, `reboot`, `poweroff`, `shutdown`, `set\|get name`, `set pin`, `board`, `ver`, `set\|get tz.offset`, the frame path, a contact without the CLI flag, and one test per compile switch that shows its commands are absent when it is off |
+| `test_cli_buzzer.cpp` | 6 | default, set and get, error text and no save, restart, exact spelling, prefix and frame |
+| `test_cli_wifi.cpp` | 23 | all nine commands, length cuts, the password in clear text, `wifi.clear` side effects, restart, exact spelling, prefix and frame, the WiFi block of `prefs.json` |
+| `test_cli_ui.cpp` | 17 | defaults, all 18 commands, the three answers of `backlight_delay`, byte wrap, unsigned values, missing and glued values, prefix matching and its order, restart, prefix and frame |
+| `test_cli_combined.cpp` | 3 | the three blocks in one `prefs.json`, restart with all of them, a command of one block leaves the others alone |
+
+The three "absent" tests in `test_cli_core.cpp` are each built only where the switch is
+off, which is why the totals per environment (58, 63, 80, 74, 104) are not the sum of the
+file counts.
+
+### Quirks pinned as is
+
+Each of these is asserted by a test. 13d-b must keep them, or change them as a separate,
+announced step.
+
+- Only the space character is skipped in front of a command. A tab or a newline makes
+  the command unknown.
+- The prefix needs a total length above 4. `xx|a` has four characters and is a command
+  called `xx|a`, so it is unknown; `xx|ab` is the prefix `xx|` followed by the command
+  `ab`. Any two characters followed by `|` count as a prefix, so `|||get name` has the
+  prefix `|||`.
+- With a prefix, a command that writes nothing leaves just the prefix as the reply.
+- A leading space is removed before the board hook sees the command, and the prefix too.
+- `reboot`, `poweroff`, `shutdown`, `get name`, `board`, `ver`, `get tz.offset` and the
+  WiFi `get` commands match the whole command. `rebootx` and `get name ` are unknown.
+  Commands with an argument need the space after the key: `set name` alone is unknown.
+- `set name` checks for the seven bad characters in the whole text, then cuts the name at
+  31 characters without an error. A bad character after position 31 still refuses the
+  name. The name is the rest of the line, spaces included, and an empty name is
+  accepted.
+- `set pin` has no range check: it reads with `atoi`, stores into an unsigned 32 bit
+  field and prints with `%06d`. `1234567` and `99999999` are accepted, `-5` is stored as
+  4294967291 and printed as `-00005`, `abc` gives `000000`, `12abc` gives `000012`.
+  There is no `get pin`.
+- `set tz.offset` reads with `atof`, so `1e1` is 10. The range check is `tz < -12 ||
+  tz > 14`, which is false for NaN (see "Not fixed").
+- `get tz.offset` shows two decimals only when the offset is an odd number of quarter
+  hours (`5.75`, `0.25`, `-5.75`), and one decimal otherwise (`5.5`, `-12.0`).
+- `set wifi.ssid` cuts at 32 characters and `set wifi.pwd` at 63, without an error. The
+  reply to `set wifi.pwd` does not show the password; `get wifi.pwd` does.
+- `set wifi.clear` saves even when both fields were already empty, and leaves
+  `wifi.enabled` alone.
+- `set wifi.enabled` stores 1 for any number except 0, and 0 for text that `atoi` reads
+  as 0.
+- `get wifi.ssid` answers `(not set)` for an empty stored name. The compile time
+  `WIFI_SSID` fallback of `getWifiSSID()` is not built (see gaps).
+- The `ui.*` commands match by prefix with no space and no check for the end of the
+  word. `set ui.show_clock` alone stores 0 and saves. `set ui.show_clock1` and
+  `set ui.show_clock 1` both store 1, `set ui.show_clockabc` stores 0 and
+  `set ui.auto_off_delayXYZ` stores 0. `set ui.max_partial_please 4` is the
+  `max_partial` command with the value `_please 4`, which reads as 0. `get` ignores
+  whatever follows the key. No key is a prefix of another, so the order of the branches
+  does not show.
+- The byte sized `ui.*` fields keep the low byte of the number: 300 is stored as 44 and
+  -1 as 255. `set ui.auto_off_delay -1` stores 4294967295 and prints `-1`.
+- `set ui.backlight_delay` has three answers: zero or more prints seconds, exactly -1
+  prints `always on (-1)`, anything below prints `disabled (<-1)`.
+- The `ui.*` commands are not matched below their full key: `set ui.show`,
+  `set ui.auto_off` and `get ui.` are unknown.
+
+### Mutation tests
+
+For each mutation one expression in `handleCommand()` was changed, the matching
+`native_companion*` environment run with `CliTest.*`, and the file restored. A script
+did this, one mutation at a time. Before the run, a dry run checked that each pattern
+matches exactly once in `MyMesh.cpp`; after the run `git status` was clean and
+`git diff HEAD -- src examples` empty.
+
+32 mutations were applied. All 32 turned at least one test red. The number of failed
+cases that `pio` reported equals the number of distinct failing tests named in the log
+for every one of them. These mutations were chosen by the author of the tests, so they
+cover only what was tried; lines nobody mutated may still be unpinned.
+
+| # | Mutation | Environment | Red tests |
+|---|---|---|---|
+| M01 | the prefix is not removed before the hooks and the commands | `native_companion` | 7 |
+| M02 | a change by the radio settings table is not saved | `native_companion` | 2 |
+| M03 | a change by the board hook is not saved | `native_companion` | 1 |
+| M04 | `reboot` calls `powerOff()` | `native_companion` | 3 |
+| M05 | `shutdown` is no longer handled | `native_companion` | 1 |
+| M06 | `set name` does not save | `native_companion` | 6 |
+| M07 | `set name` no longer checks for bad characters | `native_companion` | 2 |
+| M08 | `set tz.offset` upper bound 14 becomes 15 | `native_companion` | 1 |
+| M09 | `set tz.offset` lower bound -12 becomes -13 | `native_companion` | 1 |
+| M10 | `get tz.offset` quarter hour test `& 1` becomes `& 3` | `native_companion` | 2 |
+| M11 | `set pin` reply without zero padding | `native_companion` | 3 |
+| M12 | the prefix needs 4 characters instead of more than 4 | `native_companion` | 1 |
+| M13 | the prefix reflects two bytes instead of three | `native_companion` | 9 |
+| M14 | leading spaces are not skipped | `native_companion` | 3 |
+| M15 | the board hook gets timestamp 0 | `native_companion` | 1 |
+| M16 | an unknown command is reported as handled | `native_companion` | 17 |
+| M17 | `ver` reply format | `native_companion` | 2 |
+| M18 | `get name` matches by prefix | `native_companion` | 2 |
+| M19 | `set buzzer` stores the inverse | `native_companion_buzzer` | 4 |
+| M20 | `get buzzer` answers are swapped | `native_companion_buzzer` | 5 |
+| M21 | `set buzzer` does not save | `native_companion_buzzer` | 3 |
+| M22 | `set wifi.enabled` stores the number, not 0 or 1 | `native_companion_wifi` | 1 |
+| M23 | `get wifi.status` answers are swapped | `native_companion_wifi` | 1 |
+| M24 | `set wifi.clear` leaves the password | `native_companion_wifi` | 1 |
+| M25 | `set wifi.pwd` is cut at the size of the SSID buffer | `native_companion_wifi` | 1 |
+| M26 | `get wifi.ip` shows the address when not connected | `native_companion_wifi` | 1 |
+| M27 | `set ui.show_clock` key length 17 becomes 18 | `native_companion_display` | 6 |
+| M28 | `set ui.backlight_delay` boundary `>= 0` becomes `> 0` | `native_companion_display` | 2 |
+| M29 | `get ui.nd_name` reads `ui_max_partial` | `native_companion_display` | 4 |
+| M30 | `set ui.auto_off_keep_msgs` writes `ui_auto_off_blank` | `native_companion_display` | 5 |
+| M31 | `set ui.max_partial` does not save | `native_companion_display` | 3 |
+| M32 | `set ui.show_clock` stores the number, not 0 or 1 | `native_companion_display` | 1 |
+
+### Verification of 13d-a
+
+- **CI list, 27 environments** (`pio test`, the list from `run-unit-tests.yml`, exit code 0):
+  2435 cases, 1 skipped, 2434 passed, 0 failed. The baseline, measured first on a clean
+  copy of `integration` (`9605acd9`, 23 environments), was 1799 cases, 1 skipped, 1798
+  passed. The difference of 636 is the 58 new cases in `native_companion` plus the
+  128, 144, 138 and 168 cases of the four new environments.
+- **The five companion environments** pass with the counts in the table under "Build
+  variants". The shared mock `test/mocks/target.h` changed, and the 22 environments
+  outside the companion family still pass.
+- **Mutation tests:** 32 of 32 caught (table above).
+- **No production change:** `git diff integration...HEAD -- src examples` is empty. The
+  branch changes tests, mocks, `platformio.ini` (native environments only) and the CI
+  workflow: 12 files.
+- **Not built:** no firmware environment (`pio run`). Nothing in `src` or `examples`
+  changed, so the firmware is the same; that was not measured.
+
+### Not fixed (13d-a)
+
+Three findings. Each behaviour is pinned as it is, with a test that says so; changing
+any of them is a separate step.
+
+1. **`set tz.offset nan` is accepted and saved.** `atof("nan")` is NaN, the check
+   `tz < -12 || tz > 14` is false for NaN, so the command answers `OK` and stores the
+   text `tz_offset:nan`. The radio settings refuse NaN and infinity (`spellsNanOrInf` in
+   `CommonRadioPrefs.cpp`); this command does not. Test:
+   `SetTzOffsetAcceptsNaNBecauseNoComparisonWithItIsTrue`.
+2. **`get wifi.pwd` answers the WiFi password in clear text.** It does so for a contact
+   with the remote CLI flag as well, over the air. `set wifi.pwd` hides it in its own
+   reply. Test: `GetPwdAnswersThePasswordInClearText`.
+3. **`set pin` has no range check.** A negative number is stored as a large unsigned
+   value and printed with a minus sign, and a number above 999999 is stored although a
+   BLE pin has six digits. Test: `SetPinHasNoRangeCheck`.
+
+The tests found no overflow of the reply buffer in `handleCommand()` itself. The
+longest reply, `set wifi.ssid` with a 32 character name and a prefix, is about 90 bytes,
+well below the 161 bytes, and the guard bytes in every `run()` call would show a write
+beyond them. The one unbounded copy, `board`, is listed under the gaps.
+
+### Gaps and not verified
+
+- **No board was flashed**, and the tests run on the host (64 bit). The guard bytes show
+  that a write stays inside the reply buffer; they do not show what a write beyond it
+  would do on a board.
+- **The rescue console's own commands** (`rebuild`, `erase`, `ls`, ...) in
+  `checkCLIRescueCmd()` are not covered.
+- **`board` with a long manufacturer name.** The branch copies the name with `strcpy()`
+  and no length check. The name comes from the board class and the mock returns
+  `Mock`, so the case is not tested.
+- **Pairs of switches** (buzzer with WiFi, buzzer with display, WiFi with display) are
+  not built on their own. The three switches guard separate `#ifdef` blocks and share
+  only the preferences file, which the all-three build covers.
+- **The compile time `WIFI_SSID` fallback** is not built; `get wifi.ssid` is tested for
+  a stored name and for the empty case (`(not set)`).
+- **Variant defaults of the UI settings** (`UI_SHOW_CLOCK`, `AUTO_OFF_MILLIS`,
+  `BACKLIGHT_BTN`, `UI_SCREENOFF_BLANK`, `EINK_MAX_PARTIAL_REFRESH`) differ between real
+  boards. The tests pin the defaults of the test build.
+- **Variant `board->handleCommand()` hooks** of real boards are not run; the hook is a
+  mock.
+- **The frame sweep golden digest** of step 10 is switched off in the WiFi, display and
+  all-three builds (see Build variants).
+- **The mutation list** is the author's choice (see above).
+
 ## Next steps
 
-The companion has its own text CLI, `MyMesh::handleCommand()`
-(`examples/companion_radio/MyMesh.cpp`, from about line 2389): 38 commands in a chain
-of `if` blocks that match whole words with `strcmp()` or a prefix with a space
-(`set name `, `set wifi.ssid `). It starts with the same two hooks as `CommonCLI`
-(the radio settings table, then `board.handleCommand()`). It is not part of this step.
-The harness pattern carries over: mock board and callbacks, a reply buffer with
-canaries, one source set built in several environments. Step 10a already runs
-`MyMesh` on the host (`test/test_companion_frames`), so the dependencies exist. That
-makes it a later candidate (13d or higher); it has not been scoped beyond counting the commands.
+13d-a pins the companion's text CLI. What is left is separate steps, in this order:
+
+- **13d-b:** replace the `if` chain in `MyMesh::handleCommand()` with const tables, as
+  13b did for `CommonCLI`. The 13d-a tests are the check and must pass unchanged in all
+  five environments. The three compile switches decide which rows exist, so the tables
+  need the same guards. The quirks listed above stay unless a step announces a change.
+- **13d-c:** decide about the three findings under "Not fixed (13d-a)" and about the
+  unbounded `strcpy()` in the `board` command. Each one changes behaviour, so each needs
+  an announced decision.
+- **Later:** the rescue console's own commands in `checkCLIRescueCmd()` (`rebuild`,
+  `erase`, `ls`, ...) have no tests yet.
