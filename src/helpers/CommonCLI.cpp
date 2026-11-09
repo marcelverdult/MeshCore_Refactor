@@ -345,7 +345,15 @@ struct CommonCLIImpl {
       strcpy(k.reply, "ERR: bad pubkey");
     }
   }
+  // true if the text, with its terminator, fits CommonCLI::tmp
+  static bool fitsTmp(const CommonCLI& c, const char* text) {
+    return strlen(text) < sizeof(c.tmp);
+  }
   static void tempradio(CommonCLI& c, CliCall& k) {
+    if (!fitsTmp(c, k.arg)) {
+      strcpy(k.reply, "Error, invalid params");
+      return;
+    }
     strcpy(c.tmp, k.arg);
     const char *parts[5];
     int num = mesh::Utils::parseTextParts(c.tmp, parts, 5);
@@ -412,6 +420,10 @@ struct CommonCLIImpl {
     }
   }
   static void sensorSet(CommonCLI& c, CliCall& k) {
+    if (!fitsTmp(c, k.arg)) {
+      strcpy(k.reply, "can't find custom var");
+      return;
+    }
     strcpy(c.tmp, k.arg);
     const char *parts[2];
     int num = mesh::Utils::parseTextParts(c.tmp, parts, 2, ' ');
@@ -551,7 +563,8 @@ struct CommonCLIImpl {
       bool enabled = l->isEnabled(); // is EN pin on ?
       bool fix = l->isValid();       // has fix ?
       int sats = l->satellitesCount();
-      bool active = !strcmp(c._sensors->getSettingByKey("gps"), "1");
+      const char* setting = c._sensors->getSettingByKey("gps");
+      bool active = setting != NULL && strcmp(setting, "1") == 0;
       if (enabled) {
         sprintf(k.reply, "on, %s, %s, %d sats",
           active?"active":"deactivated",
@@ -844,6 +857,10 @@ struct CommonCLIImpl {
   }
 #if defined(USE_LR2021)
   static void setExtraSf(CommonCLI& c, CliCall& k) {
+    if (!fitsTmp(c, k.arg)) {
+      sprintf(k.reply, "Invalid extra SF config");
+      return;
+    }
     strcpy(c.tmp, k.arg);
     const char *parts[4];
     uint8_t sideDetSFs[4];
@@ -1353,7 +1370,7 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
   char* config = &command[4];
 
   if (!cliRun(kGetCmds, *this, sender_timestamp, config, reply)) {
-    sprintf(reply, "??: %s", config);
+    snprintf(reply, 160, "??: %s", config);   // callers pass a 160-byte reply buffer
   }
 }
 
