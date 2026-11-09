@@ -2386,6 +2386,380 @@ void MyMesh::enterCLIRescue() {
   Serial.println("========= CLI Rescue =========");
 }
 
+// ---------------------------------------------------------------------------
+// Text CLI tables (step 13d-b)
+//
+// One row per command. A row says how the start of the command line is compared
+// (match), how many characters that is, and which handler runs. The tables are
+// const, so they live in flash. The three compile switches PIN_BUZZER,
+// ENABLE_WIFI_INTERFACE and DISPLAY_CLASS decide which rows exist.
+//
+// Rows are tried top to bottom and the first match wins, like the `if` chain they
+// replace. No name below is the start of another one, so no pair of rows depends
+// on its order today. A new row must keep it that way, or go above the row it
+// overlaps with.
+//
+//   CLI_PREFIX: memcmp() of the first `len` characters. What follows is the
+//               argument. The name includes the space ("set name ") unless the
+//               old code had none (the "ui." keys).
+//   CLI_EXACT:  strcmp(): the whole text is the name.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+enum CliMatch : uint8_t {
+  CLI_PREFIX = 0,
+  CLI_EXACT,
+};
+
+// What a handler gets: the text after the matched name, and the reply buffer.
+struct CliCall {
+  const char* arg;
+  char* reply;
+};
+
+// false: not a command after all (only the `set ` and `get ` rows can say so)
+typedef bool (*CliFn)(MyMesh& m, CliCall& k);
+
+struct CliCmd {
+  const char* name;
+  uint8_t len;
+  uint8_t match;
+  CliFn fn;
+};
+
+// len comes from the literal, so the name and its length cannot drift apart
+#define CLI_CMD(str, match, fn) { str, (uint8_t)(sizeof(str) - 1), match, fn }
+
+template <size_t N>
+bool cliRun(const CliCmd (&table)[N], MyMesh& m, const char* text, char* reply) {
+  for (size_t i = 0; i < N; i++) {
+    const CliCmd& r = table[i];
+    if (r.match == CLI_EXACT ? strcmp(text, r.name) != 0 : memcmp(text, r.name, r.len) != 0) continue;
+    CliCall k = { text + r.len, reply };
+    return r.fn(m, k);
+  }
+  return false;
+}
+
+}  // namespace
+
+// The handlers are static members of this struct so that they can reach the
+// private members of MyMesh (it is a friend).
+struct MyMeshCli {
+  // ---- top level commands ------------------------------------------------
+
+  static bool reboot(MyMesh& m, CliCall& k) {
+    board.reboot(); // doesn't return
+    return true;
+  }
+  static bool powerOff(MyMesh& m, CliCall& k) {
+    board.powerOff(); // doesn't return
+    return true;
+  }
+  static bool set(MyMesh& m, CliCall& k);  // below the tables
+  static bool get(MyMesh& m, CliCall& k);
+  static bool boardName(MyMesh& m, CliCall& k) {
+    strcpy(k.reply, board.getManufacturerName());
+    return true;
+  }
+  static bool ver(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "%s (Build: %s)", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
+    return true;
+  }
+
+  // ---- set <key> ---------------------------------------------------------
+
+  static bool setName(MyMesh& m, CliCall& k) {
+    if (AdvertDataParser::isValidName(k.arg)) {
+      StrHelper::strncpy(m._prefs.node_name, k.arg, sizeof(m._prefs.node_name));
+      m.savePrefs();
+      strcpy(k.reply, "OK");
+    } else {
+      strcpy(k.reply, "Error, bad chars");
+    }
+    return true;
+  }
+  static bool setPin(MyMesh& m, CliCall& k) {
+    m._prefs.ble_pin = atoi(k.arg);
+    m.savePrefs();
+    sprintf(k.reply, "> pin is now %06d", m._prefs.ble_pin);
+    return true;
+  }
+  static bool setTzOffset(MyMesh& m, CliCall& k) {
+    float tz = atof(k.arg);
+    if (tz < -12 || tz > 14) {
+      strcpy(k.reply, "Error, must be from -12 to +14");
+    } else {
+      m._prefs.tz_offset = tz;
+      m.savePrefs();
+      strcpy(k.reply, "OK");
+    }
+    return true;
+  }
+#ifdef PIN_BUZZER
+  static bool setBuzzer(MyMesh& m, CliCall& k) {
+    if (strcmp(k.arg, "on") == 0 || strcmp(k.arg, "off") == 0) {
+      m._prefs.buzzer_quiet = strcmp(k.arg, "off") == 0;
+      m.savePrefs();
+      strcpy(k.reply, "OK");
+    } else {
+      strcpy(k.reply, "Error: state must be on or off");
+    }
+    return true;
+  }
+#endif
+#ifdef ENABLE_WIFI_INTERFACE
+  static bool setWifiSsid(MyMesh& m, CliCall& k) {
+    StrHelper::strncpy(m._prefs.wifi_ssid, k.arg, sizeof(m._prefs.wifi_ssid));
+    m.savePrefs();
+    sprintf(k.reply, "> wifi.ssid is now %s (set wifi.pwd too, then reboot)", m._prefs.wifi_ssid);
+    return true;
+  }
+  static bool setWifiPwd(MyMesh& m, CliCall& k) {
+    StrHelper::strncpy(m._prefs.wifi_pwd, k.arg, sizeof(m._prefs.wifi_pwd));
+    m.savePrefs();
+    strcpy(k.reply, "> wifi.pwd updated (reboot to apply)");
+    return true;
+  }
+  static bool setWifiClear(MyMesh& m, CliCall& k) {
+    m._prefs.wifi_ssid[0] = 0;
+    m._prefs.wifi_pwd[0] = 0;
+    m.savePrefs();
+    strcpy(k.reply, "> wifi config cleared (reboot to apply)");
+    return true;
+  }
+  static bool setWifiEnabled(MyMesh& m, CliCall& k) {
+    m._prefs.wifi_enabled = atoi(k.arg) ? 1 : 0;
+    m.savePrefs();
+    sprintf(k.reply, "> wifi.enabled is now %d (reboot to apply)", m._prefs.wifi_enabled);
+    return true;
+  }
+#endif
+#ifdef DISPLAY_CLASS
+  static bool setUiShowClock(MyMesh& m, CliCall& k) {
+    m._prefs.ui_show_clock = atoi(k.arg) ? 1 : 0;
+    m.savePrefs();
+    sprintf(k.reply, "> now %d", m._prefs.ui_show_clock);
+    return true;
+  }
+  static bool setUiAutoOffDelay(MyMesh& m, CliCall& k) {
+    m._prefs.ui_auto_off_delay = atoi(k.arg);
+    m.savePrefs();
+    sprintf(k.reply, "> now %d seconds", m._prefs.ui_auto_off_delay);
+    return true;
+  }
+  static bool setUiBacklightDelay(MyMesh& m, CliCall& k) {
+    m._prefs.ui_backlight_delay = atoi(k.arg);
+    m.savePrefs();
+    if (m._prefs.ui_backlight_delay >= 0)
+      sprintf(k.reply, "> now %d seconds", m._prefs.ui_backlight_delay);
+    else if (m._prefs.ui_backlight_delay == -1)
+      sprintf(k.reply, "> now always on (-1)");
+    else
+      sprintf(k.reply, "> now disabled (<-1)");
+    return true;
+  }
+  static bool setUiBacklightOnKeys(MyMesh& m, CliCall& k) {
+    m._prefs.ui_backlight_on_keys = atoi(k.arg);
+    m.savePrefs();
+    sprintf(k.reply, "> now %d", m._prefs.ui_backlight_on_keys);
+    return true;
+  }
+  static bool setUiBacklightOnMsgs(MyMesh& m, CliCall& k) {
+    m._prefs.ui_backlight_on_msgs = atoi(k.arg);
+    m.savePrefs();
+    sprintf(k.reply, "> now %d", m._prefs.ui_backlight_on_msgs);
+    return true;
+  }
+  static bool setUiAutoOffBlank(MyMesh& m, CliCall& k) {
+    m._prefs.ui_auto_off_blank = atoi(k.arg);
+    m.savePrefs();
+    sprintf(k.reply, "> now %d", m._prefs.ui_auto_off_blank);
+    return true;
+  }
+  static bool setUiAutoOffKeepMsgs(MyMesh& m, CliCall& k) {
+    m._prefs.ui_auto_off_keep_msgs = atoi(k.arg);
+    m.savePrefs();
+    sprintf(k.reply, "> now %d", m._prefs.ui_auto_off_keep_msgs);
+    return true;
+  }
+  static bool setUiMaxPartial(MyMesh& m, CliCall& k) {
+    m._prefs.ui_max_partial = atoi(k.arg);
+    m.savePrefs();
+    sprintf(k.reply, "> now %d (applied at next screen wakeup)", m._prefs.ui_max_partial);
+    return true;
+  }
+  static bool setUiNdName(MyMesh& m, CliCall& k) {
+    m._prefs.ui_nd_name = atoi(k.arg);
+    m.savePrefs();
+    sprintf(k.reply, "> ui.nd_name is now %d", m._prefs.ui_nd_name);
+    return true;
+  }
+#endif
+
+  // ---- get <key> ---------------------------------------------------------
+
+  static bool getName(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %s", m._prefs.node_name);
+    return true;
+  }
+  static bool getTzOffset(MyMesh& m, CliCall& k) {
+    float q = m._prefs.tz_offset * 4;
+    sprintf(k.reply, (q == (int)q && ((int)q & 1)) ? "> %.2f" : "> %.1f", m._prefs.tz_offset);
+    return true;
+  }
+#ifdef PIN_BUZZER
+  static bool getBuzzer(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %s", m._prefs.buzzer_quiet ? "off" : "on");
+    return true;
+  }
+#endif
+#ifdef ENABLE_WIFI_INTERFACE
+  static bool getWifiPwd(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %s", m._prefs.wifi_pwd);
+    return true;
+  }
+  static bool getWifiSsid(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %s", m._prefs.getWifiSSID()[0] ? m._prefs.getWifiSSID() : "(not set)");
+    return true;
+  }
+  static bool getWifiEnabled(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d", m._prefs.wifi_enabled);
+    return true;
+  }
+  static bool getWifiStatus(MyMesh& m, CliCall& k) {
+    strcpy(k.reply, WiFi.status() == WL_CONNECTED ? "> connected" : "> disconnected");
+    return true;
+  }
+  static bool getWifiIp(MyMesh& m, CliCall& k) {
+    if (WiFi.status() == WL_CONNECTED) {
+      sprintf(k.reply, "> %s", WiFi.localIP().toString().c_str());
+    } else {
+      strcpy(k.reply, "> (not connected)");
+    }
+    return true;
+  }
+#endif
+#ifdef DISPLAY_CLASS
+  static bool getUiShowClock(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d", m._prefs.ui_show_clock);
+    return true;
+  }
+  static bool getUiAutoOffDelay(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d seconds", m._prefs.ui_auto_off_delay);
+    return true;
+  }
+  static bool getUiBacklightDelay(MyMesh& m, CliCall& k) {
+    if (m._prefs.ui_backlight_delay >= 0)
+      sprintf(k.reply, "> %d seconds", m._prefs.ui_backlight_delay);
+    else if (m._prefs.ui_backlight_delay == -1)
+      sprintf(k.reply, "> always on (-1)");
+    else
+      sprintf(k.reply, "> disabled (<-1)");
+    return true;
+  }
+  static bool getUiBacklightOnKeys(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d", m._prefs.ui_backlight_on_keys);
+    return true;
+  }
+  static bool getUiBacklightOnMsgs(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d", m._prefs.ui_backlight_on_msgs);
+    return true;
+  }
+  static bool getUiAutoOffBlank(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d", m._prefs.ui_auto_off_blank);
+    return true;
+  }
+  static bool getUiAutoOffKeepMsgs(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d", m._prefs.ui_auto_off_keep_msgs);
+    return true;
+  }
+  static bool getUiMaxPartial(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d", m._prefs.ui_max_partial);
+    return true;
+  }
+  static bool getUiNdName(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %d", m._prefs.ui_nd_name);
+    return true;
+  }
+#endif
+};
+
+namespace {
+
+// The command line after the radio settings table and the board hook.
+const CliCmd kTopCmds[] = {
+  CLI_CMD("reboot",   CLI_EXACT,  MyMeshCli::reboot),
+  CLI_CMD("poweroff", CLI_EXACT,  MyMeshCli::powerOff),
+  CLI_CMD("shutdown", CLI_EXACT,  MyMeshCli::powerOff),   // shares the handler with poweroff
+  CLI_CMD("set ",     CLI_PREFIX, MyMeshCli::set),
+  CLI_CMD("get ",     CLI_PREFIX, MyMeshCli::get),
+  CLI_CMD("board",    CLI_EXACT,  MyMeshCli::boardName),
+  CLI_CMD("ver",      CLI_EXACT,  MyMeshCli::ver),
+};
+
+// The text after "set ". Keys with an argument include the space.
+const CliCmd kSetCmds[] = {
+  CLI_CMD("name ",                CLI_PREFIX, MyMeshCli::setName),
+#ifdef PIN_BUZZER
+  CLI_CMD("buzzer ",              CLI_PREFIX, MyMeshCli::setBuzzer),
+#endif
+  CLI_CMD("pin ",                 CLI_PREFIX, MyMeshCli::setPin),
+#ifdef ENABLE_WIFI_INTERFACE
+  CLI_CMD("wifi.ssid ",           CLI_PREFIX, MyMeshCli::setWifiSsid),
+  CLI_CMD("wifi.pwd ",            CLI_PREFIX, MyMeshCli::setWifiPwd),
+  CLI_CMD("wifi.clear",           CLI_EXACT,  MyMeshCli::setWifiClear),
+  CLI_CMD("wifi.enabled ",        CLI_PREFIX, MyMeshCli::setWifiEnabled),
+#endif
+  CLI_CMD("tz.offset ",           CLI_PREFIX, MyMeshCli::setTzOffset),
+#ifdef DISPLAY_CLASS
+  // by prefix with no space and no end of word check, as the old code did
+  CLI_CMD("ui.show_clock",        CLI_PREFIX, MyMeshCli::setUiShowClock),
+  CLI_CMD("ui.auto_off_delay",    CLI_PREFIX, MyMeshCli::setUiAutoOffDelay),
+  CLI_CMD("ui.backlight_delay",   CLI_PREFIX, MyMeshCli::setUiBacklightDelay),
+  CLI_CMD("ui.backlight_on_keys", CLI_PREFIX, MyMeshCli::setUiBacklightOnKeys),
+  CLI_CMD("ui.backlight_on_msgs", CLI_PREFIX, MyMeshCli::setUiBacklightOnMsgs),
+  CLI_CMD("ui.auto_off_blank",    CLI_PREFIX, MyMeshCli::setUiAutoOffBlank),
+  CLI_CMD("ui.auto_off_keep_msgs", CLI_PREFIX, MyMeshCli::setUiAutoOffKeepMsgs),
+  CLI_CMD("ui.max_partial",       CLI_PREFIX, MyMeshCli::setUiMaxPartial),
+  CLI_CMD("ui.nd_name",           CLI_PREFIX, MyMeshCli::setUiNdName),
+#endif
+};
+
+// The text after "get ". Whole word, except the "ui." keys.
+const CliCmd kGetCmds[] = {
+  CLI_CMD("name",                 CLI_EXACT,  MyMeshCli::getName),
+#ifdef PIN_BUZZER
+  CLI_CMD("buzzer",               CLI_EXACT,  MyMeshCli::getBuzzer),
+#endif
+#ifdef ENABLE_WIFI_INTERFACE
+  CLI_CMD("wifi.pwd",             CLI_EXACT,  MyMeshCli::getWifiPwd),
+  CLI_CMD("wifi.ssid",            CLI_EXACT,  MyMeshCli::getWifiSsid),
+  CLI_CMD("wifi.enabled",         CLI_EXACT,  MyMeshCli::getWifiEnabled),
+  CLI_CMD("wifi.status",          CLI_EXACT,  MyMeshCli::getWifiStatus),
+  CLI_CMD("wifi.ip",              CLI_EXACT,  MyMeshCli::getWifiIp),
+#endif
+  CLI_CMD("tz.offset",            CLI_EXACT,  MyMeshCli::getTzOffset),
+#ifdef DISPLAY_CLASS
+  CLI_CMD("ui.show_clock",        CLI_PREFIX, MyMeshCli::getUiShowClock),
+  CLI_CMD("ui.auto_off_delay",    CLI_PREFIX, MyMeshCli::getUiAutoOffDelay),
+  CLI_CMD("ui.backlight_delay",   CLI_PREFIX, MyMeshCli::getUiBacklightDelay),
+  CLI_CMD("ui.backlight_on_keys", CLI_PREFIX, MyMeshCli::getUiBacklightOnKeys),
+  CLI_CMD("ui.backlight_on_msgs", CLI_PREFIX, MyMeshCli::getUiBacklightOnMsgs),
+  CLI_CMD("ui.auto_off_blank",    CLI_PREFIX, MyMeshCli::getUiAutoOffBlank),
+  CLI_CMD("ui.auto_off_keep_msgs", CLI_PREFIX, MyMeshCli::getUiAutoOffKeepMsgs),
+  CLI_CMD("ui.max_partial",       CLI_PREFIX, MyMeshCli::getUiMaxPartial),
+  CLI_CMD("ui.nd_name",           CLI_PREFIX, MyMeshCli::getUiNdName),
+#endif
+};
+
+}  // namespace
+
+// "set " and "get " with a key that is not in the table are not commands: false.
+bool MyMeshCli::set(MyMesh& m, CliCall& k) { return cliRun(kSetCmds, m, k.arg, k.reply); }
+bool MyMeshCli::get(MyMesh& m, CliCall& k) { return cliRun(kGetCmds, m, k.arg, k.reply); }
+
 bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char* reply) {
   while (*command == ' ') command++; // skip leading spaces
 
@@ -2407,237 +2781,7 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
     return true;
   }
 
-  if (strcmp(command, "reboot") == 0) {
-    board.reboot(); // doesn't return
-    return true;
-  }
-
-  if (strcmp(command, "poweroff") == 0 || strcmp(command, "shutdown") == 0) {
-    board.powerOff(); // doesn't return
-    return true;
-  }
-
-  if (memcmp(command, "set name ", 9) == 0) {
-    if (AdvertDataParser::isValidName(&command[9])) {
-      StrHelper::strncpy(_prefs.node_name, &command[9], sizeof(_prefs.node_name));
-      savePrefs();
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Error, bad chars");
-    }
-    return true;
-  }
-  if (strcmp(command, "get name") == 0) {
-    sprintf(reply, "> %s", _prefs.node_name);
-    return true;
-  }
-
-#ifdef PIN_BUZZER
-  if (strcmp(command, "get buzzer") == 0) {
-    sprintf(reply, "> %s", _prefs.buzzer_quiet ? "off" : "on");
-    return true;
-  }
-  if (memcmp(command, "set buzzer ", 11) == 0) {
-    if (strcmp(&command[11], "on") == 0 || strcmp(&command[11], "off") == 0) {
-      _prefs.buzzer_quiet = strcmp(&command[11], "off") == 0;
-      savePrefs();
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Error: state must be on or off");
-    }
-    return true;
-  }
-#endif
-
-  if (memcmp(command, "set pin ", 8) == 0) {
-    _prefs.ble_pin = atoi(&command[8]);
-    savePrefs();
-    sprintf(reply, "> pin is now %06d", _prefs.ble_pin);
-    return true;
-  }
-
-#ifdef ENABLE_WIFI_INTERFACE
-  if (memcmp(command, "set wifi.ssid ", 14) == 0) {
-    StrHelper::strncpy(_prefs.wifi_ssid, &command[14], sizeof(_prefs.wifi_ssid));
-    savePrefs();
-    sprintf(reply, "> wifi.ssid is now %s (set wifi.pwd too, then reboot)", _prefs.wifi_ssid);
-    return true;
-  }
-  if (memcmp(command, "set wifi.pwd ", 13) == 0) {
-    StrHelper::strncpy(_prefs.wifi_pwd, &command[13], sizeof(_prefs.wifi_pwd));
-    savePrefs();
-    strcpy(reply, "> wifi.pwd updated (reboot to apply)");
-    return true;
-  }
-  if (strcmp(command, "get wifi.pwd") == 0) {
-    sprintf(reply, "> %s", _prefs.wifi_pwd);
-    return true;
-  }
-  if (strcmp(command, "set wifi.clear") == 0) {
-    _prefs.wifi_ssid[0] = 0;
-    _prefs.wifi_pwd[0] = 0;
-    savePrefs();
-    strcpy(reply, "> wifi config cleared (reboot to apply)");
-    return true;
-  }
-  if (strcmp(command, "get wifi.ssid") == 0) {
-    sprintf(reply, "> %s", _prefs.getWifiSSID()[0] ? _prefs.getWifiSSID() : "(not set)");
-    return true;
-  }
-  if (memcmp(command, "set wifi.enabled ", 17) == 0) {
-    _prefs.wifi_enabled = atoi(&command[17]) ? 1 : 0;
-    savePrefs();
-    sprintf(reply, "> wifi.enabled is now %d (reboot to apply)", _prefs.wifi_enabled);
-    return true;
-  }
-  if (strcmp(command, "get wifi.enabled") == 0) {
-    sprintf(reply, "> %d", _prefs.wifi_enabled);
-    return true;
-  }
-  if (strcmp(command, "get wifi.status") == 0) {
-    strcpy(reply, WiFi.status() == WL_CONNECTED ? "> connected" : "> disconnected");
-    return true;
-  }
-  if (strcmp(command, "get wifi.ip") == 0) {
-    if (WiFi.status() == WL_CONNECTED) {
-      sprintf(reply, "> %s", WiFi.localIP().toString().c_str());
-    } else {
-      strcpy(reply, "> (not connected)");
-    }
-    return true;
-  }
-#endif
-
-  if (strcmp(command, "board") == 0) {
-    strcpy(reply, board.getManufacturerName());
-    return true;
-  }
-
-  if (strcmp(command, "ver") == 0) {
-    sprintf(reply, "%s (Build: %s)", FIRMWARE_VERSION, FIRMWARE_BUILD_DATE);
-    return true;
-  }
-
-  if (strcmp(command, "get tz.offset") == 0) {
-    float q = _prefs.tz_offset * 4;
-    sprintf(reply, (q == (int)q && ((int)q & 1)) ? "> %.2f" : "> %.1f", _prefs.tz_offset);
-    return true;
-  }
-  if (memcmp(command, "set tz.offset ", 14) == 0) {
-    float tz = atof(&command[14]);
-    if (tz < -12 || tz > 14) {
-      strcpy(reply, "Error, must be from -12 to +14");
-    } else {
-      _prefs.tz_offset = tz;
-      savePrefs();
-      strcpy(reply, "OK");
-    }
-    return true;
-  }
-#ifdef DISPLAY_CLASS
-  if (memcmp(command, "set ui.show_clock", 17) == 0) {
-    _prefs.ui_show_clock = atoi(&command[17]) ? 1 : 0;
-    savePrefs();
-    sprintf(reply, "> now %d", _prefs.ui_show_clock);
-    return true;
-  }
-  if (memcmp(command, "set ui.auto_off_delay", 21) == 0) {
-    _prefs.ui_auto_off_delay = atoi(&command[21]);
-    savePrefs();
-    sprintf(reply, "> now %d seconds", _prefs.ui_auto_off_delay);
-    return true;
-  }
-  if (memcmp(command, "set ui.backlight_delay", 22) == 0) {
-    _prefs.ui_backlight_delay = atoi(&command[22]);
-    savePrefs();
-    if (_prefs.ui_backlight_delay >= 0)    
-      sprintf(reply, "> now %d seconds", _prefs.ui_backlight_delay);
-    else if (_prefs.ui_backlight_delay == -1)
-      sprintf(reply, "> now always on (-1)");
-    else
-      sprintf(reply, "> now disabled (<-1)");
-    return true;
-  }
-  if (memcmp(command, "set ui.backlight_on_keys", 24) == 0) {
-    _prefs.ui_backlight_on_keys = atoi(&command[24]);
-    savePrefs();
-    sprintf(reply, "> now %d", _prefs.ui_backlight_on_keys);
-    return true;
-  }
-  if (memcmp(command, "set ui.backlight_on_msgs", 24) == 0) {
-    _prefs.ui_backlight_on_msgs = atoi(&command[24]);
-    savePrefs();
-    sprintf(reply, "> now %d", _prefs.ui_backlight_on_msgs);
-    return true;
-  }
-  if (memcmp(command, "set ui.auto_off_blank", 21) == 0) {
-    _prefs.ui_auto_off_blank = atoi(&command[21]);
-    savePrefs();
-    sprintf(reply, "> now %d", _prefs.ui_auto_off_blank);
-    return true;
-  }
-  if (memcmp(command, "set ui.auto_off_keep_msgs", 25) == 0) {
-    _prefs.ui_auto_off_keep_msgs = atoi(&command[25]);
-    savePrefs();
-    sprintf(reply, "> now %d", _prefs.ui_auto_off_keep_msgs);
-    return true;
-  }
-  if (memcmp(command, "set ui.max_partial", 18) == 0) {
-    _prefs.ui_max_partial = atoi(&command[18]);
-    savePrefs();
-    sprintf(reply, "> now %d (applied at next screen wakeup)", _prefs.ui_max_partial);
-    return true;
-  }
-  if (memcmp(command, "set ui.nd_name", 14) == 0) {
-    _prefs.ui_nd_name = atoi(&command[14]);
-    savePrefs();
-    sprintf(reply, "> ui.nd_name is now %d", _prefs.ui_nd_name);
-    return true;
-  }
-  if (memcmp(command, "get ui.show_clock", 17) == 0) {
-    sprintf(reply, "> %d", _prefs.ui_show_clock);
-    return true;
-  }
-  if (memcmp(command, "get ui.auto_off_delay", 21) == 0) {
-    sprintf(reply, "> %d seconds", _prefs.ui_auto_off_delay);
-    return true;
-  }
-  if (memcmp(command, "get ui.backlight_delay", 22) == 0) {
-    if (_prefs.ui_backlight_delay >= 0)    
-      sprintf(reply, "> %d seconds", _prefs.ui_backlight_delay);
-    else if (_prefs.ui_backlight_delay == -1)
-      sprintf(reply, "> always on (-1)");
-    else
-      sprintf(reply, "> disabled (<-1)");
-    return true;
-  }
-  if (memcmp(command, "get ui.backlight_on_keys", 24) == 0) {
-    sprintf(reply, "> %d", _prefs.ui_backlight_on_keys);
-    return true;
-  }
-  if (memcmp(command, "get ui.backlight_on_msgs", 24) == 0) {
-    sprintf(reply, "> %d", _prefs.ui_backlight_on_msgs);
-    return true;
-  }
-  if (memcmp(command, "get ui.auto_off_blank", 21) == 0) {
-    sprintf(reply, "> %d", _prefs.ui_auto_off_blank);
-    return true;
-  }
-  if (memcmp(command, "get ui.auto_off_keep_msgs", 25) == 0) {
-    sprintf(reply, "> %d", _prefs.ui_auto_off_keep_msgs);
-    return true;
-  }
-  if (memcmp(command, "get ui.max_partial", 18) == 0) {
-    sprintf(reply, "> %d", _prefs.ui_max_partial);
-    return true;
-  }
-  if (memcmp(command, "get ui.nd_name", 14) == 0) {
-    sprintf(reply, "> %d", _prefs.ui_nd_name);
-    return true;
-  }
-#endif
-
-  return false;  // not handled
+  return cliRun(kTopCmds, *this, command, reply);  // false: not handled
 }
 
 void MyMesh::checkCLIRescueCmd() {
