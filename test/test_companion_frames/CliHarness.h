@@ -13,8 +13,10 @@
 // - runFrame():  CMD_RUN_CLI_COMMAND, what the app sends. The reply travels in the
 //                RESP_CLI_REPLY frame; the buffer is the node's reply_buf[166].
 //
-// The third caller, the rescue CLI on the serial port (checkCLIRescueCmd), is a
-// separate chain and not part of this step.
+// The third caller is the rescue CLI on the serial port (checkCLIRescueCmd). It calls
+// handleCommand() first, with timestamp 0 and the node's reply_buf, exactly as the
+// frame does, and only then tries its own commands (rebuild, erase, ls, ...). Those own
+// commands are not part of this step.
 //
 // The reply buffer of run() holds an empty string and a filler behind it, with guard
 // bytes on both sides, so a command that writes beyond the buffer, or leaves the reply
