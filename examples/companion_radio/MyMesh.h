@@ -287,6 +287,7 @@ private:
   bool cmdGetAllowedRepeatFreq(size_t len);
   bool cmdSendRawPacket(size_t len);
 
+  friend struct MyMeshCli;  // the text CLI handlers in MyMesh.cpp
   void checkCLIRescueCmd();
   bool handleCommand(const char* text, uint32_t sender_timestamp, char* reply);
   void checkSerialInterface();
