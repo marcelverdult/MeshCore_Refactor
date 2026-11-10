@@ -167,3 +167,25 @@ per-variant matching against the original 74 lines was NOT done.
 - `thinknode_m1` follows upstream: the hardware switch logic is gone. Not checked on a board.
 - Not built, NOT VERIFIED: the other 102 environments of the 211 in `sync-build-envs.txt`.
 - The size cause beyond the two measured environments is an inference.
+
+## Follow-up merge: upstream/dev b8ae75d2 (same day)
+
+`upstream/dev` moved by 6 commits after the first merge: mDNS for ESP32 (#3770,
+`ENABLE_ESP_MDNS`), e-ink busy loop and hibernate when the screen is off (#3793,
+`EINK_REFRESH_LOOP` in four variants), RAK16000 with a second INA219 address (#3778,
+`EnvironmentSensorManager.cpp`). Branch `claude/sync-upstream-dev-20261110b-b58e97`, merge
+commit 67161ccc on top of 72100b3c.
+
+- Probe and merge: no conflict. `EnvironmentSensorManager.cpp` auto-merged; the INA219
+  change sits next to the GPS code that #3753 changed and does not touch it.
+- Native: the same 28 environments again, all exit code 0, 2447 cases (2446 succeeded,
+  1 skipped), unchanged against the first merge. No native test covers the new code.
+- Firmware, 10 environments, all build: `heltec_v4_companion_radio_wifi` (1146017 flash,
+  mDNS enabled), `heltec_v4_tft_companion_radio_wifi` (1120865), `heltec_v4_companion_radio_ble`
+  (1710257), `heltec_v4_repeater` (1183937), `ThinkNode_M1_companion_radio_ble` (384564),
+  `ThinkNode_M5_companion_radio_ble` (1251685), `ThinkNode_M8_companion_radio_ble` (390148),
+  `WioTrackerL1Eink_companion_radio_ble` (444256), `RAK_4631_companion_radio_ble` (492352),
+  `RAK_4631_repeater` (468140). No size comparison against `upstream/dev` b8ae75d2 was made
+  for these.
+- Not tested, NOT VERIFIED: mDNS discovery on a device, the e-ink refresh loop, the second
+  INA219 address.
