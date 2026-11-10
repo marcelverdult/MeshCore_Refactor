@@ -128,7 +128,8 @@ public:
     return true;
   }
   float getAdcMultiplier() const override { return adc_multiplier; }
-  const char* getManufacturerName() const override { return "Mock"; }
+  std::string manufacturer = "Mock";   // a test may set a long name
+  const char* getManufacturerName() const override { return manufacturer.c_str(); }
   void reboot() override { reboot_calls++; }
   void powerOff() override { power_off_calls++; }
   bool handleCommand(const char* command, uint32_t sender_timestamp, char* reply) override {
@@ -157,6 +158,7 @@ public:
     gpio = 0;
     reboot_calls = 0;
     power_off_calls = 0;
+    manufacturer = "Mock";
     hook_handles = false;
     hook_reply.clear();
     hook_commands.clear();

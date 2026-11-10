@@ -2460,7 +2460,10 @@ struct MyMeshCli {
   static bool set(MyMesh& m, CliCall& k);  // below the tables
   static bool get(MyMesh& m, CliCall& k);
   static bool boardName(MyMesh& m, CliCall& k) {
-    strcpy(k.reply, board.getManufacturerName());
+    // At most 39 characters, like the name in the app's device info frame (40 bytes).
+    // The smallest reply buffer of the callers is 161 bytes (the remote CLI), and a
+    // prefix adds at most 3. Every board name in the tree is 37 characters or less.
+    StrHelper::strncpy(k.reply, board.getManufacturerName(), 40);
     return true;
   }
   static bool ver(MyMesh& m, CliCall& k) {
@@ -2481,14 +2484,22 @@ struct MyMeshCli {
     return true;
   }
   static bool setPin(MyMesh& m, CliCall& k) {
-    m._prefs.ble_pin = atoi(k.arg);
-    m.savePrefs();
-    sprintf(k.reply, "> pin is now %06d", m._prefs.ble_pin);
+    // Same rule as cmdSetDevicePin(): 0, or six digits. Text without a leading number
+    // reads as 0, as it did with atoi(). The range is checked on the long, before it
+    // is stored in the unsigned field.
+    long pin = strtol(k.arg, NULL, 10);
+    if (pin == 0 || (pin >= 100000 && pin <= 999999)) {
+      m._prefs.ble_pin = (uint32_t)pin;
+      m.savePrefs();
+      sprintf(k.reply, "> pin is now %06d", m._prefs.ble_pin);
+    } else {
+      strcpy(k.reply, "Error, pin must be 0 or 6 digits");
+    }
     return true;
   }
   static bool setTzOffset(MyMesh& m, CliCall& k) {
     float tz = atof(k.arg);
-    if (tz < -12 || tz > 14) {
+    if (!(tz >= -12 && tz <= 14)) {   // written so that NaN is refused too
       strcpy(k.reply, "Error, must be from -12 to +14");
     } else {
       m._prefs.tz_offset = tz;
