@@ -182,14 +182,42 @@ inline MockBoard board;
 mesh::LocalIdentity radio_new_identity();
 inline MockRTCClock rtc_clock;
 
+// A location provider that only records what the role asks of it (the GPS state at boot,
+// pushed by CommonGpsPrefs::apply()).
+// LocationProvider::sendSentence() is declared in the header and defined by no firmware file
+// (every real provider overrides it); the vtable needs a definition, so the tests give one.
+inline void LocationProvider::sendSentence(const char*) { }
+
+class MockLocation : public LocationProvider {
+public:
+  long getLatitude() override { return 0; }
+  long getLongitude() override { return 0; }
+  long getAltitude() override { return 0; }
+  long satellitesCount() override { return 0; }
+  bool isValid() override { return false; }
+  long getTimestamp() override { return 0; }
+  void reset() override { }
+  void begin() override { }
+  void stop() override { }
+  void loop() override { }
+  bool isActive() override { return false; }
+  void setGpsPeriod(uint32_t seconds) override { logEvent("location.setGpsPeriod " + std::to_string(seconds)); }
+  void setGpsOn(bool on) override {
+    logEvent(std::string("location.setGpsOn ") + (on ? "1" : "0"));
+    LocationProvider::setGpsOn(on);
+  }
+};
+
 // SensorManager is concrete, so the real class serves as the stand-in; this one only
-// adds a record of the settings the role pushes to it (the GPS toggle at boot).
+// adds a record of what the role pushes to it (the GPS state at boot).
 class MockSensorManager : public SensorManager {
+  MockLocation _location;
 public:
   bool setSettingValue(const char* name, const char* value) override {
     logEvent(std::string("sensors.setSettingValue ") + name + "=" + value);
     return true;
   }
+  LocationProvider* getLocationProvider() override { return &_location; }
 };
 
 inline MockSensorManager sensors;

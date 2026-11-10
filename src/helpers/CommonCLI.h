@@ -7,6 +7,7 @@
 #include <helpers/RegionMap.h>
 #include <helpers/ConfigSerializer.h>
 #include <helpers/CommonRadioPrefs.h>
+#include <helpers/CommonGpsPrefs.h>
 #include <helpers/DynamicConfigSerializer.h>
 #include <helpers/CommonNodePrefs.h>
 

@@ -2,7 +2,7 @@
 
 #include <helpers/ConfigSerializer.h>
 #include <helpers/CommonRadioPrefs.h>
-#include <helpers/CommonGPSPrefs.h>
+#include <helpers/CommonGpsPrefs.h>
 #include <helpers/DynamicConfigSerializer.h>
 #include <helpers/RoutingPolicy.h>
 
@@ -81,7 +81,7 @@ private:
   };
   BridgePrefs bridge;
 
-  CommonGPSPrefs gps;
+  FieldGpsPrefs gps;
 
   class PowerPrefs : public ConfigSerializer {
     NodePrefs* _parent;
@@ -150,7 +150,7 @@ protected:
   }
 
 public:
-  NodePrefs() : ConfigSerializer(), bridge(this), gps(*this), radio(*this), power(this), repeat(this), room(this), custom(&radio) {
+  NodePrefs() : ConfigSerializer(), bridge(this), gps(*this, &node_lat, &node_lon), radio(*this), power(this), repeat(this), room(this), custom(&radio) {
     node_name[0] = 0;
     password[0] = 0;
     guest_password[0] = 0;
@@ -161,8 +161,9 @@ public:
   }
 
   CommonRadioPrefs* getRadioPrefs() { return &radio; }
+  CommonGpsPrefs* getGpsPrefs() { return &gps; }
   KeyValueStore* getCustom() { return &custom; }
 
-  bool isDirty() const override { return ConfigSerializer::isDirty() || radio.isDirty() || custom.isDirty(); }
-  void clearDirty() override { ConfigSerializer::clearDirty(); radio.clearDirty(); custom.clearDirty(); }
+  bool isDirty() const override { return ConfigSerializer::isDirty() || radio.isDirty() || gps.isDirty() || custom.isDirty(); }
+  void clearDirty() override { ConfigSerializer::clearDirty(); radio.clearDirty(); gps.clearDirty(); custom.clearDirty(); }
 };

@@ -161,9 +161,11 @@ TEST_F(CliTest, TheUiSettingsSurviveARestartAndAreTheUiBlockOfThePrefsFile) {
   say("set ui.auto_off_keep_msgs 0");
   say("set ui.max_partial 9");
   say("set ui.nd_name 0");
+  EXPECT_EQ(say("set ui.gps_action once"), "> now once");
   EXPECT_TRUE(contains(prefsFile(),
-      "ui:{show_clock:1,auto_off:21,bl_dly:-1,bl_keys:0,bl_msgs:1,max_partial:9,off_blank:1,off_keep_msgs:0,nd_name:0}"));
+      "ui:{show_clock:1,auto_off:21,bl_dly:-1,bl_keys:0,bl_msgs:1,max_partial:9,off_blank:1,off_keep_msgs:0,nd_name:0,gps_act:1}"));
   reboot();
+  EXPECT_EQ(say("get ui.gps_action"), "> once");
   EXPECT_EQ(say("get ui.show_clock"), "> 1");
   EXPECT_EQ(say("get ui.auto_off_delay"), "> 21 seconds");
   EXPECT_EQ(say("get ui.backlight_delay"), "> always on (-1)");
