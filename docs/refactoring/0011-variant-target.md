@@ -2039,6 +2039,233 @@ shows the home screen and that a click and a long press on the user button act.
 
 </details>
 
+## Cut E2 after #3753
+
+Planning only, no code. Measured on `f307e08b` (`integration`, which contains
+`upstream/dev` b8ae75d2 and with it #3753, merged upstream on 10.11.2026 11:44 UTC as
+"Big GPS refactor"). This section replaces the E2 paragraphs of "Cut E" above; those
+describe lines that no longer exist.
+
+### Inventory on the new shape
+
+92 `variants/*/target.cpp` (89 when cut E was measured on `07fa9c5c`; added since:
+`dfrobot_lorawan_esp32s3`, `lilygo_t3_stm32`, `nucleo_wl55jc`, all three without GPS; none
+removed). Counted with a throw-away script that reads each `target.cpp` for the type of
+`sensors`, the location provider, the driver class and the `ENV_INCLUDE_GPS` guard
+(`tools/refactoring/variant_target_globals.py --peripherals` gives the same groups as before
+for the text lines, but does not print the new `gps_driver` line):
+
+```
+grep -l 'NmeaGpsDriver'               variants/*/target.cpp | wc -l   # 46
+grep -l 'MicroNMEALocationProvider'   variants/*/target.cpp | wc -l   # 50
+grep -h 'NmeaGpsDriver '              variants/*/target.cpp | sed 's/^ *//' | sort | uniq -c | sort -rn
+#  39 NmeaGpsDriver gps_driver(Serial1);
+#   4 NmeaGpsDriver gps_driver(Serial1, PIN_GPS_TX, PIN_GPS_RX, GPS_RESET, GPS_EN,   (+ &board.periph_power)
+#   1 NmeaGpsDriver gps_driver(Serial1, PIN_GPS_TX, PIN_GPS_RX, PIN_GPS_RESET,       (heltec_rc32)
+#   1 NmeaGpsDriver gps_driver(Serial1, gps_probe_bauds, sizeof(...)/sizeof(...))   (promicro)
+#   1 NmeaGpsDriver gps_driver(Serial1);   (promicro, else branch)
+#   1 class HeltecTrackerGpsDriver : public NmeaGpsDriver {
+```
+
+All 92 by shape (the first two columns are variants and, approximately, environments; the
+environment counts take the first `variants/<x>` path in each environment's flags, giving
+633 environments for 94 directories where the script counts 621 of 670, so treat them as
+NOT VERIFIED to the unit):
+
+| shape | variants | envs | members |
+|---|---:|---:|---|
+| A: `#if ENV_INCLUDE_GPS` / `#ifdef`: `NmeaGpsDriver gps_driver(Serial1)`, `MicroNMEALocationProvider nmea(gps_driver, &rtc_clock)`, `EnvironmentSensorManager sensors(nmea)`, else `EnvironmentSensorManager sensors` | 34 | ~224 | guarded with `#if`, `#ifdef` or `#if defined(...)`; includes `heltec_rc32`, whose `PIN_GPS_RESET, PIN_GPS_EN` arguments equal the defaults (`NmeaGpsDriver.h:30` to `:52`: `GPS_EN` falls back to `PIN_GPS_EN`, `GPS_RESET` to `PIN_GPS_RESET`, active levels likewise) |
+| A': the same without a guard | 2 | ~9 | `heltec_tower_v2`, `lilygo_tdeck` (provider named `gps`, constructor `sensors(gps)`) |
+| B: shape A with extra driver arguments | 5 | ~52 | `heltec_t096`, `heltec_t1`, `heltec_tracker_v2`, `heltec_v4_r8` pass `&board.periph_power`; `promicro` passes a baud probe list under `GPS_BAUD_PROBE_LIST` |
+| C: own sensor manager class, constructor takes the provider | 6 | ~38 | `heltec_mesh_solar` (`SolarSensorManager`), `meshadventurer` (`MASensorManager`), `thinknode_m1` (`ThinkNodeM1SensorManager`), `muzi_base` (`MuziBaseSensorManager`, guarded), `meshtracker_x1` (`AirohaGpsDriver`) and `heltec_tracker` (`HeltecTrackerGpsDriver`, a subclass defined in `target.cpp` with `reset()` overridden) |
+| D: driver and sensors take each other | 2 | ~10 | `t1000-e` (`AirohaGpsDriver`, `T1000SensorManager(nmea, gps_driver)`), `nano_g2_ultra` (`NanoG2UltraGpsDriver`, `NanoG2UltraSensorManager(nmea, gps_driver)`) |
+| E: RAK I2C GPS | 3 | ~13+ | `rak4631`, `rak3401`, `gat562_30s_mesh_kit`: `RakI2cGpsDriver gps_driver;` and `RakLocationProvider location(gps_driver, &rtc_clock[, Serial1, &gps_rail])`; `rak4631` has a second `#ifdef GPS_RAIL_POWER_CONTROL` branch |
+| F: no GPS, `EnvironmentSensorManager sensors;` (or `= EnvironmentSensorManager()`) | 11 | ~81 | ten undefine GPS with `-UENV_INCLUDE_GPS` in their ini (checked in `gat562_mesh_watch13`, `xiao_s3`, `ikoka_stick_nrf`); `lilygo_t3_stm32` picks `SensorManager` or `EnvironmentSensorManager` on `ENV_INCLUDE_INA219` |
+| G: no GPS, `SensorManager sensors;` | 28 | ~162 | includes `mesh_pocket` (`= SensorManager()`) |
+| H: no GPS, own class | 1 | ~4 | `wio-e5-mini` (`WIOE5SensorManager`) |
+
+34 + 2 + 5 + 6 + 2 + 3 + 11 + 28 + 1 = 92.
+
+Against the old groups (22 + 14 + 9 + 4 + 25 = 74, plus 15 singles):
+
+- The old strings are gone: `MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1,
+  &rtc_clock)` occurs in 0 files, every provider takes a `gps_driver` now, so the old
+  groups cannot be compared line by line. The `ENV_INCLUDE_GPS` guard and the sensor classes
+  are unchanged.
+- Variant by variant, old tree (`07fa9c5c`) against new: all 34 members of A already had a
+  `MicroNMEALocationProvider` and an `EnvironmentSensorManager` there; none of the 74 is
+  gone (the 89 `target.cpp` of then are all still there), and the three new variants are in
+  F and G (no GPS). So E2's candidate set (A, A', B) is the old groups of 22, 14 and 4 minus
+  what #3753 made special (E, D, the Airoha and subclass variants of C). The old 9 and 25
+  (no GPS) stay as F and G and never had a benefit. A per-variant table of all 74 was
+  not made; the old and new class listing used for this were kept in a scratch file, not committed
+  (NOT VERIFIED beyond the counts above).
+
+Sensor managers no longer keep `gps_active` or their own serial setup; they read the
+provider (`EnvironmentSensorManager.h:33` to `:39`).
+
+### Upstream collisions, measured again
+
+Checked on 10.11.2026 against meshcore-dev/MeshCore, same method as on 22.10.:
+`gh pr list --state open --limit 1000 --json number,title,author,updatedAt,files` (491 open
+pull requests), 83 of them touch a `variants/*/target.*`; `gh pr diff` of those 83, keeping
+changed lines in a `target.cpp` or `target.h` that name `gps_driver`, `GpsDriver`,
+`LocationProvider`, `sensors`, `SensorManager`, `ENV_INCLUDE_GPS` or `nmea`: 59 pull requests
+have such lines, 45 of them only in files that do not exist on `integration` (new boards,
+which keep linking if the shared definition is opt-in). **14 touch an existing file:**
+
+- #1913, #2152, #2278, #2658, #2927, #3208, #3527, #3668, #3734, #3747, #3289, #3472, #1924,
+  #2568. Eleven carry the pre-#3753 shape (`MicroNMEALocationProvider(Serial1, &rtc_clock)`)
+  and need a rebase onto #3753 whatever E2 does: that is upstream's cost, not E2's.
+- Of the 36 variants of A and A', only `lilygo_techo_card` (#3668, 1 file) has an open pull
+  request on the lines. Of B to H: `heltec_mesh_solar` (#1913, #1924), `thinknode_m1`
+  (#3734, #1924), `meshtracker_x1` (#3472), `rak3401` (#2927), `heltec_tracker` (#1924).
+- Not on `target.*` but on the same classes: #3683 (runtime GPS pins and baud, 9 files:
+  `NodePrefs.h`, `EnvironmentSensorManager.*`, `LocationProvider.h`,
+  `MicroNMEALocationProvider.h`, none under `variants/`), #3709 (`muzi_base/target.cpp` and
+  `MicroNMEALocationProvider.h`), and three test PRs #3624, #3625, #3626 on
+  `MicroNMEALocationProvider.h` with a new `test/test_gps_nmea`. They would change what the
+  shared file includes or what `nmea` is, not the variants' lines.
+
+Follow-ups to #3753: fdlamotte has no open pull request (his last merge is #3793, the e-ink
+loop). `gh pr list --state all --search 'gps refactor OR GpsDriver'` shows #3753 merged,
+#1799 closed 01.11., #3748 (M5 GPS switch) closed 10.11.; no successor. So the GPS structure is
+settled for now; #3683 is the open change to watch.
+
+### Draft of the shared description
+
+Same device as E1: the variant opts in from its `target.h`, `src/helpers/VariantTarget.cpp`
+(already a firmware source, see "E1: what changes") defines the globals. Objects with a
+constructor cannot be weak (cut D), so the opt-in macro stays.
+
+New macros in `target.h`, inside nothing (the GPS lines are not under `DISPLAY_CLASS`):
+
+- `SENSORS_TARGET_GLOBALS` (36 variants, A and A'): the variant takes `gps_driver`, `nmea`
+  and `sensors` from `VariantTarget.cpp`.
+- `GPS_PERIPH_POWER` (4 more, B): the fifth argument of `NmeaGpsDriver`,
+  `&board.periph_power`.
+- `GPS_BAUD_PROBE_LIST` (promicro, B): already a macro in the ini; the shared file reads it as
+  `target.cpp` does today.
+- The type of `sensors` is not a new field: `target.h` already says
+  `extern EnvironmentSensorManager sensors;`, and `decltype(sensors) sensors(nmea);` defines
+  exactly that type. Checked to compile with `g++ -std=gnu++11 -c` on a stand-in (a
+  redeclaration through `decltype` of the extern); NOT checked on the ESP32 and nRF52
+  toolchains. The alternative is an explicit `SENSORS_CLASS` macro, one more line per variant.
+
+Shared code for A, B, A' (sketch):
+
+```cpp
+#ifdef SENSORS_TARGET_GLOBALS
+#if ENV_INCLUDE_GPS
+  #include <helpers/sensors/MicroNMEALocationProvider.h>
+  NmeaGpsDriver gps_driver(Serial1 /* , PIN_GPS_TX, PIN_GPS_RX, GPS_RESET, GPS_EN, GPS_PERIPH_POWER */);
+  MicroNMEALocationProvider nmea(gps_driver, &rtc_clock);
+  decltype(sensors) sensors(nmea);
+#else
+  decltype(sensors) sensors;
+#endif
+#endif
+```
+
+Per variant: `target.cpp` loses the block (7 to 9 lines in 31 of the 34 of shape A, counted
+from the guard to its `#endif`, about 250 lines over the 34; three lay it out differently,
+`heltec_t114`, `sensecap_solar`, `heltec_rc32`) and `target.h` gains 1 line (2 with a
+power argument). `#if` and `#ifdef` guards are told apart as today by `ENV_INCLUDE_GPS`
+being undefined or 0 vs 1; `#ifdef` and `#if` select the same branch in every environment
+(cut E, "Inventory"); the shared file uses `#if`, which treats an undefined name as 0. For
+`#ifdef` variants whose environments define `ENV_INCLUDE_GPS=0`: none (the two with 0 use
+`#if` or no guard). NOT re-verified per environment.
+
+Left out on purpose:
+
+| group | why |
+|---|---|
+| C (6) | one class each, the constructor takes the provider like the Environment manager does; sensible only with a `SENSORS_CLASS` macro, 6 variants for 3 to 4 lines each. `heltec_tracker`'s driver subclass and `meshtracker_x1`'s Airoha driver need a `GPS_DRIVER_CLASS` too. |
+| D (2), E (3) | the constructors differ (`sensors(nmea, gps_driver)`, `RakLocationProvider` with `gps_rail`); `rak4631` has two branches. |
+| F, G, H (40) | one line `X sensors;`; an opt-in macro costs a line in `target.h`, so the net is 0. |
+
+### Constructors and initialization order
+
+All header-only, so no `.cpp` line numbers. Read in the sources the builds use:
+
+| global | what the constructor does | source |
+|---|---|---|
+| `NmeaGpsDriver gps_driver(Serial1[, ...])` | stores the serial reference and the pins; **touches hardware at static-init time**: `pinMode(_resetPin, OUTPUT)` and `digitalWrite` when the reset pin is not -1, `pinMode(_enablePin, OUTPUT)` and `digitalWrite` when the enable pin is not -1, `pinMode(_hardwareEnablePin, INPUT)`; for `Serial1` and the other arguments only addresses and values are stored | `src/helpers/sensors/NmeaGpsDriver.h:193` (default), `:195` to `:221` (pins, `pinMode` at `:211` to `:220`), `:223` (probe list) |
+| `MicroNMEALocationProvider nmea(gps_driver, &rtc_clock)` | `MicroNMEA nmea(_nmeaBuffer, 100)`, stores `&rtc_clock` and `&gps_driver`; reads no other global | `MicroNMEALocationProvider.h:137` to `:138`, members `:26` to `:29` |
+| `EnvironmentSensorManager sensors(nmea)` | stores `&nmea`; base `SensorManager()` zeroes lat, lon, altitude; member initializers set counters | `EnvironmentSensorManager.h:34`, `helpers/SensorManager.h` (constructor), members `:19` to `:27` |
+| `EnvironmentSensorManager.cpp` statics (`BME680(TELEM_WIRE)`, `INA219(...)`, ...) | construct in that file, independent of `target.cpp` | `EnvironmentSensorManager.cpp:49` to `:331` |
+
+So three things can change when the three definitions move from the variant's file into
+`VariantTarget.cpp`: (1) the order of the pin writes of `gps_driver` relative to the other
+globals of that variant (`board`, `radio`, `display`, `user_btn`); (2) the same for the
+object addresses; (3) nothing else, since no constructor reads another global (`&rtc_clock`
+is an address). Point (1) is new compared with cut D and E1, whose constructors never touch a
+pin. It matters only if some other global's constructor depends on the GPS enable or reset
+pin level at static-init time, or on the pin mode. The `board` objects of the 36 are
+constructed by the variant before today; the `RefCountedDigitalPin` of B is a member of
+`board` and is only stored by address in the driver (`NmeaGpsDriver.h:195`). NOT VERIFIED on a
+board that the pin state at start is the same.
+
+### Verification plan
+
+1. **Host tests.** New environments `native_variant_target_sensors` (and siblings), as in E1:
+   `VariantTarget.cpp` against a stand-in `target.h` (`test/mocks/variant_sensors`), with
+   recording stand-ins for `pinMode`/`digitalWrite`, `Serial1`, `MicroNMEA`, and the real
+   `EnvironmentSensorManager` only if it builds on the host (NOT VERIFIED: it pulls Adafruit
+   sensor libraries; the stand-in provider and manager may be enough to test the shared
+   file). One environment per board description: A with GPS (`heltec_v3`), A without GPS
+   (`-UENV_INCLUDE_GPS`), A with reset and enable pins (`heltec_rc32`), B with
+   `&board.periph_power` (`heltec_t1`), B with a probe list (`promicro`). Cases: the driver is
+   built with the board's arguments; the provider gets the driver and the clock; the manager
+   gets the provider (`getLocationProvider() == &nmea`); the pins are written in the same
+   order as the reference block. Reference block verbatim in a namespace as in E1, then
+   mutations M1 to M8 (argument ignored, opt-in missing, misspelt, `#if` branch swapped).
+   Whether the repository's own GPS tests (`test/test_gps_nmea` in #3624 to #3626) have landed
+   on `integration` and can be reused is NOT VERIFIED.
+2. **Builds.** For each of the 36 variants one environment with GPS and one without, plus
+   B's 5, plus controls that keep their block (`rak4631`, `heltec_tracker`, `t1000-e`,
+   `wio-e5-mini`): about 80 environments, built from the test commit and from the code commit
+   with `SOURCE_DATE_EPOCH=1760000000`, compared by size and by `nm -S` of the symbols
+   `gps_driver`, `nmea`, `sensors` (type, size, section). Expected: identical `.bin` where E1
+   had them, sizes +0.
+3. **Only on a board.** The pin state at start (reset and enable pins before `begin()`), a
+   GPS fix after the change on one variant with `GPS_EN` (`heltec_t114`), one with
+   `periph_power` (`heltec_t1`), one without pins (`lilygo_tbeam_SX1262`); the baud probe on
+   `promicro`. None of this is covered by a host test.
+
+### Recommendation
+
+Build **E2a only**, the 36 variants of shapes A and A' (34 + 2), as one pull request; do not
+build C, D, E, F, G, H.
+
+- Benefit: about 250 lines out of 36 `target.cpp` (7 to 9 each), 36 to 41 lines into
+  `target.h` (1 each, 2 with a power argument). The five variants of B that pass arguments
+  add 5 more macros. The GPS lines have had a mass edit twice (`67d22401` in 01.2026,
+  #3753 now), so a third would touch one shared file instead of 36.
+- Risk: small but not zero, and different from E1: the driver constructor writes pins at
+  static-init time (above). Host tests cannot show the board behaviour, only the order.
+  `decltype(sensors)` is not yet compiled for ESP32 and nRF52 (NOT VERIFIED).
+- Upstream: only #3668 (`lilygo_techo_card`) is open on the 36; eleven open pull requests are
+  stale against #3753 anyway.
+- Cost is one more shared file section, no new file, and one macro to learn for a new board.
+
+If the benefit per file (7 lines) is judged too small, not building is defensible: a new
+board copies 8 lines, as today. This is the same trade E1 made on 22.10.
+
+Alternatives:
+
+- **Do not build E2.** No risk, no gain; a new board copies the GPS block.
+- **E2a plus B (41 variants).** Five more variants for the power and baud arguments; two more
+  macros; more places a board difference can hide.
+- **E2a plus C (42 to 47).** Needs `SENSORS_CLASS` and `GPS_DRIVER_CLASS`; the sensor
+  classes are defined in the variants' own `target.h`, so the gain is 3 to 4 lines each.
+- **A common `GpsConfig` struct in `board`.** The description would live in the board class
+  (pins, power, baud) and a factory in shared code would build the driver; larger redesign
+  that also touches #3683's runtime pins. Not pursued here.
+- **Weak definitions.** Rejected for the reason of cut D (constructed twice).
+- **All 92 variants with one `SENSORS_TARGET_GLOBALS`.** Net 0 for the 40 without GPS;
+  rejected.
+
 ## Upstream
 
 Searched meshcore-dev/MeshCore on 20.10.2026: text queries over all pull requests
