@@ -1037,7 +1037,7 @@ for `savePrefs()` and `k.arg` for `&command[n]`. No 13d-a test file was edited.
 decided on 2026-11-10: fix `set tz.offset nan`, `set pin` and the `board` copy, one
 commit each; leave `get wifi.pwd` as it is. Each correction is a change in one handler of
 `struct MyMeshCli` (`examples/companion_radio/MyMesh.cpp`). The tables and the matching
-are untouched. Only the three handlers changed, so every other command answers as before.
+are untouched, so every other command answers as before.
 
 ### 1. `set tz.offset`: NaN is refused
 
