@@ -1,12 +1,14 @@
 # 0013: A command table for the text CLI
 
-Status: 13a (host harness and characterization), 13b (the table) and 13c (the three
-memory risks) are merged. 13d-a (a host harness for the companion's own text CLI) is
-built and ready for review.
-Behaviour change: none in 13a, 13b and 13d-a. 13a and 13d-a add tests and build
+Status: 13a (host harness and characterization), 13b (the table), 13c (the three
+memory risks), 13d-a (a host harness for the companion's own text CLI) and 13d-b (the
+tables for it) are merged. 13d-c (three corrections) is built and ready for review.
+Behaviour change: none in 13a, 13b, 13d-a and 13d-b. 13a and 13d-a add tests and build
 environments only; 13b replaces the `else if` chains in `src/helpers/CommonCLI.cpp` with
 const tables, adds three tests and leaves the 13a tests unchanged. 13c changes the reply
-to input that was undefined before.
+to input that was undefined before. 13d-b moves the companion's 38 commands onto tables.
+13d-c is the first step of the series that changes behaviour on purpose: three handlers
+of the companion's text CLI, each announced below.
 
 ## Context
 
@@ -1029,14 +1031,157 @@ for `savePrefs()` and `k.arg` for `&command[n]`. No 13d-a test file was edited.
   all-three case; buzzer with WiFi alone is not built anywhere.
 - **Mutations** are the author's choice (see above).
 
+## 13d-c: three corrections
+
+13d-a pinned three odd answers of the companion's text CLI and one unbounded copy. Marcel
+decided on 2026-11-10: fix `set tz.offset nan`, `set pin` and the `board` copy, one
+commit each; leave `get wifi.pwd` as it is. Each correction is a change in one handler of
+`struct MyMeshCli` (`examples/companion_radio/MyMesh.cpp`). The tables and the matching
+are untouched. Only the three handlers changed, so every other command answers as before.
+
+### 1. `set tz.offset`: NaN is refused
+
+`atof("nan")` is NaN and every comparison with NaN is false, so `tz < -12 || tz > 14`
+let it through and the text `nan` was stored. The check now reads `!(tz >= -12 && tz <=
+14)`.
+
+| Input | Before | Now |
+| --- | --- | --- |
+| `set tz.offset nan`, `NaN`, `-nan`, `nan(1)` | `OK`, saved as `nan` | `Error, must be from -12 to +14`, nothing saved, offset unchanged |
+| `-12`, `14`, `5.5`, `1e1`, `abc` (reads as 0) | `OK`, saved | same |
+| `-12.01`, `14.01`, `1e3`, `inf`, `-inf` | error | same |
+
+`UITask.cpp` casts `tz_offset * 3600` to `int32_t`, which is undefined for NaN. What a
+board did with a stored NaN was not measured.
+
+### 2. `set pin`: 0 or six digits
+
+The pin is read with `strtol` into a `long` and checked before it goes into the unsigned
+`ble_pin`. The rule is the one of the app's `cmdSetDevicePin()`: 0, or 100000 to 999999.
+Anything else answers `Error, pin must be 0 or 6 digits`, saves nothing and leaves
+`ble_pin` alone. The reply on success is unchanged (`> pin is now %06d`).
+
+| Input | Before | Now |
+| --- | --- | --- |
+| `0`, `100000`, `999999`, `123456` | accepted | same |
+| `1`, `12`, `12345`, `99999` | accepted, padded (`000012`) | refused |
+| `1000000`, `1234567`, `99999999` | accepted | refused |
+| `-1`, `-5`, `-100000` | stored as a large unsigned value | refused |
+| `4294967296`, 20 digit numbers, 20 digit negatives | `atoi` overflow, undefined | refused |
+| `abc`, empty | pin 0, saved | same (kept on purpose) |
+| `123456abc` | 123456 | same |
+| `12abc` | 000012 | refused (reads as 12) |
+
+Kept on purpose: text without a leading number reads as 0 and is accepted as pin 0, as it
+was with `atoi`. Text after the number is ignored. Tests cover 0, 99999, 100000, 999999,
+1000000, -1 and numbers beyond `long`.
+
+### 3. `board`: bounded copy
+
+`strcpy(k.reply, board.getManufacturerName())` is now `StrHelper::strncpy(k.reply, name,
+40)`: at most 39 characters plus the terminator. The app's device info frame copies the
+same name with `strzcpy(..., 40)`.
+
+- **Smallest reply buffer.** The remote CLI (`BaseChatMesh::onContactDataRecv`) hands over
+  `&temp[5]` of a `uint8_t temp[166]`, which is 161 bytes. The app path uses
+  `reply_buf[166]`. A prefix adds at most 3 characters. A limit of 40 fits both.
+- **Names in the tree.** A script over `variants/`, `boards/`, `src/` and `examples/` found
+  80 definitions of `getManufacturerName()`. 76 return a string literal; the longest is
+  `Ikoka Handheld E22 30dBm (Xiao_nrf52)` with 37 characters
+  (`variants/ikoka_handheld_nrf/IkokaNrf52Board.h`). The other four are
+  `MANUFACTURER_STRING` (Ikoka nano and stick: six `-D` values in `platformio.ini`, 33 to
+  34 characters, the longest `Ikoka Stick-E22-22dBm (Xiao_nrf52)`), `MUZI_BASE_MFR_NAME`
+  (`Muzi Base Uno`, `Muzi Base Duo`) and the choice between four names in
+  `HeltecV4Board.cpp` (`Heltec V4.3 TFT`, `Heltec V4 TFT`, `Heltec V4.3 OLED`,
+  `Heltec V4 OLED`, at most 16 characters). No name is longer than 37, so the answer is
+  byte for byte the same on every real board.
+- **Test.** `MockBoard` has a settable `manufacturer` (a test-only change in
+  `test/mocks/target.h`, reset by `reset()`). A name of 37 and of 39 characters is kept
+  whole, a name of 40 and of 500 characters is cut at 39, also behind a prefix, and the
+  guard bytes behind the 161 byte reply buffer stay intact.
+
+### Test changes
+
+`git diff integration -- test/ platformio.ini .github/` shows only these:
+
+- `test/mocks/target.h`: `MockBoard::manufacturer`, reset in `reset()`.
+- `test_cli_core.cpp`: `SetTzOffsetAcceptsNaNBecauseNoComparisonWithItIsTrue` became
+  `SetTzOffsetRefusesNaNLikeAnyOtherValueOutsideTheRange`.
+- `test_cli_core.cpp`: `SetPinHasNoRangeCheck` became
+  `SetPinAcceptsZeroAndSixDigitsAndRefusesTheRest`; `SetPinReadsWhatAtoiReads` became
+  `SetPinReadsTheLeadingNumber`; `SetPinStoresAndSavesAndPadsToSixDigits` uses 100000
+  instead of 12.
+- `test_cli_core.cpp`: two new tests for `board`.
+
+`platformio.ini` and `.github/` are unchanged.
+
+### Verification of 13d-c
+
+- **Five companion environments**, `pio test -e native_companion -e native_companion_buzzer
+  -e native_companion_wifi -e native_companion_display -e native_companion_all`: 701 cases
+  before (123, 128, 144, 138, 168), 711 after (125, 130, 146, 140, 170). The 10 new cases
+  are the two `board` tests in each of the five environments. The other tests keep their
+  count.
+- **All 27 environments** of `.github/workflows/run-unit-tests.yml`: 2445 cases, 1
+  skipped, 2444 passed, 0 failed (13d-b: 2435, 1 skipped, 2434 passed).
+- **Size**, `RAK_4631_companion_radio_ble`, same toolchain, `integration` (`b26d742d`)
+  against this branch:
+
+  | | Flash | RAM |
+  | --- | --- | --- |
+  | before | 473976 | 149928 |
+  | after | 474088 (+112) | 149928 (+0) |
+
+- **Mutations**, run in `native_companion` after each commit and reverted afterwards
+  (`git status` clean). A run that aborts counts as red.
+
+  | Mutation | Result |
+  | --- | --- |
+  | tz: old condition `tz < -12 \|\| tz > 14` | red: NaN test |
+  | tz: lower bound `-11` | red: 2 tests |
+  | tz: upper bound `tz < 14` | red: 2 tests |
+  | pin: old `atoi`, no range check | red: 2 tests |
+  | pin: lower bound 99999 | red |
+  | pin: upper bound 1000000 | red |
+  | pin: `>` instead of `>=` at 100000 | red: 2 tests |
+  | pin: `<` instead of `<=` at 999999 | red |
+  | pin: 0 not accepted | red: 3 tests |
+  | pin: cast to `uint32_t` before the check | red (negative numbers wrap) |
+  | board: old `strcpy` | red: the run aborts with SIGABRT |
+  | board: limit 41 | red |
+  | board: limit 39 | red: 2 tests |
+  | board: limit 200 | red: the run aborts |
+  | board: `strncpy(..., 39)` without a terminator | red: 2 tests |
+
+  The author chose the mutations, as in the earlier steps. The first attempt at the pin
+  mutations hit `cmdSetDevicePin()` (the app path, which has the same condition) instead
+  of the CLI handler; those runs were thrown away and repeated with a longer anchor.
+
+### Not fixed (13d-c)
+
+- **`get wifi.pwd` answers the WiFi password in clear text.** Marcel decided to leave it.
+  Open point: whether the companion apps use the command is not checked, and masking it
+  could break them. It is reachable from the app and, over the air, only for a contact
+  with the remote CLI flag. Test: `GetPwdAnswersThePasswordInClearText`.
+- The rescue console's own commands in `checkCLIRescueCmd()` (`rebuild`, `erase`, `ls`,
+  ...) have no tests.
+
+### Gaps and not verified
+
+- **No board was flashed.** The size comes from one build, `RAK_4631_companion_radio_ble`.
+- **The effect of a stored NaN on a board** was not measured; the cast is undefined in C++.
+- **How the BLE stack treats an out-of-range pin** was not checked. The change refuses
+  such values before they get there.
+- **Whether the apps send `set pin` with fewer than six digits** was not checked. A
+  fifth digit pin that worked before is now refused.
+- **Name lengths** come from a script over source text. Names built at run time are not
+  covered; the four non-literal cases above were read by hand.
+
 ## Next steps
 
-13d-b moves the companion's text CLI onto tables. What is left is separate steps, in this
-order:
+13d-c is done. What is left:
 
-- **13d-c:** decide about the three findings under "Not fixed (13d-a)" and about the
-  unbounded `strcpy()` in the `board` command. Each one changes behaviour, so each needs
-  an announced decision. The tables make each fix a change in one handler, and the 13d-a
-  tests that pin the current answers have to change with it.
+- **`get wifi.pwd`:** find out whether the apps use it, then decide between leaving it,
+  masking it and closing it for the remote CLI.
 - **Later:** the rescue console's own commands in `checkCLIRescueCmd()` (`rebuild`,
   `erase`, `ls`, ...) have no tests yet.
