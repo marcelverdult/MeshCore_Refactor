@@ -442,16 +442,17 @@ TEST_F(CliTest, SetTzOffsetReadsWhatAtofReads) {
   EXPECT_EQ(say("get tz.offset"), "> 0.0");
 }
 
-TEST_F(CliTest, SetTzOffsetAcceptsNaNBecauseNoComparisonWithItIsTrue) {
-  // pinned as is, and a defect: atof("nan") is NaN, "tz < -12 || tz > 14" is false for
-  // it, so it is stored and saved as the text "nan". The radio settings refuse it
-  // (CommonRadioPrefs.cpp spellsNanOrInf); this command does not. Recorded in note 0013
-  // under "Not fixed".
-  CliResult r = run("set tz.offset nan");
-  EXPECT_EQ(r.text, "OK");
-  EXPECT_EQ(r.saves, 1);
-  EXPECT_TRUE(contains(prefsFile(), "tz_offset:nan"));
-  EXPECT_TRUE(contains(lower(say("get tz.offset")), "nan"));
+TEST_F(CliTest, SetTzOffsetRefusesNaNLikeAnyOtherValueOutsideTheRange) {
+  // atof("nan") is NaN, and every comparison with NaN is false. The check is written as
+  // "not (-12 <= tz <= 14)", so NaN is refused, nothing is saved and the offset stays.
+  ASSERT_EQ(say("set tz.offset 5.5"), "OK");
+  for (const char* bad : {"nan", "NaN", "-nan", "nan(1)"}) {
+    CliResult r = run(std::string("set tz.offset ") + bad);
+    EXPECT_EQ(r.text, "Error, must be from -12 to +14") << bad;
+    EXPECT_EQ(r.saves, 0) << bad;
+    EXPECT_EQ(say("get tz.offset"), "> 5.5") << bad;   // unchanged
+  }
+  EXPECT_FALSE(contains(prefsFile(), "tz_offset:nan"));
 }
 
 TEST_F(CliTest, TzOffsetCommandsNeedTheirExactSpelling) {

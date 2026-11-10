@@ -2488,7 +2488,7 @@ struct MyMeshCli {
   }
   static bool setTzOffset(MyMesh& m, CliCall& k) {
     float tz = atof(k.arg);
-    if (tz < -12 || tz > 14) {
+    if (!(tz >= -12 && tz <= 14)) {   // written so that NaN is refused too
       strcpy(k.reply, "Error, must be from -12 to +14");
     } else {
       m._prefs.tz_offset = tz;
