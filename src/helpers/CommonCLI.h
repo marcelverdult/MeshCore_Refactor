@@ -79,6 +79,8 @@ class CommonCLI {
   ClientACL* _acl;
   char tmp[PRV_KEY_SIZE*2 + 4];
 
+  friend struct CommonCLIImpl;  // the command handlers in CommonCLI.cpp
+
   mesh::RTCClock* getRTCClock() { return _rtc; }
   void savePrefs();
   void loadPrefsInt(FILESYSTEM* _fs, const char* filename);

@@ -196,420 +196,572 @@ uint8_t CommonCLI::buildAdvertData(uint8_t node_type, uint8_t* app_data) {
   }
 }
 
-void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
-    if (_prefs->getRadioPrefs()->handleCommand(command, sender_timestamp, reply)) {   // is a radio CLI command?
-      if (_prefs->getRadioPrefs()->isDirty()) { savePrefs(); }
-      return;
-    }
-    // hook for variant-specific CLI processing
-    if (_board->handleCommand(command, sender_timestamp, reply)) {
-      if (_prefs->isDirty()) { savePrefs(); }
-      return;
-    }
+// ---------------------------------------------------------------------------
+// Command tables (step 13b)
+//
+// One row per command. A row says how the start of the command line is
+// compared (rule), whether it only works on the serial console (flag), and
+// which handler runs. The tables are const, so they live in flash.
+//
+// Rows are tried top to bottom and the first match wins, exactly like the
+// `else if` chains they replace. Order is part of the behaviour: wherever one
+// name is the start of another ("advert.zerohop" and "advert", "flood.max.advert"
+// and "flood.max", "log start" and "log"), the longer name must stay above.
+// A serial-only row that does not match because the sender is remote is
+// skipped, and the search goes on with the next row.
+// ---------------------------------------------------------------------------
 
-    if (memcmp(command, "poweroff", 8) == 0 || memcmp(command, "shutdown", 8) == 0) {
-      _board->powerOff();  // doesn't return
-    } else if (memcmp(command, "reboot", 6) == 0) {
-      _board->reboot();  // doesn't return
-    } else if (memcmp(command, "clkreboot", 9) == 0) {
-      // Reset clock
-      getRTCClock()->setCurrentTime(1715770351);  // 15 May 2024, 8:50pm
-      _board->reboot();  // doesn't return
-     } else if (memcmp(command, "advert.zerohop", 14) == 0 && (command[14] == 0 || command[14] == ' ')) {
-      // send zerohop advert
-      _callbacks->sendSelfAdvertisement(1500, false);  // longer delay, give CLI response time to be sent first
-      strcpy(reply, "OK - zerohop advert sent");
-    } else if (memcmp(command, "advert", 6) == 0) {
-      // send flood advert
-      _callbacks->sendSelfAdvertisement(1500, true);  // longer delay, give CLI response time to be sent first
-      strcpy(reply, "OK - Advert sent");
-    } else if (memcmp(command, "clock sync", 10) == 0) {
-      uint32_t curr = getRTCClock()->getCurrentTime();
-      if (sender_timestamp > curr) {
-        getRTCClock()->setCurrentTime(sender_timestamp + 1);
-        uint32_t now = getRTCClock()->getCurrentTime();
-        DateTime dt = DateTime(now);
-        sprintf(reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
-      } else {
-        strcpy(reply, "ERR: clock cannot go backwards");
-      }
-    } else if (memcmp(command, "start ota", 9) == 0) {
-      if (!_board->startOTAUpdate(_prefs->node_name, reply)) {
-        strcpy(reply, "Error");
-      }
-    } else if (memcmp(command, "clock", 5) == 0) {
-      uint32_t now = getRTCClock()->getCurrentTime();
-      DateTime dt = DateTime(now);
-      sprintf(reply, "%02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
-    } else if (memcmp(command, "time ", 5) == 0) {  // set time (to epoch seconds)
-      uint32_t secs = _atoi(&command[5]);
-      uint32_t curr = getRTCClock()->getCurrentTime();
-      if (secs > curr) {
-        getRTCClock()->setCurrentTime(secs);
-        uint32_t now = getRTCClock()->getCurrentTime();
-        DateTime dt = DateTime(now);
-        sprintf(reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
-      } else {
-        strcpy(reply, "(ERR: clock cannot go backwards)");
-      }
-    } else if (memcmp(command, "neighbors", 9) == 0) {
-      _callbacks->formatNeighborsReply(reply);
-    } else if (memcmp(command, "neighbor.remove ", 16) == 0) {
-      const char* hex = &command[16];
-      uint8_t pubkey[PUB_KEY_SIZE];
-      int hex_len = min((int)strlen(hex), PUB_KEY_SIZE*2);
-      int pubkey_len = hex_len / 2;
-      if (mesh::Utils::fromHex(pubkey, pubkey_len, hex)) {
-        _callbacks->removeNeighbor(pubkey, pubkey_len);
-        strcpy(reply, "OK");
-      } else {
-        strcpy(reply, "ERR: bad pubkey");
-      }
-    } else if (memcmp(command, "tempradio ", 10) == 0) {
-      strcpy(tmp, &command[10]);
-      const char *parts[5];
-      int num = mesh::Utils::parseTextParts(tmp, parts, 5);
-      float freq  = num > 0 ? strtof(parts[0], nullptr) : 0.0f;
-      float bw    = num > 1 ? strtof(parts[1], nullptr) : 0.0f;
-      uint8_t sf  = num > 2 ? atoi(parts[2]) : 0;
-      uint8_t cr  = num > 3 ? atoi(parts[3]) : 0;
-      int temp_timeout_mins  = num > 4 ? atoi(parts[4]) : 0;
-      if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= 500.0f && temp_timeout_mins > 0) {
-        _callbacks->applyTempRadioParams(freq, bw, sf, cr, temp_timeout_mins);
-        sprintf(reply, "OK - temp params for %d mins", temp_timeout_mins);
-      } else {
-        strcpy(reply, "Error, invalid params");
-      }
-    } else if (memcmp(command, "password ", 9) == 0) {
-      // change admin password
-      StrHelper::strncpy(_prefs->password, &command[9], sizeof(_prefs->password));
-      savePrefs();
-      sprintf(reply, "password now: ");
-      StrHelper::strncpy(&reply[14], _prefs->password, 160-15);   // echo back just to let admin know for sure!!
-    } else if (memcmp(command, "clear stats", 11) == 0) {
-      _callbacks->clearStats();
-      strcpy(reply, "(OK - stats reset)");
-    } else if (memcmp(command, "get ", 4) == 0) {
-      handleGetCmd(sender_timestamp, command, reply);
-    } else if (memcmp(command, "set ", 4) == 0) {
-      handleSetCmd(sender_timestamp, command, reply);
-    } else if (sender_timestamp == 0 && strcmp(command, "erase") == 0) {
-      bool s = _callbacks->formatFileSystem();
-      sprintf(reply, "File system erase: %s", s ? "OK" : "Err");
-    } else if (memcmp(command, "ver", 3) == 0) {
-      sprintf(reply, "%s (Build: %s)", _callbacks->getFirmwareVer(), _callbacks->getBuildDate());
-    } else if (memcmp(command, "board", 5) == 0) {
-      sprintf(reply, "%s", _board->getManufacturerName());
-    } else if (strcmp(command, "power") == 0) {
-      const char* usb_state = _board->hasUsbPowerDetect()
-                                  ? (_board->isUsbPowered() ? "yes" : "no")
-                                  : "n/a";
-      const char* solar_state = _board->hasSolarChargerDetect()
-                                    ? (_board->isSolarChargerActive() ? "yes" : "no")
-                                    : "n/a";
-      snprintf(reply, 160, "batt:%u mV usb:%s solar_chg:%s ext:%s charger:%s",
-              (unsigned)_board->getBattMilliVolts(),
-              usb_state,
-              solar_state,
-              _board->isExternalPowered() ? "yes" : "no",
-              _board->isChargerActive() ? "yes" : "no");
-    } else if (memcmp(command, "sensor get ", 11) == 0) {
-      const char* key = command + 11;
-      const char* val = _sensors->getSettingByKey(key);
-      if (val != NULL) {
-        sprintf(reply, "> %s", val);
-      } else {
-        strcpy(reply, "null");
-      }
-    } else if (memcmp(command, "sensor set ", 11) == 0) {
-      strcpy(tmp, &command[11]);
-      const char *parts[2];
-      int num = mesh::Utils::parseTextParts(tmp, parts, 2, ' ');
-      const char *key = (num > 0) ? parts[0] : "";
-      const char *value = (num > 1) ? parts[1] : "null";
-      if (_sensors->setSettingValue(key, value)) {
-        strcpy(reply, "ok");
-      } else {
-        strcpy(reply, "can't find custom var");
-      }
-    } else if (memcmp(command, "sensor list", 11) == 0) {
-      char* dp = reply;
-      int start = 0;
-      int end = _sensors->getNumSettings();
-      if (strlen(command) > 11) {
-        start = _atoi(command+12);
-      }
-      if (start >= end) {
-        strcpy(reply, "no custom var");
-      } else {
-        const int reply_max = 160;    // callers pass a 160-byte reply buffer
-        const int next_reserve = 16;  // room for "... next:NNN"
-        sprintf(dp, "%d vars\n", end);
-        dp = strchr(dp, 0);
-        int i;
-        for (i = start; i < end; i++) {
-          const char* name = _sensors->getSettingName(i);
-          const char* value = _sensors->getSettingValue(i);
-          if (name == NULL) name = "?";
-          if (value == NULL) value = "";
-          int room = reply_max - next_reserve - (int)(dp - reply);
-          int need = snprintf(NULL, 0, "%s=%s\n", name, value);
-          if (need >= room && i > start) break;   // continue on the next page
-          snprintf(dp, room, "%s=%s\n", name, value);   // a single oversized entry is truncated
-          dp = strchr(dp, 0);
-          if (need >= room) { i++; break; }
-        }
-        if (i < end) {
-          snprintf(dp, reply_max - (int)(dp - reply), "... next:%d", i);
-        } else if (dp > reply && *(dp-1) == '\n') {
-          *(dp-1) = 0; // remove last CR
-        }
-      }
-    } else if (memcmp(command, "region", 6) == 0) {
-      handleRegionCmd(command, reply);
-#if ENV_INCLUDE_GPS == 1
-    } else if (memcmp(command, "gps on", 6) == 0) {
-      if (_sensors->setSettingValue("gps", "1")) {
-        _prefs->gps_enabled = 1;
-        savePrefs();
-        strcpy(reply, "ok");
-      } else {
-        strcpy(reply, "gps toggle not found");
-      }
-    } else if (memcmp(command, "gps off", 7) == 0) {
-      if (_sensors->setSettingValue("gps", "0")) {
-        _prefs->gps_enabled = 0;
-        savePrefs();
-        strcpy(reply, "ok");
-      } else {
-        strcpy(reply, "gps toggle not found");
-      }
-    } else if (memcmp(command, "gps sync", 8) == 0) {
-      LocationProvider * l = _sensors->getLocationProvider();
-      if (l != NULL) {
-        l->syncTime();
-        strcpy(reply, "ok");
-      } else {
-        strcpy(reply, "gps provider not found");
-      }
-    } else if (strcmp(command, "gps diag") == 0) {
-      LocationProvider * l = _sensors->getLocationProvider();
-      if (l != NULL) {
-        const char* setting = _sensors->getSettingByKey("gps");
-        bool requested = setting != NULL && strcmp(setting, "1") == 0;
-        int prefix_len = snprintf(reply, 160, "req:%u ", requested ? 1U : 0U);
-        if (prefix_len < 0 || prefix_len >= 160) {
-          reply[159] = 0;
-        } else {
-          l->formatDiagnostics(reply + prefix_len, 160 - prefix_len);
-        }
-      } else {
-        strcpy(reply, "gps provider not found");
-      }
-    } else if (memcmp(command, "gps setloc", 10) == 0) {
-      _prefs->node_lat = _sensors->node_lat;
-      _prefs->node_lon = _sensors->node_lon;
-      savePrefs();
-      strcpy(reply, "ok");
-    } else if (memcmp(command, "gps advert", 10) == 0) {
-      if (strlen(command) == 10) {
-        switch (_prefs->advert_loc_policy) {
-          case ADVERT_LOC_NONE:
-            strcpy(reply, "> none");
-            break;
-          case ADVERT_LOC_PREFS:
-            strcpy(reply, "> prefs");
-            break;
-          case ADVERT_LOC_SHARE:
-            strcpy(reply, "> share");
-            break;
-          default:
-            strcpy(reply, "error");
-        }
-      } else if (memcmp(command+11, "none", 4) == 0) {
-        _prefs->advert_loc_policy = ADVERT_LOC_NONE;
-        savePrefs();
-        strcpy(reply, "ok");
-      } else if (memcmp(command+11, "share", 5) == 0) {
-        _prefs->advert_loc_policy = ADVERT_LOC_SHARE;
-        savePrefs();
-        strcpy(reply, "ok");
-      } else if (memcmp(command+11, "prefs", 5) == 0) {
-        _prefs->advert_loc_policy = ADVERT_LOC_PREFS;
-        savePrefs();
-        strcpy(reply, "ok");
-      } else {
-        strcpy(reply, "error");
-      }
-    } else if (memcmp(command, "gps", 3) == 0) {
-      LocationProvider * l = _sensors->getLocationProvider();
-      if (l != NULL) {
-        bool enabled = l->isEnabled(); // is EN pin on ?
-        bool fix = l->isValid();       // has fix ?
-        int sats = l->satellitesCount();
-        bool active = !strcmp(_sensors->getSettingByKey("gps"), "1");
-        if (enabled) {
-          sprintf(reply, "on, %s, %s, %d sats",
-            active?"active":"deactivated",
-            fix?"fix":"no fix",
-            sats);
-        } else {
-          strcpy(reply, "off");
-        }
-      } else {
-        strcpy(reply, "Can't find GPS");
-      }
-#endif
-    } else if (memcmp(command, "powersaving on", 14) == 0) {
-#if defined(NRF52_PLATFORM)
-      _prefs->powersaving_enabled = 1;
-      savePrefs();
-      strcpy(reply, "on - Immediate effect");
-#elif defined(ESP32) && !defined(WITH_BRIDGE)
-      _prefs->powersaving_enabled = 1;
-      savePrefs();
-      strcpy(reply, "on - After 2 minutes");
-#elif defined(WITH_BRIDGE)
-      strcpy(reply, "Bridge not supported");
-#else
-      strcpy(reply, "Board not supported");
-#endif
-    } else if (memcmp(command, "powersaving off", 15) == 0) {
-      _prefs->powersaving_enabled = 0;
-      savePrefs();
-      strcpy(reply, "off");
-    } else if (memcmp(command, "powersaving", 11) == 0) {
-      if (_prefs->powersaving_enabled) {
-        strcpy(reply, "on");
-      } else {
-        strcpy(reply, "off");
-      }
-    } else if (memcmp(command, "log start", 9) == 0) {
-      _callbacks->setLoggingOn(true);
-      strcpy(reply, "   logging on");
-    } else if (memcmp(command, "log stop", 8) == 0) {
-      _callbacks->setLoggingOn(false);
-      strcpy(reply, "   logging off");
-    } else if (memcmp(command, "log erase", 9) == 0) {
-      _callbacks->eraseLogFile();
-      strcpy(reply, "   log erased");
-    } else if (sender_timestamp == 0 && memcmp(command, "log", 3) == 0) {
-      _callbacks->dumpLogFile();
-      strcpy(reply, "   EOF");
-    } else if (sender_timestamp == 0 && memcmp(command, "stats-packets", 13) == 0 && (command[13] == 0 || command[13] == ' ')) {
-      _callbacks->formatPacketStatsReply(reply);
-    } else if (sender_timestamp == 0 && memcmp(command, "stats-radio", 11) == 0 && (command[11] == 0 || command[11] == ' ')) {
-      _callbacks->formatRadioStatsReply(reply);
-    } else if (sender_timestamp == 0 && memcmp(command, "stats-core", 10) == 0 && (command[10] == 0 || command[10] == ' ')) {
-      _callbacks->formatStatsReply(reply);
-    } else {
-      strcpy(reply, "Unknown command");
-    }
+namespace {
+
+enum CliMatch : uint8_t {
+  CLI_PREFIX = 0,   // the command line starts with the name
+  CLI_WORD,         // ... and the name is followed by the end of the line or a space
+  CLI_EXACT,        // ... and the name is followed by the end of the line
+};
+
+enum CliFlags : uint8_t {
+  CLI_ANY = 0,
+  CLI_SERIAL = 1,   // only when sender_timestamp == 0 (the serial console)
+};
+
+// What a handler gets. `command` is the text the table was searched with (the
+// whole line for the top level table, the text after "set " or "get " for those
+// two), `arg` is the text after the matched name.
+struct CliCall {
+  uint32_t ts;
+  char* command;
+  char* arg;
+  char* reply;
+};
+
+typedef void (*CliFn)(CommonCLI& c, CliCall& k);
+
+struct CliCmd {
+  const char* name;
+  uint8_t len;
+  uint8_t match;
+  uint8_t flags;
+  CliFn fn;
+};
+
+// len comes from the literal, so the name and its length cannot drift apart
+#define CLI_CMD(str, match, flags, fn) { str, (uint8_t)(sizeof(str) - 1), match, flags, fn }
+
+template <size_t N>
+const CliCmd* cliFind(const CliCmd (&table)[N], uint32_t ts, const char* text) {
+  for (size_t i = 0; i < N; i++) {
+    const CliCmd& r = table[i];
+    if ((r.flags & CLI_SERIAL) && ts != 0) continue;
+    if (memcmp(text, r.name, r.len) != 0) continue;
+    if (r.match == CLI_WORD && !(text[r.len] == 0 || text[r.len] == ' ')) continue;
+    if (r.match == CLI_EXACT && text[r.len] != 0) continue;
+    return &r;
+  }
+  return nullptr;
 }
 
-void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* reply) {
-  const char* config = &command[4];
+template <size_t N>
+bool cliRun(const CliCmd (&table)[N], CommonCLI& c, uint32_t ts, char* text, char* reply) {
+  const CliCmd* r = cliFind(table, ts, text);
+  if (r == nullptr) return false;
+  CliCall k = { ts, text, text + r->len, reply };
+  r->fn(c, k);
+  return true;
+}
 
-  if (memcmp(config, "allow.read.only ", 16) == 0) {
-    _prefs->allow_read_only = memcmp(&config[16], "on", 2) == 0;
-    savePrefs();
-    strcpy(reply, "OK");
-  } else if (memcmp(config, "flood.advert.interval ", 22) == 0) {
-    int hours = _atoi(&config[22]);
+}  // namespace
+
+// The handlers are static members of this struct so that they can reach the
+// private members of CommonCLI (it is a friend).
+struct CommonCLIImpl {
+  // ---- top level commands ------------------------------------------------
+
+  static void poweroff(CommonCLI& c, CliCall& k) {
+    c._board->powerOff();  // doesn't return
+  }
+  static void reboot(CommonCLI& c, CliCall& k) {
+    c._board->reboot();  // doesn't return
+  }
+  static void clkreboot(CommonCLI& c, CliCall& k) {
+    // Reset clock
+    c.getRTCClock()->setCurrentTime(1715770351);  // 15 May 2024, 8:50pm
+    c._board->reboot();  // doesn't return
+  }
+  static void advertZerohop(CommonCLI& c, CliCall& k) {
+    // send zerohop advert
+    c._callbacks->sendSelfAdvertisement(1500, false);  // longer delay, give CLI response time to be sent first
+    strcpy(k.reply, "OK - zerohop advert sent");
+  }
+  static void advert(CommonCLI& c, CliCall& k) {
+    // send flood advert
+    c._callbacks->sendSelfAdvertisement(1500, true);  // longer delay, give CLI response time to be sent first
+    strcpy(k.reply, "OK - Advert sent");
+  }
+  static void clockSync(CommonCLI& c, CliCall& k) {
+    uint32_t curr = c.getRTCClock()->getCurrentTime();
+    if (k.ts > curr) {
+      c.getRTCClock()->setCurrentTime(k.ts + 1);
+      uint32_t now = c.getRTCClock()->getCurrentTime();
+      DateTime dt = DateTime(now);
+      sprintf(k.reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
+    } else {
+      strcpy(k.reply, "ERR: clock cannot go backwards");
+    }
+  }
+  static void startOta(CommonCLI& c, CliCall& k) {
+    if (!c._board->startOTAUpdate(c._prefs->node_name, k.reply)) {
+      strcpy(k.reply, "Error");
+    }
+  }
+  static void clock(CommonCLI& c, CliCall& k) {
+    uint32_t now = c.getRTCClock()->getCurrentTime();
+    DateTime dt = DateTime(now);
+    sprintf(k.reply, "%02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
+  }
+  static void time(CommonCLI& c, CliCall& k) {  // set time (to epoch seconds)
+    uint32_t secs = _atoi(k.arg);
+    uint32_t curr = c.getRTCClock()->getCurrentTime();
+    if (secs > curr) {
+      c.getRTCClock()->setCurrentTime(secs);
+      uint32_t now = c.getRTCClock()->getCurrentTime();
+      DateTime dt = DateTime(now);
+      sprintf(k.reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
+    } else {
+      strcpy(k.reply, "(ERR: clock cannot go backwards)");
+    }
+  }
+  static void neighbors(CommonCLI& c, CliCall& k) {
+    c._callbacks->formatNeighborsReply(k.reply);
+  }
+  static void neighborRemove(CommonCLI& c, CliCall& k) {
+    const char* hex = k.arg;
+    uint8_t pubkey[PUB_KEY_SIZE];
+    int hex_len = min((int)strlen(hex), PUB_KEY_SIZE*2);
+    int pubkey_len = hex_len / 2;
+    if (mesh::Utils::fromHex(pubkey, pubkey_len, hex)) {
+      c._callbacks->removeNeighbor(pubkey, pubkey_len);
+      strcpy(k.reply, "OK");
+    } else {
+      strcpy(k.reply, "ERR: bad pubkey");
+    }
+  }
+  // true if the text, with its terminator, fits CommonCLI::tmp
+  static bool fitsTmp(const CommonCLI& c, const char* text) {
+    return strlen(text) < sizeof(c.tmp);
+  }
+  static void tempradio(CommonCLI& c, CliCall& k) {
+    if (!fitsTmp(c, k.arg)) {
+      strcpy(k.reply, "Error, invalid params");
+      return;
+    }
+    strcpy(c.tmp, k.arg);
+    const char *parts[5];
+    int num = mesh::Utils::parseTextParts(c.tmp, parts, 5);
+    float freq  = num > 0 ? strtof(parts[0], nullptr) : 0.0f;
+    float bw    = num > 1 ? strtof(parts[1], nullptr) : 0.0f;
+    uint8_t sf  = num > 2 ? atoi(parts[2]) : 0;
+    uint8_t cr  = num > 3 ? atoi(parts[3]) : 0;
+    int temp_timeout_mins  = num > 4 ? atoi(parts[4]) : 0;
+    if (freq >= 150.0f && freq <= 2500.0f && sf >= 5 && sf <= 12 && cr >= 5 && cr <= 8 && bw >= 7.0f && bw <= 500.0f && temp_timeout_mins > 0) {
+      c._callbacks->applyTempRadioParams(freq, bw, sf, cr, temp_timeout_mins);
+      sprintf(k.reply, "OK - temp params for %d mins", temp_timeout_mins);
+    } else {
+      strcpy(k.reply, "Error, invalid params");
+    }
+  }
+  static void password(CommonCLI& c, CliCall& k) {
+    // change admin password
+    StrHelper::strncpy(c._prefs->password, k.arg, sizeof(c._prefs->password));
+    c.savePrefs();
+    sprintf(k.reply, "password now: ");
+    StrHelper::strncpy(&k.reply[14], c._prefs->password, 160-15);   // echo back just to let admin know for sure!!
+  }
+  static void clearStats(CommonCLI& c, CliCall& k) {
+    c._callbacks->clearStats();
+    strcpy(k.reply, "(OK - stats reset)");
+  }
+  static void get(CommonCLI& c, CliCall& k) {
+    c.handleGetCmd(k.ts, k.command, k.reply);
+  }
+  static void set(CommonCLI& c, CliCall& k) {
+    c.handleSetCmd(k.ts, k.command, k.reply);
+  }
+  static void erase(CommonCLI& c, CliCall& k) {
+    bool s = c._callbacks->formatFileSystem();
+    sprintf(k.reply, "File system erase: %s", s ? "OK" : "Err");
+  }
+  static void ver(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "%s (Build: %s)", c._callbacks->getFirmwareVer(), c._callbacks->getBuildDate());
+  }
+  static void board(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "%s", c._board->getManufacturerName());
+  }
+  static void power(CommonCLI& c, CliCall& k) {
+    const char* usb_state = c._board->hasUsbPowerDetect()
+                                ? (c._board->isUsbPowered() ? "yes" : "no")
+                                : "n/a";
+    const char* solar_state = c._board->hasSolarChargerDetect()
+                                  ? (c._board->isSolarChargerActive() ? "yes" : "no")
+                                  : "n/a";
+    snprintf(k.reply, 160, "batt:%u mV usb:%s solar_chg:%s ext:%s charger:%s",
+            (unsigned)c._board->getBattMilliVolts(),
+            usb_state,
+            solar_state,
+            c._board->isExternalPowered() ? "yes" : "no",
+            c._board->isChargerActive() ? "yes" : "no");
+  }
+  static void sensorGet(CommonCLI& c, CliCall& k) {
+    const char* key = k.arg;
+    const char* val = c._sensors->getSettingByKey(key);
+    if (val != NULL) {
+      sprintf(k.reply, "> %s", val);
+    } else {
+      strcpy(k.reply, "null");
+    }
+  }
+  static void sensorSet(CommonCLI& c, CliCall& k) {
+    if (!fitsTmp(c, k.arg)) {
+      strcpy(k.reply, "can't find custom var");
+      return;
+    }
+    strcpy(c.tmp, k.arg);
+    const char *parts[2];
+    int num = mesh::Utils::parseTextParts(c.tmp, parts, 2, ' ');
+    const char *key = (num > 0) ? parts[0] : "";
+    const char *value = (num > 1) ? parts[1] : "null";
+    if (c._sensors->setSettingValue(key, value)) {
+      strcpy(k.reply, "ok");
+    } else {
+      strcpy(k.reply, "can't find custom var");
+    }
+  }
+  static void sensorList(CommonCLI& c, CliCall& k) {
+    char* reply = k.reply;
+    char* command = k.command;
+    char* dp = reply;
+    int start = 0;
+    int end = c._sensors->getNumSettings();
+    if (strlen(command) > 11) {
+      start = _atoi(command+12);
+    }
+    if (start >= end) {
+      strcpy(reply, "no custom var");
+    } else {
+      const int reply_max = 160;    // callers pass a 160-byte reply buffer
+      const int next_reserve = 16;  // room for "... next:NNN"
+      sprintf(dp, "%d vars\n", end);
+      dp = strchr(dp, 0);
+      int i;
+      for (i = start; i < end; i++) {
+        const char* name = c._sensors->getSettingName(i);
+        const char* value = c._sensors->getSettingValue(i);
+        if (name == NULL) name = "?";
+        if (value == NULL) value = "";
+        int room = reply_max - next_reserve - (int)(dp - reply);
+        int need = snprintf(NULL, 0, "%s=%s\n", name, value);
+        if (need >= room && i > start) break;   // continue on the next page
+        snprintf(dp, room, "%s=%s\n", name, value);   // a single oversized entry is truncated
+        dp = strchr(dp, 0);
+        if (need >= room) { i++; break; }
+      }
+      if (i < end) {
+        snprintf(dp, reply_max - (int)(dp - reply), "... next:%d", i);
+      } else if (dp > reply && *(dp-1) == '\n') {
+        *(dp-1) = 0; // remove last CR
+      }
+    }
+  }
+  static void region(CommonCLI& c, CliCall& k) {
+    c.handleRegionCmd(k.command, k.reply);
+  }
+#if ENV_INCLUDE_GPS == 1
+  static void gpsOn(CommonCLI& c, CliCall& k) {
+    if (c._sensors->setSettingValue("gps", "1")) {
+      c._prefs->gps_enabled = 1;
+      c.savePrefs();
+      strcpy(k.reply, "ok");
+    } else {
+      strcpy(k.reply, "gps toggle not found");
+    }
+  }
+  static void gpsOff(CommonCLI& c, CliCall& k) {
+    if (c._sensors->setSettingValue("gps", "0")) {
+      c._prefs->gps_enabled = 0;
+      c.savePrefs();
+      strcpy(k.reply, "ok");
+    } else {
+      strcpy(k.reply, "gps toggle not found");
+    }
+  }
+  static void gpsSync(CommonCLI& c, CliCall& k) {
+    LocationProvider * l = c._sensors->getLocationProvider();
+    if (l != NULL) {
+      l->syncTime();
+      strcpy(k.reply, "ok");
+    } else {
+      strcpy(k.reply, "gps provider not found");
+    }
+  }
+  static void gpsDiag(CommonCLI& c, CliCall& k) {
+    char* reply = k.reply;
+    LocationProvider * l = c._sensors->getLocationProvider();
+    if (l != NULL) {
+      const char* setting = c._sensors->getSettingByKey("gps");
+      bool requested = setting != NULL && strcmp(setting, "1") == 0;
+      int prefix_len = snprintf(reply, 160, "req:%u ", requested ? 1U : 0U);
+      if (prefix_len < 0 || prefix_len >= 160) {
+        reply[159] = 0;
+      } else {
+        l->formatDiagnostics(reply + prefix_len, 160 - prefix_len);
+      }
+    } else {
+      strcpy(reply, "gps provider not found");
+    }
+  }
+  static void gpsSetloc(CommonCLI& c, CliCall& k) {
+    c._prefs->node_lat = c._sensors->node_lat;
+    c._prefs->node_lon = c._sensors->node_lon;
+    c.savePrefs();
+    strcpy(k.reply, "ok");
+  }
+  static void gpsAdvert(CommonCLI& c, CliCall& k) {
+    char* reply = k.reply;
+    char* command = k.command;
+    if (strlen(command) == 10) {
+      switch (c._prefs->advert_loc_policy) {
+        case ADVERT_LOC_NONE:
+          strcpy(reply, "> none");
+          break;
+        case ADVERT_LOC_PREFS:
+          strcpy(reply, "> prefs");
+          break;
+        case ADVERT_LOC_SHARE:
+          strcpy(reply, "> share");
+          break;
+        default:
+          strcpy(reply, "error");
+      }
+    } else if (memcmp(command+11, "none", 4) == 0) {
+      c._prefs->advert_loc_policy = ADVERT_LOC_NONE;
+      c.savePrefs();
+      strcpy(reply, "ok");
+    } else if (memcmp(command+11, "share", 5) == 0) {
+      c._prefs->advert_loc_policy = ADVERT_LOC_SHARE;
+      c.savePrefs();
+      strcpy(reply, "ok");
+    } else if (memcmp(command+11, "prefs", 5) == 0) {
+      c._prefs->advert_loc_policy = ADVERT_LOC_PREFS;
+      c.savePrefs();
+      strcpy(reply, "ok");
+    } else {
+      strcpy(reply, "error");
+    }
+  }
+  static void gps(CommonCLI& c, CliCall& k) {
+    LocationProvider * l = c._sensors->getLocationProvider();
+    if (l != NULL) {
+      bool enabled = l->isEnabled(); // is EN pin on ?
+      bool fix = l->isValid();       // has fix ?
+      int sats = l->satellitesCount();
+      const char* setting = c._sensors->getSettingByKey("gps");
+      bool active = setting != NULL && strcmp(setting, "1") == 0;
+      if (enabled) {
+        sprintf(k.reply, "on, %s, %s, %d sats",
+          active?"active":"deactivated",
+          fix?"fix":"no fix",
+          sats);
+      } else {
+        strcpy(k.reply, "off");
+      }
+    } else {
+      strcpy(k.reply, "Can't find GPS");
+    }
+  }
+#endif
+  static void powersavingOn(CommonCLI& c, CliCall& k) {
+#if defined(NRF52_PLATFORM)
+    c._prefs->powersaving_enabled = 1;
+    c.savePrefs();
+    strcpy(k.reply, "on - Immediate effect");
+#elif defined(ESP32) && !defined(WITH_BRIDGE)
+    c._prefs->powersaving_enabled = 1;
+    c.savePrefs();
+    strcpy(k.reply, "on - After 2 minutes");
+#elif defined(WITH_BRIDGE)
+    strcpy(k.reply, "Bridge not supported");
+#else
+    strcpy(k.reply, "Board not supported");
+#endif
+  }
+  static void powersavingOff(CommonCLI& c, CliCall& k) {
+    c._prefs->powersaving_enabled = 0;
+    c.savePrefs();
+    strcpy(k.reply, "off");
+  }
+  static void powersaving(CommonCLI& c, CliCall& k) {
+    if (c._prefs->powersaving_enabled) {
+      strcpy(k.reply, "on");
+    } else {
+      strcpy(k.reply, "off");
+    }
+  }
+  static void logStart(CommonCLI& c, CliCall& k) {
+    c._callbacks->setLoggingOn(true);
+    strcpy(k.reply, "   logging on");
+  }
+  static void logStop(CommonCLI& c, CliCall& k) {
+    c._callbacks->setLoggingOn(false);
+    strcpy(k.reply, "   logging off");
+  }
+  static void logErase(CommonCLI& c, CliCall& k) {
+    c._callbacks->eraseLogFile();
+    strcpy(k.reply, "   log erased");
+  }
+  static void logDump(CommonCLI& c, CliCall& k) {
+    c._callbacks->dumpLogFile();
+    strcpy(k.reply, "   EOF");
+  }
+  static void statsPackets(CommonCLI& c, CliCall& k) {
+    c._callbacks->formatPacketStatsReply(k.reply);
+  }
+  static void statsRadio(CommonCLI& c, CliCall& k) {
+    c._callbacks->formatRadioStatsReply(k.reply);
+  }
+  static void statsCore(CommonCLI& c, CliCall& k) {
+    c._callbacks->formatStatsReply(k.reply);
+  }
+
+  // ---- set <key> <value> -------------------------------------------------
+  // k.arg is the text after the key and its space.
+
+  static void setAllowReadOnly(CommonCLI& c, CliCall& k) {
+    c._prefs->allow_read_only = memcmp(k.arg, "on", 2) == 0;
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
+  static void setFloodAdvertInterval(CommonCLI& c, CliCall& k) {
+    int hours = _atoi(k.arg);
     if ((hours > 0 && hours < 3) || (hours > 168)) {
-      strcpy(reply, "Error: interval range is 3-168 hours");
+      strcpy(k.reply, "Error: interval range is 3-168 hours");
     } else {
-      _prefs->flood_advert_interval = (uint8_t)(hours);
-      _callbacks->updateFloodAdvertTimer();
-      savePrefs();
-      strcpy(reply, "OK");
+      c._prefs->flood_advert_interval = (uint8_t)(hours);
+      c._callbacks->updateFloodAdvertTimer();
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     }
-  } else if (memcmp(config, "advert.interval ", 16) == 0) {
-    int mins = _atoi(&config[16]);
+  }
+  static void setAdvertInterval(CommonCLI& c, CliCall& k) {
+    int mins = _atoi(k.arg);
     if ((mins > 0 && mins < MIN_LOCAL_ADVERT_INTERVAL) || (mins > 240)) {
-      sprintf(reply, "Error: interval range is %d-240 minutes", MIN_LOCAL_ADVERT_INTERVAL);
+      sprintf(k.reply, "Error: interval range is %d-240 minutes", MIN_LOCAL_ADVERT_INTERVAL);
     } else {
-      _prefs->advert_interval = (uint8_t)(mins / 2);
-      _callbacks->updateAdvertTimer();
-      savePrefs();
-      strcpy(reply, "OK");
+      c._prefs->advert_interval = (uint8_t)(mins / 2);
+      c._callbacks->updateAdvertTimer();
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     }
-  } else if (memcmp(config, "guest.password ", 15) == 0) {
-    StrHelper::strncpy(_prefs->guest_password, &config[15], sizeof(_prefs->guest_password));
-    savePrefs();
-    strcpy(reply, "OK");
-  } else if (memcmp(config, "prv.key ", 8) == 0) {
+  }
+  static void setGuestPassword(CommonCLI& c, CliCall& k) {
+    StrHelper::strncpy(c._prefs->guest_password, k.arg, sizeof(c._prefs->guest_password));
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
+  static void setPrvKey(CommonCLI& c, CliCall& k) {
     uint8_t prv_key[PRV_KEY_SIZE];
-    bool success = mesh::Utils::fromHex(prv_key, PRV_KEY_SIZE, &config[8]);
+    bool success = mesh::Utils::fromHex(prv_key, PRV_KEY_SIZE, k.arg);
     // only allow rekey if key is valid
     if (success && mesh::LocalIdentity::validatePrivateKey(prv_key)) {
       mesh::LocalIdentity new_id;
       new_id.readFrom(prv_key, PRV_KEY_SIZE);
-      _callbacks->saveIdentity(new_id);
-      strcpy(reply, "OK, reboot to apply! New pubkey: ");
-      mesh::Utils::toHex(&reply[33], new_id.pub_key, PUB_KEY_SIZE);
+      c._callbacks->saveIdentity(new_id);
+      strcpy(k.reply, "OK, reboot to apply! New pubkey: ");
+      mesh::Utils::toHex(&k.reply[33], new_id.pub_key, PUB_KEY_SIZE);
     } else {
-      strcpy(reply, "Error, bad key");
+      strcpy(k.reply, "Error, bad key");
     }
-  } else if (memcmp(config, "name ", 5) == 0) {
-    if (isValidName(&config[5])) {
-      StrHelper::strncpy(_prefs->node_name, &config[5], sizeof(_prefs->node_name));
-      savePrefs();
-      strcpy(reply, "OK");
+  }
+  static void setName(CommonCLI& c, CliCall& k) {
+    if (isValidName(k.arg)) {
+      StrHelper::strncpy(c._prefs->node_name, k.arg, sizeof(c._prefs->node_name));
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     } else {
-      strcpy(reply, "Error, bad chars");
+      strcpy(k.reply, "Error, bad chars");
     }
-  } else if (memcmp(config, "repeat ", 7) == 0) {
-    _prefs->disable_fwd = memcmp(&config[7], "off", 3) == 0;
-    savePrefs();
-    strcpy(reply, _prefs->disable_fwd ? "OK - repeat is now OFF" : "OK - repeat is now ON");
-  } else if (memcmp(config, "lat ", 4) == 0) {
-    _prefs->node_lat = atof(&config[4]);
-    savePrefs();
-    strcpy(reply, "OK");
-  } else if (memcmp(config, "lon ", 4) == 0) {
-    _prefs->node_lon = atof(&config[4]);
-    savePrefs();
-    strcpy(reply, "OK");
-  } else if (memcmp(config, "flood.max.unscoped ", 19) == 0) {
-    uint8_t m = atoi(&config[19]);
+  }
+  static void setRepeat(CommonCLI& c, CliCall& k) {
+    c._prefs->disable_fwd = memcmp(k.arg, "off", 3) == 0;
+    c.savePrefs();
+    strcpy(k.reply, c._prefs->disable_fwd ? "OK - repeat is now OFF" : "OK - repeat is now ON");
+  }
+  static void setLat(CommonCLI& c, CliCall& k) {
+    c._prefs->node_lat = atof(k.arg);
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
+  static void setLon(CommonCLI& c, CliCall& k) {
+    c._prefs->node_lon = atof(k.arg);
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
+  static void setFloodMaxUnscoped(CommonCLI& c, CliCall& k) {
+    uint8_t m = atoi(k.arg);
     if (m <= 64) {
-      _prefs->flood_max_unscoped = m;
-      savePrefs();
-      strcpy(reply, "OK");
+      c._prefs->flood_max_unscoped = m;
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     } else {
-      strcpy(reply, "Error, max 64");
-    } 
-  } else if (memcmp(config, "flood.max.advert ", 17) == 0) {
-    uint8_t m = atoi(&config[17]);
-    if (m <= 64) {
-      _prefs->flood_max_advert = m;
-      savePrefs();
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Error, max 64");
+      strcpy(k.reply, "Error, max 64");
     }
-  } else if (memcmp(config, "flood.max ", 10) == 0) {
-    uint8_t m = atoi(&config[10]);
-    if (m <= 64) {
-      _prefs->flood_max = m;
-      savePrefs();
-      strcpy(reply, "OK");
+  }
+  static void setFloodMaxType(CommonCLI& c, CliCall& k) {
+    uint8_t type, hops;
+    int rc = mesh::parseFloodMaxTypeCmd(k.arg, &type, &hops);
+    if (rc == FLOOD_MAX_CMD_BAD_TYPE) {
+      strcpy(k.reply, "Error, unknown packet type");
+    } else if (rc != FLOOD_MAX_CMD_OK) {
+      strcpy(k.reply, "Error, hops 0..64 or off");
+    } else if (!mesh::setFloodMaxForType(c._prefs->flood_max_types, sizeof(c._prefs->flood_max_types),
+                                         type, hops)) {
+      strcpy(k.reply, "Error, type list full");
     } else {
-      strcpy(reply, "Error, max 64");
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     }
-  } else if (memcmp(config, "owner.info ", 11) == 0) {
-    config += 11;
-    char *dp = _prefs->owner_info;
-    while (*config && dp - _prefs->owner_info < sizeof(_prefs->owner_info)-1) {
+  }
+  static void setFloodMaxAdvert(CommonCLI& c, CliCall& k) {
+    uint8_t m = atoi(k.arg);
+    if (m <= 64) {
+      c._prefs->flood_max_advert = m;
+      c.savePrefs();
+      strcpy(k.reply, "OK");
+    } else {
+      strcpy(k.reply, "Error, max 64");
+    }
+  }
+  static void setFloodMax(CommonCLI& c, CliCall& k) {
+    uint8_t m = atoi(k.arg);
+    if (m <= 64) {
+      c._prefs->flood_max = m;
+      c.savePrefs();
+      strcpy(k.reply, "OK");
+    } else {
+      strcpy(k.reply, "Error, max 64");
+    }
+  }
+  static void setOwnerInfo(CommonCLI& c, CliCall& k) {
+    const char* config = k.arg;
+    char *dp = c._prefs->owner_info;
+    while (*config && dp - c._prefs->owner_info < sizeof(c._prefs->owner_info)-1) {
       *dp++ = (*config == '|') ? '\n' : *config;    // translate '|' to newline chars
       config++;
     }
     *dp = 0;
-    savePrefs();
-    strcpy(reply, "OK");
-  } else if (memcmp(config, "loop.detect ", 12) == 0) {
-    config += 12;
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
+  static void setLoopDetect(CommonCLI& c, CliCall& k) {
+    const char* config = k.arg;
     uint8_t mode;
     if (memcmp(config, "off", 3) == 0) {
       mode = LOOP_DETECT_OFF;
@@ -621,163 +773,193 @@ void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* rep
       mode = LOOP_DETECT_STRICT;
     } else {
       mode = 0xFF;
-      strcpy(reply, "Error, must be: off, minimal, moderate, or strict");
+      strcpy(k.reply, "Error, must be: off, minimal, moderate, or strict");
     }
     if (mode != 0xFF) {
-      _prefs->loop_detect = mode;
-      savePrefs();
-      strcpy(reply, "OK");
+      c._prefs->loop_detect = mode;
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     }
-  } else if (sender_timestamp == 0 && memcmp(config, "freq ", 5) == 0) {
-    _prefs->freq = atof(&config[5]);
-    savePrefs();
-    strcpy(reply, "OK - reboot to apply");
+  }
+  static void setFreq(CommonCLI& c, CliCall& k) {
+    c._prefs->freq = atof(k.arg);
+    c.savePrefs();
+    strcpy(k.reply, "OK - reboot to apply");
+  }
 #ifdef WITH_BRIDGE
-  } else if (memcmp(config, "bridge.enabled ", 15) == 0) {
-    _prefs->bridge_enabled = memcmp(&config[15], "on", 2) == 0;
-    _callbacks->setBridgeState(_prefs->bridge_enabled);
-    savePrefs();
-    strcpy(reply, "OK");
-  } else if (memcmp(config, "bridge.delay ", 13) == 0) {
-    int delay = _atoi(&config[13]);
+  static void setBridgeEnabled(CommonCLI& c, CliCall& k) {
+    c._prefs->bridge_enabled = memcmp(k.arg, "on", 2) == 0;
+    c._callbacks->setBridgeState(c._prefs->bridge_enabled);
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
+  static void setBridgeDelay(CommonCLI& c, CliCall& k) {
+    int delay = _atoi(k.arg);
     if (delay >= 0 && delay <= 10000) {
-      _prefs->bridge_delay = (uint16_t)delay;
-      savePrefs();
-      strcpy(reply, "OK");
+      c._prefs->bridge_delay = (uint16_t)delay;
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     } else {
-      strcpy(reply, "Error: delay must be between 0-10000 ms");
+      strcpy(k.reply, "Error: delay must be between 0-10000 ms");
     }
-  } else if (memcmp(config, "bridge.source ", 14) == 0) {
-    _prefs->bridge_pkt_src = memcmp(&config[14], "rx", 2) == 0;
-    savePrefs();
-    strcpy(reply, "OK");
+  }
+  static void setBridgeSource(CommonCLI& c, CliCall& k) {
+    c._prefs->bridge_pkt_src = memcmp(k.arg, "rx", 2) == 0;
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
 #endif
 #ifdef WITH_RS232_BRIDGE
-  } else if (memcmp(config, "bridge.baud ", 12) == 0) {
-    uint32_t baud = atoi(&config[12]);
+  static void setBridgeBaud(CommonCLI& c, CliCall& k) {
+    uint32_t baud = atoi(k.arg);
     if (baud >= 9600 && baud <= BRIDGE_MAX_BAUD) {
-      _prefs->bridge_baud = (uint32_t)baud;
-      _callbacks->restartBridge();
-      savePrefs();
-      strcpy(reply, "OK");
+      c._prefs->bridge_baud = (uint32_t)baud;
+      c._callbacks->restartBridge();
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     } else {
-      sprintf(reply, "Error: baud rate must be between 9600-%d",BRIDGE_MAX_BAUD);
+      sprintf(k.reply, "Error: baud rate must be between 9600-%d",BRIDGE_MAX_BAUD);
     }
+  }
 #endif
 #ifdef WITH_ESPNOW_BRIDGE
-  } else if (memcmp(config, "bridge.channel ", 15) == 0) {
-    int ch = atoi(&config[15]);
+  static void setBridgeChannel(CommonCLI& c, CliCall& k) {
+    int ch = atoi(k.arg);
     if (ch > 0 && ch < 15) {
-      _prefs->bridge_channel = (uint8_t)ch;
-      _callbacks->restartBridge();
-      savePrefs();
-      strcpy(reply, "OK");
+      c._prefs->bridge_channel = (uint8_t)ch;
+      c._callbacks->restartBridge();
+      c.savePrefs();
+      strcpy(k.reply, "OK");
     } else {
-      strcpy(reply, "Error: channel must be between 1-14");
+      strcpy(k.reply, "Error: channel must be between 1-14");
     }
-  } else if (memcmp(config, "bridge.secret ", 14) == 0) {
-    StrHelper::strncpy(_prefs->bridge_secret, &config[14], sizeof(_prefs->bridge_secret));
-    _callbacks->restartBridge();
-    savePrefs();
-    strcpy(reply, "OK");
+  }
+  static void setBridgeSecret(CommonCLI& c, CliCall& k) {
+    StrHelper::strncpy(c._prefs->bridge_secret, k.arg, sizeof(c._prefs->bridge_secret));
+    c._callbacks->restartBridge();
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
 #endif
-  } else if (memcmp(config, "adc.multiplier ", 15) == 0) {
-    _prefs->adc_multiplier = atof(&config[15]);
-    if (_board->setAdcMultiplier(_prefs->adc_multiplier)) {
-      savePrefs();
-      if (_prefs->adc_multiplier == 0.0f) {
-        strcpy(reply, "OK - using default board multiplier");
+  static void setAdcMultiplier(CommonCLI& c, CliCall& k) {
+    c._prefs->adc_multiplier = atof(k.arg);
+    if (c._board->setAdcMultiplier(c._prefs->adc_multiplier)) {
+      c.savePrefs();
+      if (c._prefs->adc_multiplier == 0.0f) {
+        strcpy(k.reply, "OK - using default board multiplier");
       } else {
-        sprintf(reply, "OK - multiplier set to %.3f", _prefs->adc_multiplier);
+        sprintf(k.reply, "OK - multiplier set to %.3f", c._prefs->adc_multiplier);
       }
     } else {
-      _prefs->adc_multiplier = 0.0f;
-      strcpy(reply, "Error: unsupported");
-    };
-  #if defined(USE_LR2021)
-  } else if (memcmp(config, "extra.sf ", 9) == 0) {
-    strcpy(tmp, &config[9]);
+      c._prefs->adc_multiplier = 0.0f;
+      strcpy(k.reply, "Error: unsupported");
+    }
+  }
+#if defined(USE_LR2021)
+  static void setExtraSf(CommonCLI& c, CliCall& k) {
+    if (!fitsTmp(c, k.arg)) {
+      sprintf(k.reply, "Invalid extra SF config");
+      return;
+    }
+    strcpy(c.tmp, k.arg);
     const char *parts[4];
     uint8_t sideDetSFs[4];
-    int num = mesh::Utils::parseTextParts(tmp, parts, 4);
+    int num = mesh::Utils::parseTextParts(c.tmp, parts, 4);
     if (num > 3) {
-      sprintf(reply, "Invalid extra SF config");
+      sprintf(k.reply, "Invalid extra SF config");
     } else {
       for (int i = 0; i < num; i++) {
         sideDetSFs[i] = atoi(parts[i]);
       }
       sideDetSFs[num] = 0;
-      if (_callbacks->configSideDetectors(sideDetSFs, num, _prefs->bw)) {
-        for (int i = 0; i <= num; i++) _prefs->extra_sf[i] = sideDetSFs[i];
-        savePrefs();
-        sprintf(reply, "OK - extra SFs set");
+      if (c._callbacks->configSideDetectors(sideDetSFs, num, c._prefs->bw)) {
+        for (int i = 0; i <= num; i++) c._prefs->extra_sf[i] = sideDetSFs[i];
+        c.savePrefs();
+        sprintf(k.reply, "OK - extra SFs set");
       } else {
-        sprintf(reply, "Invalid extra SF config");
+        sprintf(k.reply, "Invalid extra SF config");
       }
     }
-  #endif
-  } else {
-    strcpy(reply, "unknown config: ");
-    StrHelper::strncpy(&reply[16], config, 160-17);
   }
-}
+#endif
 
-void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* reply) {
-  const char* config = &command[4];
-  if (memcmp(config, "allow.read.only", 15) == 0) {
-    sprintf(reply, "> %s", _prefs->allow_read_only ? "on" : "off");
-  } else if (memcmp(config, "flood.advert.interval", 21) == 0) {
-    sprintf(reply, "> %d", ((uint32_t) _prefs->flood_advert_interval));
-  } else if (memcmp(config, "advert.interval", 15) == 0) {
-    sprintf(reply, "> %d", ((uint32_t) _prefs->advert_interval) * 2);
-  } else if (memcmp(config, "guest.password", 14) == 0) {
-    sprintf(reply, "> %s", _prefs->guest_password);
-  } else if (sender_timestamp == 0 && memcmp(config, "prv.key", 7) == 0) {  // from serial command line only
+  // ---- get <key> ---------------------------------------------------------
+  // The keys match by prefix and ignore what follows them.
+
+  static void getAllowReadOnly(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", c._prefs->allow_read_only ? "on" : "off");
+  }
+  static void getFloodAdvertInterval(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %d", ((uint32_t) c._prefs->flood_advert_interval));
+  }
+  static void getAdvertInterval(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %d", ((uint32_t) c._prefs->advert_interval) * 2);
+  }
+  static void getGuestPassword(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", c._prefs->guest_password);
+  }
+  static void getPrvKey(CommonCLI& c, CliCall& k) {  // from serial command line only
     uint8_t prv_key[PRV_KEY_SIZE];
-    int len = _callbacks->getSelfId().writeTo(prv_key, PRV_KEY_SIZE);
-    mesh::Utils::toHex(tmp, prv_key, len);
-    sprintf(reply, "> %s", tmp);
-  } else if (memcmp(config, "name", 4) == 0) {
-    sprintf(reply, "> %s", _prefs->node_name);
-  } else if (memcmp(config, "repeat", 6) == 0) {
-    sprintf(reply, "> %s", _prefs->disable_fwd ? "off" : "on");
-  } else if (memcmp(config, "lat", 3) == 0) {
-    sprintf(reply, "> %s", StrHelper::ftoa(_prefs->node_lat));
-  } else if (memcmp(config, "lon", 3) == 0) {
-    sprintf(reply, "> %s", StrHelper::ftoa(_prefs->node_lon));
-  } else if (memcmp(config, "flood.max.advert", 16) == 0) {
-    sprintf(reply, "> %d", (uint32_t)_prefs->flood_max_advert);
-  } else if (memcmp(config, "flood.max.unscoped", 18) == 0) {
-    sprintf(reply, "> %d", (uint32_t)_prefs->flood_max_unscoped);
-  } else if (memcmp(config, "flood.max", 9) == 0) {
-    sprintf(reply, "> %d", (uint32_t)_prefs->flood_max);
-  } else if (memcmp(config, "owner.info", 10) == 0) {
+    int len = c._callbacks->getSelfId().writeTo(prv_key, PRV_KEY_SIZE);
+    mesh::Utils::toHex(c.tmp, prv_key, len);
+    sprintf(k.reply, "> %s", c.tmp);
+  }
+  static void getName(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", c._prefs->node_name);
+  }
+  static void getRepeat(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", c._prefs->disable_fwd ? "off" : "on");
+  }
+  static void getLat(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", StrHelper::ftoa(c._prefs->node_lat));
+  }
+  static void getLon(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", StrHelper::ftoa(c._prefs->node_lon));
+  }
+  static void getFloodMaxType(CommonCLI& c, CliCall& k) {
+    mesh::formatFloodMaxTypes(c._prefs->flood_max_types, k.reply, 160);
+  }
+  static void getFloodMaxAdvert(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %d", (uint32_t)c._prefs->flood_max_advert);
+  }
+  static void getFloodMaxUnscoped(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %d", (uint32_t)c._prefs->flood_max_unscoped);
+  }
+  static void getFloodMax(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %d", (uint32_t)c._prefs->flood_max);
+  }
+  static void getOwnerInfo(CommonCLI& c, CliCall& k) {
+    char* reply = k.reply;
     auto start = reply;
     *reply++ = '>';
     *reply++ = ' ';
-    const char* sp = _prefs->owner_info;
+    const char* sp = c._prefs->owner_info;
     while (*sp && reply - start < 159) {
       *reply++ = (*sp == '\n') ? '|' : *sp;    // translate newline back to orig '|'
       sp++;
     }
     *reply = 0;  // set null terminator
-  } else if (memcmp(config, "loop.detect", 11) == 0) {
-    if (_prefs->loop_detect == LOOP_DETECT_OFF) {
-      strcpy(reply, "> off");
-    } else if (_prefs->loop_detect == LOOP_DETECT_MINIMAL) {
-      strcpy(reply, "> minimal");
-    } else if (_prefs->loop_detect == LOOP_DETECT_MODERATE) {
-      strcpy(reply, "> moderate");
+  }
+  static void getLoopDetect(CommonCLI& c, CliCall& k) {
+    if (c._prefs->loop_detect == LOOP_DETECT_OFF) {
+      strcpy(k.reply, "> off");
+    } else if (c._prefs->loop_detect == LOOP_DETECT_MINIMAL) {
+      strcpy(k.reply, "> minimal");
+    } else if (c._prefs->loop_detect == LOOP_DETECT_MODERATE) {
+      strcpy(k.reply, "> moderate");
     } else {
-      strcpy(reply, "> strict");
+      strcpy(k.reply, "> strict");
     }
-  } else if (memcmp(config, "public.key", 10) == 0) {
-    strcpy(reply, "> ");
-    mesh::Utils::toHex(&reply[2], _callbacks->getSelfId().pub_key, PUB_KEY_SIZE);
-  } else if (memcmp(config, "role", 4) == 0) {
-    sprintf(reply, "> %s", _callbacks->getRole());
-  } else if (memcmp(config, "bridge.type", 11) == 0) {
-    sprintf(reply, "> %s",
+  }
+  static void getPublicKey(CommonCLI& c, CliCall& k) {
+    strcpy(k.reply, "> ");
+    mesh::Utils::toHex(&k.reply[2], c._callbacks->getSelfId().pub_key, PUB_KEY_SIZE);
+  }
+  static void getRole(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", c._callbacks->getRole());
+  }
+  static void getBridgeType(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s",
 #ifdef WITH_RS232_BRIDGE
             "rs232"
 #elif WITH_ESPNOW_BRIDGE
@@ -786,75 +968,409 @@ void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* rep
             "none"
 #endif
     );
+  }
 #ifdef WITH_BRIDGE
-  } else if (memcmp(config, "bridge.enabled", 14) == 0) {
-    sprintf(reply, "> %s", _prefs->bridge_enabled ? "on" : "off");
-  } else if (memcmp(config, "bridge.delay", 12) == 0) {
-    sprintf(reply, "> %d", (uint32_t)_prefs->bridge_delay);
-  } else if (memcmp(config, "bridge.source", 13) == 0) {
-    sprintf(reply, "> %s", _prefs->bridge_pkt_src ? "logRx" : "logTx");
+  static void getBridgeEnabled(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", c._prefs->bridge_enabled ? "on" : "off");
+  }
+  static void getBridgeDelay(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %d", (uint32_t)c._prefs->bridge_delay);
+  }
+  static void getBridgeSource(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", c._prefs->bridge_pkt_src ? "logRx" : "logTx");
+  }
 #endif
 #ifdef WITH_RS232_BRIDGE
-  } else if (memcmp(config, "bridge.baud", 11) == 0) {
-    sprintf(reply, "> %d", (uint32_t)_prefs->bridge_baud);
+  static void getBridgeBaud(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %d", (uint32_t)c._prefs->bridge_baud);
+  }
 #endif
 #ifdef WITH_ESPNOW_BRIDGE
-  } else if (memcmp(config, "bridge.channel", 14) == 0) {
-    sprintf(reply, "> %d", (uint32_t)_prefs->bridge_channel);
-  } else if (memcmp(config, "bridge.secret", 13) == 0) {
-    sprintf(reply, "> %s", _prefs->bridge_secret);
+  static void getBridgeChannel(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %d", (uint32_t)c._prefs->bridge_channel);
+  }
+  static void getBridgeSecret(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> %s", c._prefs->bridge_secret);
+  }
 #endif
-  } else if (memcmp(config, "bootloader.ver", 14) == 0) {
-  #ifdef NRF52_PLATFORM
-      char ver[32];
-      if (_board->getBootloaderVersion(ver, sizeof(ver))) {
-          sprintf(reply, "> %s", ver);
-      } else {
-          strcpy(reply, "> unknown");
-      }
-  #else
-      strcpy(reply, "Error: unsupported");
-  #endif
-  } else if (memcmp(config, "adc.multiplier", 14) == 0) {
-    float adc_mult = _board->getAdcMultiplier();
-    if (adc_mult == 0.0f) {
-      strcpy(reply, "Error: unsupported");
+  static void getBootloaderVer(CommonCLI& c, CliCall& k) {
+#ifdef NRF52_PLATFORM
+    char ver[32];
+    if (c._board->getBootloaderVersion(ver, sizeof(ver))) {
+      sprintf(k.reply, "> %s", ver);
     } else {
-      sprintf(reply, "> %.3f", adc_mult);
+      strcpy(k.reply, "> unknown");
     }
+#else
+    strcpy(k.reply, "Error: unsupported");
+#endif
+  }
+  static void getAdcMultiplier(CommonCLI& c, CliCall& k) {
+    float adc_mult = c._board->getAdcMultiplier();
+    if (adc_mult == 0.0f) {
+      strcpy(k.reply, "Error: unsupported");
+    } else {
+      sprintf(k.reply, "> %.3f", adc_mult);
+    }
+  }
   // Power management commands
-  } else if (memcmp(config, "pwrmgt.support", 14) == 0) {
+  static void getPwrmgtSupport(CommonCLI& c, CliCall& k) {
 #ifdef NRF52_POWER_MANAGEMENT
-    strcpy(reply, "> supported");
+    strcpy(k.reply, "> supported");
 #else
-    strcpy(reply, "> unsupported");
+    strcpy(k.reply, "> unsupported");
 #endif
-  } else if (memcmp(config, "pwrmgt.source", 13) == 0) {
+  }
+  static void getPwrmgtSource(CommonCLI& c, CliCall& k) {
 #ifdef NRF52_POWER_MANAGEMENT
-    strcpy(reply, _board->isExternalPowered() ? "> external" : "> battery");
+    strcpy(k.reply, c._board->isExternalPowered() ? "> external" : "> battery");
 #else
-    strcpy(reply, "ERROR: Power management not supported");
+    strcpy(k.reply, "ERROR: Power management not supported");
 #endif
-  } else if (memcmp(config, "pwrmgt.bootreason", 17) == 0) {
-    sprintf(reply, "> Reset: %s; Shutdown: %s",
-      _board->getResetReasonString(_board->getResetReason()),
-      _board->getShutdownReasonString(_board->getShutdownReason()));
-  } else if (memcmp(config, "pwrmgt.bootmv", 13) == 0) {
+  }
+  static void getPwrmgtBootreason(CommonCLI& c, CliCall& k) {
+    sprintf(k.reply, "> Reset: %s; Shutdown: %s",
+      c._board->getResetReasonString(c._board->getResetReason()),
+      c._board->getShutdownReasonString(c._board->getShutdownReason()));
+  }
+  static void getPwrmgtBootmv(CommonCLI& c, CliCall& k) {
 #ifdef NRF52_POWER_MANAGEMENT
-    sprintf(reply, "> %u mV", _board->getBootVoltage());
+    sprintf(k.reply, "> %u mV", c._board->getBootVoltage());
 #else
-    strcpy(reply, "ERROR: Power management not supported");
+    strcpy(k.reply, "ERROR: Power management not supported");
 #endif
-  } else if (memcmp(config, "extra.sf", 8) == 0) {
+  }
+  static void getExtraSf(CommonCLI& c, CliCall& k) {
+    char* reply = k.reply;
     char* tmp = reply;
-    for (int i = 0; i < 3 && _prefs->extra_sf[i] != 0; i++) {
-      tmp += sprintf(tmp, "%s%d", (i == 0) ? "" : ",", _prefs->extra_sf[i]);
-    } 
+    for (int i = 0; i < 3 && c._prefs->extra_sf[i] != 0; i++) {
+      tmp += sprintf(tmp, "%s%d", (i == 0) ? "" : ",", c._prefs->extra_sf[i]);
+    }
     if (tmp == reply) {
       sprintf(reply, "No extra SF configured");
     }
-  } else {
-    sprintf(reply, "??: %s", config);
+  }
+
+  // ---- region <sub> ------------------------------------------------------
+  // parts[0] is "region", parts[1] the sub command, parts[2] and parts[3]
+  // its arguments; n is the number of parts the line split into.
+
+  static void regionLoad(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    c._callbacks->startRegionsLoad();
+  }
+  static void regionSave(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    c._prefs->discovery_mod_timestamp = c.getRTCClock()->getCurrentTime();   // this node is now 'modified' (for discovery info)
+    c.savePrefs();
+    bool success = c._callbacks->saveRegions();
+    strcpy(reply, success ? "OK" : "Err - save failed");
+  }
+  static void regionAllowf(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    auto region = c._region_map->findByNamePrefix(parts[2]);
+    if (region) {
+      region->flags &= ~REGION_DENY_FLOOD;
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Err - unknown region");
+    }
+  }
+  static void regionDenyf(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    auto region = c._region_map->findByNamePrefix(parts[2]);
+    if (region) {
+      region->flags |= REGION_DENY_FLOOD;
+      strcpy(reply, "OK");
+    } else {
+      strcpy(reply, "Err - unknown region");
+    }
+  }
+  static void regionGet(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    auto region = c._region_map->findByNamePrefix(parts[2]);
+    if (region) {
+      auto parent = c._region_map->findById(region->parent);
+      if (parent && parent->id != 0) {
+        sprintf(reply, " %s (%s) %s", region->name, parent->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
+      } else {
+        sprintf(reply, " %s %s", region->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
+      }
+    } else {
+      strcpy(reply, "Err - unknown region");
+    }
+  }
+  static void regionHomeSet(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    auto home = c._region_map->findByNamePrefix(parts[2]);
+    if (home) {
+      c._region_map->setHomeRegion(home);
+      sprintf(reply, " home is now %s", home->name);
+    } else {
+      strcpy(reply, "Err - unknown region");
+    }
+  }
+  static void regionHomeGet(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    auto home = c._region_map->getHomeRegion();
+    sprintf(reply, " home is %s", home ? home->name : "*");
+  }
+  static void regionDefaultSet(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    if (strcmp(parts[2], "<null>") == 0) {
+      c._region_map->setDefaultRegion(NULL);
+      c._callbacks->onDefaultRegionChanged(NULL);
+      c._callbacks->saveRegions();  // persist in one atomic step
+      sprintf(reply, " default scope is now <null>");
+    } else {
+      auto def = c._region_map->findByNamePrefix(parts[2]);
+      if (def == NULL) {
+        def = c._region_map->putRegion(parts[2], 0);  // auto-create the default region
+      }
+      if (def) {
+        def->flags = 0;   // make sure allow flood enabled
+        c._region_map->setDefaultRegion(def);
+        c._callbacks->onDefaultRegionChanged(def);
+        c._callbacks->saveRegions();  // persist in one atomic step
+        sprintf(reply, " default scope is now %s", def->name);
+      } else {
+        strcpy(reply, "Err - region table full");
+      }
+    }
+  }
+  static void regionDefaultGet(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    auto def = c._region_map->getDefaultRegion();
+    sprintf(reply, " default scope is %s", def ? def->name : "<null>");
+  }
+  static void regionPut(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    auto parent = n >= 4 ? c._region_map->findByNamePrefix(parts[3]) : &(c._region_map->getWildcard());
+    if (parent == NULL) {
+      strcpy(reply, "Err - unknown parent");
+    } else {
+      auto region = c._region_map->putRegion(parts[2], parent->id);
+      if (region == NULL) {
+        strcpy(reply, "Err - unable to put");
+      } else {
+        region->flags = 0;   // New default: enable flood
+        strcpy(reply, "OK - (flood allowed)");
+      }
+    }
+  }
+  static void regionRemove(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    auto region = c._region_map->findByName(parts[2]);
+    if (region) {
+      if (c._region_map->removeRegion(*region)) {
+        strcpy(reply, "OK");
+      } else {
+        strcpy(reply, "Err - not empty");
+      }
+    } else {
+      strcpy(reply, "Err - not found");
+    }
+  }
+  static void regionList(CommonCLI& c, const char* const* parts, int n, char* reply) {
+    uint8_t mask = 0;
+    bool invert = false;
+
+    if (strcmp(parts[2], "allowed") == 0) {
+      mask = REGION_DENY_FLOOD;
+      invert = false;  // list regions that DON'T have DENY flag
+    } else if (strcmp(parts[2], "denied") == 0) {
+      mask = REGION_DENY_FLOOD;
+      invert = true;   // list regions that DO have DENY flag
+    } else {
+      strcpy(reply, "Err - use 'allowed' or 'denied'");
+      return;
+    }
+
+    int len = c._region_map->exportNamesTo(reply, 160, mask, invert);
+    if (len == 0) {
+      strcpy(reply, "-none-");
+    }
+  }
+};
+
+namespace {
+
+// Top level commands. Order matters, see the note at the top of this section.
+const CliCmd kTopCmds[] = {
+  CLI_CMD("poweroff",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::poweroff),
+  CLI_CMD("shutdown",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::poweroff),
+  CLI_CMD("reboot",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::reboot),
+  CLI_CMD("clkreboot",      CLI_PREFIX, CLI_ANY,    CommonCLIImpl::clkreboot),
+  CLI_CMD("advert.zerohop", CLI_WORD,   CLI_ANY,    CommonCLIImpl::advertZerohop),
+  CLI_CMD("advert",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::advert),
+  CLI_CMD("clock sync",     CLI_PREFIX, CLI_ANY,    CommonCLIImpl::clockSync),
+  CLI_CMD("start ota",      CLI_PREFIX, CLI_ANY,    CommonCLIImpl::startOta),
+  CLI_CMD("clock",          CLI_PREFIX, CLI_ANY,    CommonCLIImpl::clock),
+  CLI_CMD("time ",          CLI_PREFIX, CLI_ANY,    CommonCLIImpl::time),
+  CLI_CMD("neighbors",      CLI_PREFIX, CLI_ANY,    CommonCLIImpl::neighbors),
+  CLI_CMD("neighbor.remove ", CLI_PREFIX, CLI_ANY,  CommonCLIImpl::neighborRemove),
+  CLI_CMD("tempradio ",     CLI_PREFIX, CLI_ANY,    CommonCLIImpl::tempradio),
+  CLI_CMD("password ",      CLI_PREFIX, CLI_ANY,    CommonCLIImpl::password),
+  CLI_CMD("clear stats",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::clearStats),
+  CLI_CMD("get ",           CLI_PREFIX, CLI_ANY,    CommonCLIImpl::get),
+  CLI_CMD("set ",           CLI_PREFIX, CLI_ANY,    CommonCLIImpl::set),
+  CLI_CMD("erase",          CLI_EXACT,  CLI_SERIAL, CommonCLIImpl::erase),
+  CLI_CMD("ver",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::ver),
+  CLI_CMD("board",          CLI_PREFIX, CLI_ANY,    CommonCLIImpl::board),
+  CLI_CMD("power",          CLI_EXACT,  CLI_ANY,    CommonCLIImpl::power),
+  CLI_CMD("sensor get ",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::sensorGet),
+  CLI_CMD("sensor set ",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::sensorSet),
+  CLI_CMD("sensor list",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::sensorList),
+  CLI_CMD("region",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::region),
+#if ENV_INCLUDE_GPS == 1
+  CLI_CMD("gps on",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsOn),
+  CLI_CMD("gps off",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsOff),
+  CLI_CMD("gps sync",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsSync),
+  CLI_CMD("gps diag",       CLI_EXACT,  CLI_ANY,    CommonCLIImpl::gpsDiag),
+  CLI_CMD("gps setloc",     CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsSetloc),
+  CLI_CMD("gps advert",     CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsAdvert),
+  CLI_CMD("gps",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gps),
+#endif
+  CLI_CMD("powersaving on", CLI_PREFIX, CLI_ANY,    CommonCLIImpl::powersavingOn),
+  CLI_CMD("powersaving off", CLI_PREFIX, CLI_ANY,   CommonCLIImpl::powersavingOff),
+  CLI_CMD("powersaving",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::powersaving),
+  CLI_CMD("log start",      CLI_PREFIX, CLI_ANY,    CommonCLIImpl::logStart),
+  CLI_CMD("log stop",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::logStop),
+  CLI_CMD("log erase",      CLI_PREFIX, CLI_ANY,    CommonCLIImpl::logErase),
+  CLI_CMD("log",            CLI_PREFIX, CLI_SERIAL, CommonCLIImpl::logDump),
+  CLI_CMD("stats-packets",  CLI_WORD,   CLI_SERIAL, CommonCLIImpl::statsPackets),
+  CLI_CMD("stats-radio",    CLI_WORD,   CLI_SERIAL, CommonCLIImpl::statsRadio),
+  CLI_CMD("stats-core",     CLI_WORD,   CLI_SERIAL, CommonCLIImpl::statsCore),
+};
+
+// set <key> <value>: the names include the space that ends the key.
+const CliCmd kSetCmds[] = {
+  CLI_CMD("allow.read.only ",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setAllowReadOnly),
+  CLI_CMD("flood.advert.interval ", CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setFloodAdvertInterval),
+  CLI_CMD("advert.interval ",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setAdvertInterval),
+  CLI_CMD("guest.password ",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setGuestPassword),
+  CLI_CMD("prv.key ",               CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setPrvKey),
+  CLI_CMD("name ",                  CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setName),
+  CLI_CMD("repeat ",                CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setRepeat),
+  CLI_CMD("lat ",                   CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setLat),
+  CLI_CMD("lon ",                   CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setLon),
+  CLI_CMD("flood.max.unscoped ",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setFloodMaxUnscoped),
+  CLI_CMD("flood.max.type ",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setFloodMaxType),
+  CLI_CMD("flood.max.advert ",      CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setFloodMaxAdvert),
+  CLI_CMD("flood.max ",             CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setFloodMax),
+  CLI_CMD("owner.info ",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setOwnerInfo),
+  CLI_CMD("loop.detect ",           CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setLoopDetect),
+  CLI_CMD("freq ",                  CLI_PREFIX, CLI_SERIAL, CommonCLIImpl::setFreq),
+#ifdef WITH_BRIDGE
+  CLI_CMD("bridge.enabled ",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setBridgeEnabled),
+  CLI_CMD("bridge.delay ",          CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setBridgeDelay),
+  CLI_CMD("bridge.source ",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setBridgeSource),
+#endif
+#ifdef WITH_RS232_BRIDGE
+  CLI_CMD("bridge.baud ",           CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setBridgeBaud),
+#endif
+#ifdef WITH_ESPNOW_BRIDGE
+  CLI_CMD("bridge.channel ",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setBridgeChannel),
+  CLI_CMD("bridge.secret ",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setBridgeSecret),
+#endif
+  CLI_CMD("adc.multiplier ",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setAdcMultiplier),
+#if defined(USE_LR2021)
+  CLI_CMD("extra.sf ",              CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setExtraSf),
+#endif
+};
+
+// get <key>: the keys have no trailing space and ignore what follows them.
+const CliCmd kGetCmds[] = {
+  CLI_CMD("allow.read.only",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getAllowReadOnly),
+  CLI_CMD("flood.advert.interval", CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getFloodAdvertInterval),
+  CLI_CMD("advert.interval",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getAdvertInterval),
+  CLI_CMD("guest.password",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getGuestPassword),
+  CLI_CMD("prv.key",               CLI_PREFIX, CLI_SERIAL, CommonCLIImpl::getPrvKey),
+  CLI_CMD("name",                  CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getName),
+  CLI_CMD("repeat",                CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getRepeat),
+  CLI_CMD("lat",                   CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getLat),
+  CLI_CMD("lon",                   CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getLon),
+  CLI_CMD("flood.max.type",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getFloodMaxType),
+  CLI_CMD("flood.max.advert",      CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getFloodMaxAdvert),
+  CLI_CMD("flood.max.unscoped",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getFloodMaxUnscoped),
+  CLI_CMD("flood.max",             CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getFloodMax),
+  CLI_CMD("owner.info",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getOwnerInfo),
+  CLI_CMD("loop.detect",           CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getLoopDetect),
+  CLI_CMD("public.key",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getPublicKey),
+  CLI_CMD("role",                  CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getRole),
+  CLI_CMD("bridge.type",           CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getBridgeType),
+#ifdef WITH_BRIDGE
+  CLI_CMD("bridge.enabled",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getBridgeEnabled),
+  CLI_CMD("bridge.delay",          CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getBridgeDelay),
+  CLI_CMD("bridge.source",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getBridgeSource),
+#endif
+#ifdef WITH_RS232_BRIDGE
+  CLI_CMD("bridge.baud",           CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getBridgeBaud),
+#endif
+#ifdef WITH_ESPNOW_BRIDGE
+  CLI_CMD("bridge.channel",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getBridgeChannel),
+  CLI_CMD("bridge.secret",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getBridgeSecret),
+#endif
+  CLI_CMD("bootloader.ver",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getBootloaderVer),
+  CLI_CMD("adc.multiplier",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getAdcMultiplier),
+  CLI_CMD("pwrmgt.support",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getPwrmgtSupport),
+  CLI_CMD("pwrmgt.source",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getPwrmgtSource),
+  CLI_CMD("pwrmgt.bootreason",     CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getPwrmgtBootreason),
+  CLI_CMD("pwrmgt.bootmv",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getPwrmgtBootmv),
+  CLI_CMD("extra.sf",              CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getExtraSf),
+};
+
+// region <sub>: matched with strcmp on the second word, and by the number of
+// words on the line (n, counting "region" itself). A row applies when
+// min_n <= n <= max_n. `region` alone (n == 1) lists the tree and is handled
+// before the table.
+typedef void (*RegionFn)(CommonCLI& c, const char* const* parts, int n, char* reply);
+
+struct RegionCmd {
+  const char* name;
+  uint8_t min_n;
+  uint8_t max_n;
+  RegionFn fn;
+};
+
+const uint8_t REGION_N_ANY = 255;
+
+const RegionCmd kRegionCmds[] = {
+  { "load",    2, REGION_N_ANY, CommonCLIImpl::regionLoad },
+  { "save",    2, REGION_N_ANY, CommonCLIImpl::regionSave },
+  { "allowf",  3, REGION_N_ANY, CommonCLIImpl::regionAllowf },
+  { "denyf",   3, REGION_N_ANY, CommonCLIImpl::regionDenyf },
+  { "get",     3, REGION_N_ANY, CommonCLIImpl::regionGet },
+  { "home",    3, REGION_N_ANY, CommonCLIImpl::regionHomeSet },
+  { "home",    2, 2,            CommonCLIImpl::regionHomeGet },
+  { "default", 3, REGION_N_ANY, CommonCLIImpl::regionDefaultSet },
+  { "default", 2, 2,            CommonCLIImpl::regionDefaultGet },
+  { "put",     3, REGION_N_ANY, CommonCLIImpl::regionPut },
+  { "remove",  3, REGION_N_ANY, CommonCLIImpl::regionRemove },
+  { "list",    3, REGION_N_ANY, CommonCLIImpl::regionList },
+};
+
+}  // namespace
+
+void CommonCLI::handleCommand(uint32_t sender_timestamp, char* command, char* reply) {
+    if (_prefs->getRadioPrefs()->handleCommand(command, sender_timestamp, reply)) {   // is a radio CLI command?
+      if (_prefs->getRadioPrefs()->isDirty()) { savePrefs(); }
+      return;
+    }
+    // hook for variant-specific CLI processing
+    if (_board->handleCommand(command, sender_timestamp, reply)) {
+      if (_prefs->isDirty()) { savePrefs(); }
+      return;
+    }
+
+    if (!cliRun(kTopCmds, *this, sender_timestamp, command, reply)) {
+      strcpy(reply, "Unknown command");
+    }
+}
+
+void CommonCLI::handleSetCmd(uint32_t sender_timestamp, char* command, char* reply) {
+  char* config = &command[4];
+
+  if (!cliRun(kSetCmds, *this, sender_timestamp, config, reply)) {
+    strcpy(reply, "unknown config: ");
+    StrHelper::strncpy(&reply[16], config, 160-17);
+  }
+}
+
+void CommonCLI::handleGetCmd(uint32_t sender_timestamp, char* command, char* reply) {
+  char* config = &command[4];
+
+  if (!cliRun(kGetCmds, *this, sender_timestamp, config, reply)) {
+    snprintf(reply, 160, "??: %s", config);   // callers pass a 160-byte reply buffer
   }
 }
 
@@ -932,120 +1448,14 @@ void CommonCLI::handleRegionCmd(char* command, char* reply) {
   int n = mesh::Utils::parseTextParts(command, parts, 4, ' ');
   if (n == 1) {
     _region_map->exportTo(reply, 160);
-  } else if (n >= 2 && strcmp(parts[1], "load") == 0) {
-    _callbacks->startRegionsLoad();
-  } else if (n >= 2 && strcmp(parts[1], "save") == 0) {
-    _prefs->discovery_mod_timestamp = getRTCClock()->getCurrentTime();   // this node is now 'modified' (for discovery info)
-    savePrefs();
-    bool success = _callbacks->saveRegions();
-    strcpy(reply, success ? "OK" : "Err - save failed");
-  } else if (n >= 3 && strcmp(parts[1], "allowf") == 0) {
-    auto region = _region_map->findByNamePrefix(parts[2]);
-    if (region) {
-      region->flags &= ~REGION_DENY_FLOOD;
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Err - unknown region");
-    }
-  } else if (n >= 3 && strcmp(parts[1], "denyf") == 0) {
-    auto region = _region_map->findByNamePrefix(parts[2]);
-    if (region) {
-      region->flags |= REGION_DENY_FLOOD;
-      strcpy(reply, "OK");
-    } else {
-      strcpy(reply, "Err - unknown region");
-    }
-  } else if (n >= 3 && strcmp(parts[1], "get") == 0) {
-    auto region = _region_map->findByNamePrefix(parts[2]);
-    if (region) {
-      auto parent = _region_map->findById(region->parent);
-      if (parent && parent->id != 0) {
-        sprintf(reply, " %s (%s) %s", region->name, parent->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
-      } else {
-        sprintf(reply, " %s %s", region->name, (region->flags & REGION_DENY_FLOOD) ? "" : "F");
-      }
-    } else {
-      strcpy(reply, "Err - unknown region");
-    }
-  } else if (n >= 3 && strcmp(parts[1], "home") == 0) {
-    auto home = _region_map->findByNamePrefix(parts[2]);
-    if (home) {
-      _region_map->setHomeRegion(home);
-      sprintf(reply, " home is now %s", home->name);
-    } else {
-      strcpy(reply, "Err - unknown region");
-    }
-  } else if (n == 2 && strcmp(parts[1], "home") == 0) {
-    auto home = _region_map->getHomeRegion();
-    sprintf(reply, " home is %s", home ? home->name : "*");
-  } else if (n >= 3 && strcmp(parts[1], "default") == 0) {
-    if (strcmp(parts[2], "<null>") == 0) {
-      _region_map->setDefaultRegion(NULL);
-      _callbacks->onDefaultRegionChanged(NULL);
-      _callbacks->saveRegions();  // persist in one atomic step
-      sprintf(reply, " default scope is now <null>");
-    } else {
-      auto def = _region_map->findByNamePrefix(parts[2]);
-      if (def == NULL) {
-        def = _region_map->putRegion(parts[2], 0);  // auto-create the default region
-      }
-      if (def) {
-        def->flags = 0;   // make sure allow flood enabled
-        _region_map->setDefaultRegion(def);
-        _callbacks->onDefaultRegionChanged(def);
-        _callbacks->saveRegions();  // persist in one atomic step
-        sprintf(reply, " default scope is now %s", def->name);
-      } else {
-        strcpy(reply, "Err - region table full");
-      }
-    }
-  } else if (n == 2 && strcmp(parts[1], "default") == 0) {
-    auto def = _region_map->getDefaultRegion();
-    sprintf(reply, " default scope is %s", def ? def->name : "<null>");
-  } else if (n >= 3 && strcmp(parts[1], "put") == 0) {
-    auto parent = n >= 4 ? _region_map->findByNamePrefix(parts[3]) : &(_region_map->getWildcard());
-    if (parent == NULL) {
-      strcpy(reply, "Err - unknown parent");
-    } else {
-      auto region = _region_map->putRegion(parts[2], parent->id);
-      if (region == NULL) {
-        strcpy(reply, "Err - unable to put");
-      } else {
-        region->flags = 0;   // New default: enable flood
-        strcpy(reply, "OK - (flood allowed)");
-      }
-    }
-  } else if (n >= 3 && strcmp(parts[1], "remove") == 0) {
-    auto region = _region_map->findByName(parts[2]);
-    if (region) {
-      if (_region_map->removeRegion(*region)) {
-        strcpy(reply, "OK");
-      } else {
-        strcpy(reply, "Err - not empty");
-      }
-    } else {
-      strcpy(reply, "Err - not found");
-    }
-  } else if (n >= 3 && strcmp(parts[1], "list") == 0) {
-    uint8_t mask = 0;
-    bool invert = false;
-    
-    if (strcmp(parts[2], "allowed") == 0) {
-      mask = REGION_DENY_FLOOD;
-      invert = false;  // list regions that DON'T have DENY flag
-    } else if (strcmp(parts[2], "denied") == 0) {
-      mask = REGION_DENY_FLOOD;
-      invert = true;   // list regions that DO have DENY flag
-    } else {
-      strcpy(reply, "Err - use 'allowed' or 'denied'");
+    return;
+  }
+  for (size_t i = 0; i < sizeof(kRegionCmds) / sizeof(kRegionCmds[0]); i++) {
+    const RegionCmd& r = kRegionCmds[i];
+    if (n >= r.min_n && n <= r.max_n && strcmp(parts[1], r.name) == 0) {
+      r.fn(*this, parts, n, reply);
       return;
     }
-    
-    int len = _region_map->exportNamesTo(reply, 160, mask, invert);
-    if (len == 0) {
-      strcpy(reply, "-none-");
-    }
-  } else {
-    strcpy(reply, "Err - ??");
   }
+  strcpy(reply, "Err - ??");
 }

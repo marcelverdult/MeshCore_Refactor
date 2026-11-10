@@ -713,6 +713,31 @@ adverts running, set an explicit value in the 60-240 range.
 
 ---
 
+#### Limit the number of hops per packet type
+**Usage:**
+- `get flood.max.type`
+- `set flood.max.type <type> <value>`
+
+**Parameters:**
+- `type`: packet type, by name or as a number `0`-`15`: `req` (0), `response` (1), `txt` (2), `ack` (3),
+  `advert` (4), `grptxt` (5), `grpdata` (6), `anonreq` (7), `path` (8), `trace` (9), `multipart` (10),
+  `control` (11), `fuota` (14), `raw` (15). `12`, `13` and `14` carry no payload type here; `fuota` is the
+  name the FUOTA branch gives `14`, kept so both trees take the same setting. A number always works, so a
+  packet type added later can be limited without a firmware change.
+- `value`: Maximum flood hop count (0-64) for that packet type, or `off` to drop the limit again
+
+**Default:** no limits, so a fresh node behaves exactly as it did before this setting existed.
+
+**Note:** The limits are stored as a list of exceptions (pref `f_max_pt`, eg. `6:4,9:3`), so a node only
+carries the types it actually limits. `get flood.max.type` prints the list, or `none`.
+
+**Note:** Every limit that applies is tested, so the strictest one wins, the same way `flood.max` and
+`flood.max.unscoped` have always worked together. `flood.max` stays the cap over all flood packets,
+`flood.max.unscoped` the limit for un-scoped floods, and `flood.max.advert` the limit for adverts; a
+`flood.max.type advert` entry joins the advert limit rather than replacing it.
+
+---
+
 ### ACL
 
 #### Add, update or remove permissions for a companion

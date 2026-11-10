@@ -20,7 +20,8 @@
 bool ServerMesh::allowPacketForward(const mesh::Packet* packet) {
   if (_prefs.disable_fwd) return false;
   if (packet->isRouteFlood()
-      && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped, _prefs.flood_max_advert)) {
+      && mesh::isFloodHopLimitExceeded(packet, _prefs.flood_max, _prefs.flood_max_unscoped,
+                                      _prefs.flood_max_advert, _prefs.flood_max_types)) {
     return false;
   }
   return true;
