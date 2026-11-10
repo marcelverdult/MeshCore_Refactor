@@ -2481,9 +2481,17 @@ struct MyMeshCli {
     return true;
   }
   static bool setPin(MyMesh& m, CliCall& k) {
-    m._prefs.ble_pin = atoi(k.arg);
-    m.savePrefs();
-    sprintf(k.reply, "> pin is now %06d", m._prefs.ble_pin);
+    // Same rule as cmdSetDevicePin(): 0, or six digits. Text without a leading number
+    // reads as 0, as it did with atoi(). The range is checked on the long, before it
+    // is stored in the unsigned field.
+    long pin = strtol(k.arg, NULL, 10);
+    if (pin == 0 || (pin >= 100000 && pin <= 999999)) {
+      m._prefs.ble_pin = (uint32_t)pin;
+      m.savePrefs();
+      sprintf(k.reply, "> pin is now %06d", m._prefs.ble_pin);
+    } else {
+      strcpy(k.reply, "Error, pin must be 0 or 6 digits");
+    }
     return true;
   }
   static bool setTzOffset(MyMesh& m, CliCall& k) {

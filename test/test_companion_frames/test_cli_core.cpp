@@ -319,28 +319,41 @@ TEST_F(CliTest, SetPinStoresAndSavesAndPadsToSixDigits) {
   EXPECT_EQ(r.text, "> pin is now 123456");
   EXPECT_EQ(r.saves, 1);
   EXPECT_TRUE(contains(prefsFile(), "pin:123456"));
-  EXPECT_EQ(say("set pin 12"), "> pin is now 000012");
+  EXPECT_EQ(say("set pin 100000"), "> pin is now 100000");
   EXPECT_EQ(say("set pin 0"), "> pin is now 000000");
   EXPECT_TRUE(contains(prefsFile(), "pin:0,"));
 }
 
-TEST_F(CliTest, SetPinHasNoRangeCheck) {
-  // pinned as is: atoi() and no limit, so the pin is not limited to six digits or to
-  // positive numbers
-  EXPECT_EQ(say("set pin 1234567"), "> pin is now 1234567");
-  EXPECT_EQ(say("set pin 99999999"), "> pin is now 99999999");
-  CliResult neg = run("set pin -5");
-  EXPECT_EQ(neg.text, "> pin is now -00005");
-  EXPECT_EQ(neg.saves, 1);
-  EXPECT_TRUE(contains(prefsFile(), "pin:4294967291"));   // stored as an unsigned number
+TEST_F(CliTest, SetPinAcceptsZeroAndSixDigitsAndRefusesTheRest) {
+  // Same rule as the app's cmdSetDevicePin(): 0, or 100000 to 999999.
+  ASSERT_EQ(say("set pin 424242"), "> pin is now 424242");
+  for (const char* ok : {"0", "100000", "999999"}) {
+    CliResult r = run(std::string("set pin ") + ok);
+    EXPECT_EQ(r.saves, 1) << ok;
+    EXPECT_TRUE(contains(r.text, "> pin is now ")) << ok;
+  }
+  EXPECT_EQ(say("set pin 999999"), "> pin is now 999999");
+  for (const char* bad : {"1", "12", "12345", "99999", "1000000", "1234567", "99999999", "-1", "-5",
+                          "-100000", "4294967291", "4294967296", "99999999999999999999",
+                          "-99999999999999999999"}) {
+    EXPECT_EQ(say("set pin 654321"), "> pin is now 654321");
+    CliResult r = run(std::string("set pin ") + bad);
+    EXPECT_EQ(r.text, "Error, pin must be 0 or 6 digits") << bad;
+    EXPECT_EQ(r.saves, 0) << bad;
+    EXPECT_TRUE(contains(prefsFile(), "pin:654321,")) << bad;   // unchanged
+  }
 }
 
-TEST_F(CliTest, SetPinReadsWhatAtoiReads) {
+TEST_F(CliTest, SetPinReadsTheLeadingNumber) {
+  // strtol() skips white space and takes a sign and the digits, as atoi() did. Text after
+  // the number is ignored. Text without a leading number reads as 0 and is accepted as
+  // the pin 0, kept from the atoi() version.
   EXPECT_EQ(say("set pin abc"), "> pin is now 000000");
-  EXPECT_EQ(say("set pin 12abc"), "> pin is now 000012");
-  EXPECT_EQ(say("set pin   34"), "> pin is now 000034");
-  EXPECT_EQ(say("set pin +56"), "> pin is now 000056");
+  EXPECT_EQ(say("set pin 123456abc"), "> pin is now 123456");
+  EXPECT_EQ(say("set pin   234567"), "> pin is now 234567");
+  EXPECT_EQ(say("set pin +345678"), "> pin is now 345678");
   EXPECT_EQ(say("set pin "), "> pin is now 000000");   // nothing after the space: 0, and saved
+  EXPECT_EQ(say("set pin 12abc"), "Error, pin must be 0 or 6 digits");   // reads as 12
 }
 
 TEST_F(CliTest, SetPinNeedsTheSpaceAndThereIsNoGetPin) {
