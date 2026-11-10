@@ -1173,7 +1173,7 @@ same name with `strzcpy(..., 40)`.
 - **How the BLE stack treats an out-of-range pin** was not checked. The change refuses
   such values before they get there.
 - **Whether the apps send `set pin` with fewer than six digits** was not checked. A
-  fifth digit pin that worked before is now refused.
+  five-digit pin that worked before is now refused.
 - **Name lengths** come from a script over source text. Names built at run time are not
   covered; the four non-literal cases above were read by hand.
 
