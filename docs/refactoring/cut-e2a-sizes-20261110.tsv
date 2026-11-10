@@ -1,11 +1,11 @@
 # Firmware sizes of cut E2a (bytes). after = branch claude/build-cut-e2a-aa37bf, before = 3dd444a1.
-# Both trees built with SOURCE_DATE_EPOCH=1760000000, libdeps seeded identically from local copies (PlatformIO registry limit hit), so absolute sizes can differ from sync-build-sizes-20261110.tsv; only the before/after delta is meaningful.
-# 128 environments of the 36 variants of shapes A and A'. status: ok; FAIL:flash-overflow (linked, but larger than the partition; sizes kept); FAIL:registry-limit (a library could not be downloaded, no build, no sizes). Delta = after minus before, empty where a tree has no sizes.
+# Both trees built with SOURCE_DATE_EPOCH=1760000000, libdeps identical in both trees (seeded from local copies; the last 34 envs got their libraries downloaded once and copied to the before tree), so absolute sizes can differ from sync-build-sizes-20261110.tsv; only the before/after delta is meaningful.
+# 128 environments of the 36 variants of shapes A and A'. status: ok; FAIL:flash-overflow (linked, but larger than the partition; sizes kept); FAIL:compile-error (fails in both trees, no sizes). Delta = after minus before, empty where a tree has no sizes.
 # Columns: env, after_status, after_flash, after_ram, before_status, before_flash, before_ram, flash_delta, ram_delta
 WioTrackerL1-1W_repeater	ok	395596	35684	ok	396296	35676	-700	8
 WioTrackerL1-1W_room_server	ok	388668	39372	ok	389384	39364	-716	8
-WioTrackerL1-1W_companion_radio_usb	FAIL:registry-limit			FAIL:registry-limit				
-WioTrackerL1-1W_companion_radio_ble	FAIL:registry-limit			FAIL:registry-limit				
+WioTrackerL1-1W_companion_radio_usb	ok	416212	144352	ok	416912	144344	-700	8
+WioTrackerL1-1W_companion_radio_ble	ok	425844	148792	ok	426576	148784	-732	8
 WioTrackerL1-1W_kiss_modem	ok	322676	21436	ok	323360	21428	-684	8
 Station_G3_ESP32_repeater	ok	1220217	74960	ok	1220345	74968	-128	-8
 Station_G3_ESP32_logging_repeater	ok	1220241	74960	ok	1220385	74968	-144	-8
@@ -23,48 +23,48 @@ heltec_v4_companion_radio_usb	ok	669425	103576	ok	669425	103576	0	0
 heltec_v4_companion_radio_ble	ok	1710249	196912	ok	1710257	196912	-8	0
 heltec_v4_companion_radio_wifi	ok	1146017	174476	ok	1146017	174476	0	0
 heltec_v4_sensor	ok	1190521	60812	ok	1190521	60812	0	0
-heltec_v4_tft_repeater	FAIL:registry-limit			FAIL:registry-limit				
-heltec_v4_tft_repeater_bridge_espnow	FAIL:registry-limit			FAIL:registry-limit				
-heltec_v4_tft_room_server	FAIL:registry-limit			FAIL:registry-limit				
-heltec_v4_tft_terminal_chat	FAIL:registry-limit			FAIL:registry-limit				
-heltec_v4_tft_companion_radio_usb	FAIL:registry-limit			FAIL:registry-limit				
-heltec_v4_tft_companion_radio_ble	FAIL:registry-limit			FAIL:registry-limit				
-heltec_v4_tft_companion_radio_wifi	FAIL:registry-limit			FAIL:registry-limit				
-heltec_v4_tft_sensor	FAIL:registry-limit			FAIL:registry-limit				
+heltec_v4_tft_repeater	ok	1185837	62828	ok	1185673	62828	164	0
+heltec_v4_tft_repeater_bridge_espnow	ok	1196581	64476	ok	1196417	64476	164	0
+heltec_v4_tft_room_server	ok	1181093	66516	ok	1180925	66516	168	0
+heltec_v4_tft_terminal_chat	ok	606069	95960	ok	606057	95960	12	0
+heltec_v4_tft_companion_radio_usb	ok	671253	103672	ok	671085	103672	168	0
+heltec_v4_tft_companion_radio_ble	ok	1684881	195096	ok	1684725	195096	156	0
+heltec_v4_tft_companion_radio_wifi	ok	1121029	172652	ok	1120865	172652	164	0
+heltec_v4_tft_sensor	ok	1192433	60916	ok	1192269	60916	164	0
 heltec_v4_kiss_modem	ok	587009	24664	ok	586997	24664	12	0
-T_Beam_S3_Supreme_SX1262_repeater	FAIL:registry-limit			FAIL:registry-limit				
-T_Beam_S3_Supreme_SX1262_repeater_bridge_espnow	FAIL:registry-limit			FAIL:registry-limit				
-T_Beam_S3_Supreme_SX1262_room_server	FAIL:registry-limit			FAIL:registry-limit				
-T_Beam_S3_Supreme_SX1262_companion_radio_ble	FAIL:registry-limit			FAIL:registry-limit				
-T_Beam_S3_Supreme_SX1262_companion_radio_wifi	FAIL:registry-limit			FAIL:registry-limit				
+T_Beam_S3_Supreme_SX1262_repeater	ok	1166161	61296	ok	1166297	61296	-136	0
+T_Beam_S3_Supreme_SX1262_repeater_bridge_espnow	ok	1176825	62944	ok	1176957	62944	-132	0
+T_Beam_S3_Supreme_SX1262_room_server	ok	1161409	64984	ok	1161553	64984	-144	0
+T_Beam_S3_Supreme_SX1262_companion_radio_ble	ok	1663185	193564	ok	1663337	193564	-152	0
+T_Beam_S3_Supreme_SX1262_companion_radio_wifi	ok	1098517	171112	ok	1098669	171112	-152	0
 ThinkNode_M8_repeater	ok	308360	32804	ok	308356	32796	4	8
 ThinkNode_M8_room_server	ok	301816	36508	ok	301812	36500	4	8
-ThinkNode_M8_companion_radio_ble	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M8_companion_radio_usb	FAIL:registry-limit			FAIL:registry-limit				
+ThinkNode_M8_companion_radio_ble	ok	389332	151792	ok	390148	151800	-816	-8
+ThinkNode_M8_companion_radio_usb	ok	356576	146824	ok	356576	146824	0	0
 LilyGo_T-Echo_repeater	ok	366824	38756	ok	367640	38756	-816	0
 LilyGo_T-Echo_room_server	ok	360048	42452	ok	360864	42452	-816	0
 LilyGo_T-Echo_companion_radio_ble	ok	394152	151824	ok	394968	151824	-816	0
 LilyGo_T-Echo_companion_radio_usb	ok	386792	147384	ok	387592	147384	-800	0
-LilyGo_T-Echo_Card_repeater	FAIL:registry-limit			FAIL:registry-limit				
-LilyGo_T-Echo_Card_room_server	FAIL:registry-limit			FAIL:registry-limit				
-LilyGo_T-Echo_Card_companion_radio_ble	FAIL:registry-limit			FAIL:registry-limit				
-LilyGo_T-Echo_Card_companion_radio_usb	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M5_Repeater	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M5_Repeater_bridge_espnow	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M5_room_server	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M5_terminal_chat	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M5_companion_radio_ble	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M5_companion_radio_usb	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M5_companion_radio_wifi	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M5_companion_radio_serial	FAIL:registry-limit			FAIL:registry-limit				
+LilyGo_T-Echo_Card_repeater	ok	339032	34236	ok	339844	34236	-812	0
+LilyGo_T-Echo_Card_room_server	ok	330776	37924	ok	331588	37932	-812	-8
+LilyGo_T-Echo_Card_companion_radio_ble	ok	365912	147552	ok	366724	147552	-812	0
+LilyGo_T-Echo_Card_companion_radio_usb	ok	360152	143112	ok	360948	143120	-796	-8
+ThinkNode_M5_Repeater	ok	1138813	63920	ok	1138945	63920	-132	0
+ThinkNode_M5_Repeater_bridge_espnow	ok	1149565	65568	ok	1149697	65576	-132	-8
+ThinkNode_M5_room_server	ok	1134101	69464	ok	1134233	69456	-132	8
+ThinkNode_M5_terminal_chat	ok	572777	101700	ok	572905	101700	-128	0
+ThinkNode_M5_companion_radio_ble	ok	1251545	175276	ok	1251685	175276	-140	0
+ThinkNode_M5_companion_radio_usb	ok	1074017	175832	ok	1074157	175824	-140	8
+ThinkNode_M5_companion_radio_wifi	ok	1076185	175656	ok	1076321	175648	-136	8
+ThinkNode_M5_companion_radio_serial	FAIL:compile-error			FAIL:compile-error				
 ThinkNode_M4_repeater	ok	318944	33396	ok	319548	33396	-604	0
 ThinkNode_M4_room_server	ok	312408	37108	ok	313012	37108	-604	0
-ThinkNode_M4_companion_radio_usb	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M4_companion_radio_ble	FAIL:registry-limit			FAIL:registry-limit				
+ThinkNode_M4_companion_radio_usb	ok	330684	141716	ok	331320	141708	-636	8
+ThinkNode_M4_companion_radio_ble	ok	336404	146148	ok	337008	146148	-604	0
 ThinkNode_M3_repeater	ok	318968	33244	ok	319588	33244	-620	0
 ThinkNode_M3_room_server	ok	312408	36948	ok	313028	36948	-620	0
-ThinkNode_M3_companion_radio_usb	FAIL:registry-limit			FAIL:registry-limit				
-ThinkNode_M3_companion_radio_ble	FAIL:registry-limit			FAIL:registry-limit				
+ThinkNode_M3_companion_radio_usb	ok	330316	141540	ok	330936	141532	-620	8
+ThinkNode_M3_companion_radio_ble	ok	336020	145972	ok	336640	145972	-620	0
 SenseCap_Solar_repeater	ok	384404	35124	ok	385104	35116	-700	8
 SenseCap_Solar_room_server	ok	376156	38828	ok	376840	38820	-684	8
 SenseCap_Solar_companion_radio_ble	ok	388128	147420	ok	388844	147420	-716	0
@@ -72,7 +72,7 @@ SenseCap_Solar_companion_radio_usb	ok	382992	100500	ok	383692	100500	-700	0
 Heltec_t114_repeater	ok	415252	35620	ok	416052	35620	-800	0
 Heltec_v3_repeater	ok	1185773	62752	ok	1185753	62752	20	0
 Heltec_v3_companion_radio_ble	ok	1684561	195036	ok	1684541	195028	20	8
-Tbeam_SX1276_repeater	FAIL:registry-limit			FAIL:registry-limit				
+Tbeam_SX1276_repeater	ok	1211989	61308	ok	1211973	61316	16	-8
 ThinkNode_M7_repeater	ok	1096833	59808	ok	1096817	59800	16	8
 Xiao_C3_repeater	ok	1164168	54228	ok	1164158	54228	10	0
 Station_G2_repeater	ok	1218617	74952	ok	1218761	74960	-144	-8
