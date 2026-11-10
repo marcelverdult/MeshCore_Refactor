@@ -16,6 +16,7 @@ extern ESP32Board board;
 extern ESPNOWRadio radio_driver;
 extern ESP32RTCClock rtc_clock;
 extern EnvironmentSensorManager sensors;
+#define SENSORS_TARGET_GLOBALS   // gps_driver, nmea and sensors come from VariantTarget.cpp
 
 #ifdef DISPLAY_CLASS
   extern DISPLAY_CLASS display;

@@ -22,6 +22,7 @@ extern GAT562EVBProBoard board;
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
 extern EnvironmentSensorManager sensors;
+#define SENSORS_TARGET_GLOBALS   // gps_driver, nmea and sensors come from VariantTarget.cpp
 
 bool radio_init();
 mesh::LocalIdentity radio_new_identity();

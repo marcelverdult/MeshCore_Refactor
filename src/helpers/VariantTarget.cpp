@@ -28,3 +28,22 @@
 #endif
 
 #endif
+
+// The GPS driver, the location provider and the sensor manager, for the
+// variants whose target.h defines SENSORS_TARGET_GLOBALS: a plain NMEA GPS on
+// Serial1 with the pins from the board's description (GPS_EN, GPS_RESET and
+// friends, see NmeaGpsDriver.h), read by the environment sensor manager. The
+// type of `sensors` is the one target.h declares. Without GPS
+// (ENV_INCLUDE_GPS undefined or 0) only the sensor manager is defined.
+#ifdef SENSORS_TARGET_GLOBALS
+
+#if ENV_INCLUDE_GPS
+  #include <helpers/sensors/MicroNMEALocationProvider.h>
+  NmeaGpsDriver gps_driver(Serial1);
+  MicroNMEALocationProvider nmea(gps_driver, &rtc_clock);
+  decltype(sensors) sensors(nmea);
+#else
+  decltype(sensors) sensors;
+#endif
+
+#endif

@@ -1,17 +1,8 @@
 #include <Arduino.h>
 #include "target.h"
 #include <helpers/ArduinoHelpers.h>
-#include <helpers/sensors/MicroNMEALocationProvider.h>
 
 WioTrackerL1Board board;
-
-#ifdef ENV_INCLUDE_GPS
-NmeaGpsDriver gps_driver(Serial1);
-MicroNMEALocationProvider nmea(gps_driver, &rtc_clock);
-EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
-#else
-EnvironmentSensorManager sensors = EnvironmentSensorManager();
-#endif
 
 #ifdef DISPLAY_CLASS
   DISPLAY_CLASS display;

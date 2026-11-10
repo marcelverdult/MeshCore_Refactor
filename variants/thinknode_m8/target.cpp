@@ -1,18 +1,9 @@
 #include <Arduino.h>
 #include "target.h"
 #include <helpers/ArduinoHelpers.h>
-#include <helpers/sensors/MicroNMEALocationProvider.h>
 #include <Wire.h>
 
 ThinkNodeM8Board board;
-
-#ifdef ENV_INCLUDE_GPS
-NmeaGpsDriver gps_driver(Serial1);
-MicroNMEALocationProvider nmea(gps_driver, &rtc_clock);
-EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
-#else
-EnvironmentSensorManager sensors = EnvironmentSensorManager();
-#endif
 
 #ifdef DISPLAY_CLASS
   RotaryInputGPIO rotary_input(PIN_BUTTON1_A, PIN_BUTTON1_B);

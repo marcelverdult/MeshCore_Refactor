@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include "target.h"
-#include <helpers/sensors/MicroNMEALocationProvider.h>
 
 ThinknodeM5Board board;
 
@@ -15,14 +14,6 @@ WRAPPER_CLASS radio_driver(radio, board);
 
 ESP32RTCClock fallback_clock;
 AutoDiscoverRTCClock rtc_clock(fallback_clock);
-
-#ifdef ENV_INCLUDE_GPS
-NmeaGpsDriver gps_driver(Serial1);
-MicroNMEALocationProvider nmea = MicroNMEALocationProvider(gps_driver, &rtc_clock);
-EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
-#else
-EnvironmentSensorManager sensors = EnvironmentSensorManager();
-#endif
 
 #ifdef DISPLAY_CLASS
   MomentaryButton backlight_btn(BACKLIGHT_BTN, 1000, true);   // own global, not part of DISPLAY_TARGET_GLOBALS

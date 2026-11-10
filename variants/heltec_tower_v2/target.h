@@ -29,6 +29,7 @@ extern HeltecTowerV2Board board;
 extern WRAPPER_CLASS radio_driver;
 extern AutoDiscoverRTCClock rtc_clock;
 extern EnvironmentSensorManager sensors;
+#define SENSORS_TARGET_GLOBALS   // gps_driver, nmea and sensors come from VariantTarget.cpp
 extern TowerV2ExternalWatchdog external_watchdog;
 
 #ifdef DISPLAY_CLASS

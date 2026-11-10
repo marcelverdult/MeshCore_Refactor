@@ -7,13 +7,6 @@ ESP32Board board;
 ESPNOWRadio radio_driver;
 
 ESP32RTCClock rtc_clock;
-#if defined(ENV_INCLUDE_GPS)
-NmeaGpsDriver gps_driver(Serial1);
-MicroNMEALocationProvider nmea(gps_driver, (mesh::RTCClock*)&rtc_clock);
-EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
-#else
-EnvironmentSensorManager sensors = EnvironmentSensorManager();
-#endif
 
 #ifdef DISPLAY_CLASS
   DISPLAY_CLASS display;

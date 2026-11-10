@@ -18,6 +18,7 @@ extern MinewsemiME25LS01Board board;
 extern WRAPPER_CLASS radio_driver;
 extern VolatileRTCClock rtc_clock;
 extern EnvironmentSensorManager sensors;
+#define SENSORS_TARGET_GLOBALS   // gps_driver, nmea and sensors come from VariantTarget.cpp
 #ifdef DISPLAY_CLASS
   extern DISPLAY_CLASS display;
   extern MomentaryButton user_btn;

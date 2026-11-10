@@ -15,15 +15,6 @@ WRAPPER_CLASS radio_driver(radio, board);
 ESP32RTCClock fallback_clock;
 AutoDiscoverRTCClock rtc_clock(fallback_clock);
 
-#if ENV_INCLUDE_GPS
-  #include <helpers/sensors/MicroNMEALocationProvider.h>
-  NmeaGpsDriver gps_driver(Serial1);
-  MicroNMEALocationProvider nmea(gps_driver, &rtc_clock);
-  EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
-#else
-  EnvironmentSensorManager sensors;
-#endif
-
 const uint32_t rfswitch_dios[] = {
   RADIOLIB_LR2021_DIO5,   // RFX2402E 2.4G_TX_EN
   RADIOLIB_LR2021_DIO6,   // RFX2402E 2.4G_RX_EN
@@ -41,7 +32,6 @@ static const Module::RfSwitchMode_t rfswitch_table[] = {
   { LR2021::MODE_TX_HF, { HIGH, LOW,  LOW,  LOW,  LOW  } },  // tx_hf: 2G4 PA,  GC1109 off
   END_OF_MODE_TABLE,
 };
-
 
 bool radio_init() {
   fallback_clock.begin();

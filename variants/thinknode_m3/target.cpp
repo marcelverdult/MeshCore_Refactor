@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include "target.h"
-#include <helpers/sensors/MicroNMEALocationProvider.h>
 
 ThinkNodeM3Board board;
 
@@ -10,13 +9,6 @@ WRAPPER_CLASS radio_driver(radio, board);
 
 VolatileRTCClock fallback_clock;
 AutoDiscoverRTCClock rtc_clock(fallback_clock);
-#ifdef ENV_INCLUDE_GPS
-NmeaGpsDriver gps_driver(Serial1);
-MicroNMEALocationProvider nmea(gps_driver, &rtc_clock);
-EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
-#else
-EnvironmentSensorManager sensors = EnvironmentSensorManager();
-#endif
 
 #ifdef DISPLAY_CLASS
   NullDisplayDriver display;
