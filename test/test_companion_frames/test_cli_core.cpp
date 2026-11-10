@@ -377,6 +377,25 @@ TEST_F(CliTest, BoardAnswersTheManufacturerName) {
   EXPECT_EQ(r.saves, 0);
 }
 
+TEST_F(CliTest, BoardKeepsANameOfUpTo39CharactersWhole) {
+  // the longest name in the tree has 37 characters (variants/ikoka_handheld_nrf)
+  board.manufacturer = "Ikoka Handheld E22 30dBm (Xiao_nrf52)";
+  EXPECT_EQ(run("board").text, "Ikoka Handheld E22 30dBm (Xiao_nrf52)");
+  board.manufacturer = std::string(39, 'n');
+  EXPECT_EQ(run("board").text, std::string(39, 'n'));
+}
+
+TEST_F(CliTest, BoardCutsALongNameAt39CharactersAndStaysInsideTheBuffer) {
+  // run() fails the test if a byte behind the 161 byte reply buffer changes
+  board.manufacturer = std::string(40, 'a');
+  EXPECT_EQ(run("board").text, std::string(39, 'a'));
+  board.manufacturer = std::string(500, 'b');
+  EXPECT_EQ(run("board").text, std::string(39, 'b'));
+  EXPECT_EQ(run("ab|board").text, "ab|" + std::string(39, 'b'));
+  board.manufacturer = "";
+  EXPECT_EQ(run("board").text, "");
+}
+
 TEST_F(CliTest, VerAnswersVersionAndBuildDate) {
   CliResult r = run("ver");
   EXPECT_EQ(r.text, std::string(FIRMWARE_VERSION) + " (Build: " + FIRMWARE_BUILD_DATE + ")");

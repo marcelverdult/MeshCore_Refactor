@@ -2460,7 +2460,10 @@ struct MyMeshCli {
   static bool set(MyMesh& m, CliCall& k);  // below the tables
   static bool get(MyMesh& m, CliCall& k);
   static bool boardName(MyMesh& m, CliCall& k) {
-    strcpy(k.reply, board.getManufacturerName());
+    // At most 39 characters, like the name in the app's device info frame (40 bytes).
+    // The smallest reply buffer of the callers is 161 bytes (the remote CLI), and a
+    // prefix adds at most 3. Every board name in the tree is 37 characters or less.
+    StrHelper::strncpy(k.reply, board.getManufacturerName(), 40);
     return true;
   }
   static bool ver(MyMesh& m, CliCall& k) {
