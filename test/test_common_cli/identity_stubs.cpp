@@ -45,8 +45,3 @@ size_t LocalIdentity::writeTo(uint8_t* dest, size_t max_len) const {
 }
 
 }  // namespace mesh
-
-// LocationProvider declares sendSentence() virtual and never defines it in this tree
-// (every provider overrides it), but that function is the one that anchors the base
-// class's vtable, so a build that makes a provider needs a body somewhere.
-void LocationProvider::sendSentence(const char*) { }

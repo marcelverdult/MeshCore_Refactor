@@ -181,103 +181,46 @@ protected:
   }
 };
 
-TEST_F(GpsCliTest, StatusShowsOnFixAndSatellites) {
-  loc.enabled = true; loc.valid = true; loc.sats = 7;
-  EXPECT_EQ(run("gps"), "on, active, fix, 7 sats");
-}
-
-TEST_F(GpsCliTest, StatusShowsNoFixAndDeactivatedWhenTheSettingIsNotOne) {
-  sens.settings = {{"gps", "0"}};
-  loc.valid = false; loc.sats = 0;
-  EXPECT_EQ(run("gps"), "on, deactivated, no fix, 0 sats");
-  sens.settings = {{"gps", "yes"}};
-  EXPECT_EQ(run("gps"), "on, deactivated, no fix, 0 sats");   // only exactly "1" is active
-}
-
-TEST_F(GpsCliTest, StatusIsJustOffWhenTheEnablePinIsOff) {
-  loc.enabled = false;
-  EXPECT_EQ(run("gps"), "off");
-}
-
-TEST_F(GpsCliTest, StatusWithoutAProviderSaysCantFindGps) {
-  sens.location = nullptr;
-  EXPECT_EQ(run("gps"), "Can't find GPS");
-}
-
-TEST_F(GpsCliTest, AnyWordStartingWithGpsFallsThroughToTheStatusPinnedAsIs) {
-  EXPECT_EQ(run("gpsx"), "on, active, fix, 7 sats");
-  EXPECT_EQ(run("gps foo"), "on, active, fix, 7 sats");
-  EXPECT_EQ(run("gps ON"), "on, active, fix, 7 sats");         // case matters for the subcommands
-}
-
-TEST_F(GpsCliTest, OnSwitchesTheSensorSettingAndSavesThePref) {
+// "gps on|off|period|fix|once|guard ..." are CommonGpsPrefs::handleCommand, merged from upstream
+// (#3753). The wording of its replies is upstream's; these tests pin only how CommonCLI wires it.
+TEST_F(GpsCliTest, OnTurnsTheProviderOnAndSavesThePref) {
   prefs.gps_enabled = 0;
-  EXPECT_EQ(run("gps on"), "ok");
-  EXPECT_EQ(sens.set_calls, (std::vector<std::string>{"gps=1"}));
+  EXPECT_EQ(run("gps on"), "OK");
+  EXPECT_TRUE(loc.isGpsOn());
   EXPECT_EQ(prefs.gps_enabled, 1);
-  EXPECT_EQ(takeCalls(), (Calls{"savePrefs advert_interval=90"}));
+  EXPECT_EQ(takeCalls().size(), 1u);
 }
 
-TEST_F(GpsCliTest, OffSwitchesTheSensorSettingAndSavesThePref) {
+TEST_F(GpsCliTest, OffTurnsTheProviderOffAndSavesThePref) {
   prefs.gps_enabled = 1;
-  EXPECT_EQ(run("gps off"), "ok");
-  EXPECT_EQ(sens.set_calls, (std::vector<std::string>{"gps=0"}));
+  run("gps on");
+  takeCalls();
+  EXPECT_EQ(run("gps off"), "OK");
+  EXPECT_FALSE(loc.isGpsOn());
   EXPECT_EQ(prefs.gps_enabled, 0);
-  EXPECT_EQ(takeCalls(), (Calls{"savePrefs advert_interval=90"}));
+  EXPECT_EQ(takeCalls().size(), 1u);
 }
 
-TEST_F(GpsCliTest, OnAndOffLeaveThePrefAloneWhenTheSettingIsMissing) {
-  sens.set_accepts = false;
-  prefs.gps_enabled = 0;
-  EXPECT_EQ(run("gps on"), "gps toggle not found");
-  EXPECT_EQ(prefs.gps_enabled, 0);
-  prefs.gps_enabled = 1;
-  EXPECT_EQ(run("gps off"), "gps toggle not found");
+TEST_F(GpsCliTest, PeriodIsStoredInThePrefsAndSwitchesTheGpsOn) {
+  EXPECT_EQ(run("gps period 10m"), "OK");
+  EXPECT_EQ(prefs.gps_period, 600u);
   EXPECT_EQ(prefs.gps_enabled, 1);
-  EXPECT_TRUE(takeCalls().empty());
+  EXPECT_EQ(run("gps period"), "> 600");
 }
 
-TEST_F(GpsCliTest, OnAndOffMatchByPrefixPinnedAsIs) {
-  EXPECT_EQ(run("gps onwards"), "ok");
-  EXPECT_EQ(sens.set_calls.back(), "gps=1");
-  EXPECT_EQ(run("gps offline"), "ok");
-  EXPECT_EQ(sens.set_calls.back(), "gps=0");
-}
-
-TEST_F(GpsCliTest, SyncAsksTheProviderToSyncTheTime) {
-  EXPECT_EQ(run("gps sync"), "ok");
-  EXPECT_EQ(loc.sync_calls, 1);
+TEST_F(GpsCliTest, StatusWithoutAProviderSaysSo) {
   sens.location = nullptr;
-  EXPECT_EQ(run("gps sync"), "gps provider not found");
+  EXPECT_EQ(run("gps"), "Error, gps provider not found");
 }
 
-TEST_F(GpsCliTest, DiagPrefixesTheRequestedFlagToTheProviderText) {
-  loc.diag = "fix:3d hdop:1.2";
-  EXPECT_EQ(run("gps diag"), "req:1 fix:3d hdop:1.2");
-  sens.settings = {{"gps", "0"}};
-  EXPECT_EQ(run("gps diag"), "req:0 fix:3d hdop:1.2");
-  sens.settings.clear();
-  EXPECT_EQ(run("gps diag"), "req:0 fix:3d hdop:1.2");        // no setting: not requested
-}
-
-TEST_F(GpsCliTest, DiagWithoutAProviderAndDiagIsAnExactMatch) {
-  sens.location = nullptr;
-  EXPECT_EQ(run("gps diag"), "gps provider not found");
-  sens.location = &loc;
-  EXPECT_EQ(run("gps diagnose"), "on, active, fix, 7 sats");  // not "diag": falls through to the status
-}
-
-TEST_F(GpsCliTest, DiagCutsALongProviderTextToTheReplyBuffer) {
-  loc.diag = std::string(300, 'd');
-  std::string r = run("gps diag");
-  EXPECT_EQ(r.substr(0, 10), "req:1 dddd");
-  EXPECT_LT(r.size(), 160u);
+TEST_F(GpsCliTest, AnUnknownGpsWordIsNotACommand) {
+  EXPECT_EQ(run("gpsx"), "Unknown command");
 }
 
 TEST_F(GpsCliTest, SetlocCopiesTheSensorPositionToThePrefsAndSaves) {
   sens.node_lat = 48.25;
   sens.node_lon = 11.5;
-  EXPECT_EQ(run("gps setloc"), "ok");
+  EXPECT_EQ(run("gps setloc"), "OK");
   EXPECT_EQ(prefs.node_lat, 48.25);
   EXPECT_EQ(prefs.node_lon, 11.5);
   EXPECT_EQ(takeCalls(), (Calls{"savePrefs advert_interval=90"}));
@@ -287,42 +230,42 @@ TEST_F(GpsCliTest, AdvertShowsThePolicy) {
   prefs.advert_loc_policy = ADVERT_LOC_NONE;  EXPECT_EQ(run("gps advert"), "> none");
   prefs.advert_loc_policy = ADVERT_LOC_PREFS; EXPECT_EQ(run("gps advert"), "> prefs");
   prefs.advert_loc_policy = ADVERT_LOC_SHARE; EXPECT_EQ(run("gps advert"), "> share");
-  prefs.advert_loc_policy = 9;                EXPECT_EQ(run("gps advert"), "error");
+  prefs.advert_loc_policy = 9;                EXPECT_EQ(run("gps advert"), "Error, invalid policy");
   EXPECT_TRUE(takeCalls().empty());
 }
 
 TEST_F(GpsCliTest, AdvertSetsAndSavesEachPolicy) {
-  EXPECT_EQ(run("gps advert none"), "ok");
+  EXPECT_EQ(run("gps advert none"), "OK");
   EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_NONE);
-  EXPECT_EQ(run("gps advert share"), "ok");
+  EXPECT_EQ(run("gps advert share"), "OK");
   EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_SHARE);
-  EXPECT_EQ(run("gps advert prefs"), "ok");
+  EXPECT_EQ(run("gps advert prefs"), "OK");
   EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_PREFS);
   EXPECT_EQ(takeCalls().size(), 3u);
 }
 
 TEST_F(GpsCliTest, AdvertWithAnUnknownPolicyAnswersErrorAndChangesNothing) {
   prefs.advert_loc_policy = ADVERT_LOC_SHARE;
-  EXPECT_EQ(run("gps advert bogus"), "error");
+  EXPECT_EQ(run("gps advert bogus"), "Error, invalid policy");
   EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_SHARE);
   EXPECT_TRUE(takeCalls().empty());
 }
 
 TEST_F(GpsCliTest, AdvertPolicyWordsMatchByPrefixPinnedAsIs) {
-  EXPECT_EQ(run("gps advert nonexistent"), "ok");
+  EXPECT_EQ(run("gps advert nonexistent"), "OK");
   EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_NONE);
-  EXPECT_EQ(run("gps advert shared!"), "ok");
+  EXPECT_EQ(run("gps advert shared!"), "OK");
   EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_SHARE);
 }
 
 TEST_F(GpsCliTest, AdvertWithTrailingSpaceOnlyIsAnErrorPinnedAsIs) {
-  EXPECT_EQ(run("gps advert "), "error");     // longer than 10: reads the policy word, finds none
+  EXPECT_EQ(run("gps advert "), "Error, invalid policy");     // longer than 10: reads the policy word, finds none
 }
 
 #else
 
-TEST_F(SensorCliTest, GpsCommandsDoNotExistInBuildsWithoutGps) {
-  for (const char* c : {"gps", "gps on", "gps off", "gps sync", "gps diag", "gps setloc", "gps advert"}) {
+TEST_F(SensorCliTest, GpsSetlocAndAdvertDoNotExistInBuildsWithoutGps) {
+  for (const char* c : {"gps setloc", "gps advert"}) {
     EXPECT_EQ(run(c), "Unknown command") << c;
   }
   EXPECT_TRUE(sens.set_calls.empty());

@@ -444,11 +444,11 @@ TEST_F(BootSequenceTest, TheStoredGpsSettingIsPushedToTheSensorManagerLast) {
 
   bootFresh();
 
-  ASSERT_EQ(eventCount("sensors.setSettingValue gps=1"), 1);
-  EXPECT_EQ(eventCount("sensors.setSettingValue gps=0"), 0);
-  EXPECT_EQ(eventIndex("sensors.setSettingValue gps=1"), (int)g_events.size() - 1)
+  ASSERT_EQ(eventCount("location.setGpsOn 1"), 1);
+  EXPECT_EQ(eventCount("location.setGpsOn 0"), 0);
+  EXPECT_EQ(eventIndex("location.setGpsOn 1"), (int)g_events.size() - 1)
       << "the last thing begin() does";
-  EXPECT_GT(eventIndex("sensors.setSettingValue gps=1"), eventIndex("board.setAdcMultiplier"));
+  EXPECT_GT(eventIndex("location.setGpsOn 1"), eventIndex("board.setAdcMultiplier"));
 }
 
 TEST_F(BootSequenceTest, AStoredGpsOffIsPushedAsOff) {
@@ -456,8 +456,8 @@ TEST_F(BootSequenceTest, AStoredGpsOffIsPushedAsOff) {
 
   bootFresh();
 
-  EXPECT_EQ(eventCount("sensors.setSettingValue gps=0"), 1);
-  EXPECT_EQ(eventCount("sensors.setSettingValue gps=1"), 0);
+  EXPECT_EQ(eventCount("location.setGpsOn 0"), 1);
+  EXPECT_EQ(eventCount("location.setGpsOn 1"), 0);
 }
 
 #else
@@ -467,6 +467,7 @@ TEST_F(BootSequenceTest, WithoutGpsSupportNothingIsPushedToTheSensorManager) {
 
   for (const std::string& e : g_events) {
     EXPECT_NE(e.rfind("sensors.", 0), 0u) << e;
+    EXPECT_NE(e.rfind("location.", 0), 0u) << e;
   }
 }
 

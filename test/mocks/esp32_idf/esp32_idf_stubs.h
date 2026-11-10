@@ -46,6 +46,7 @@ inline int esp32_test_settimeofday(const struct timeval* tv, const void*) {
 #define settimeofday esp32_test_settimeofday
 
 typedef int gpio_num_t;
+#define GPIO_NUM_NC (-1)
 enum { GPIO_INTR_POSEDGE = 1, GPIO_INTR_HIGH_LEVEL = 5 };
 #ifndef HIGH
 #define HIGH 1

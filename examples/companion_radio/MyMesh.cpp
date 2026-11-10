@@ -967,6 +967,8 @@ void MyMesh::begin() {
   _prefs.tx_power_dbm = constrain(_prefs.tx_power_dbm, -9, MAX_LORA_TX_POWER);
   _prefs.gps_enabled = constrain(_prefs.gps_enabled, 0, 1);  // Ensure boolean 0 or 1
   _prefs.gps_interval = constrain(_prefs.gps_interval, 0, 86400);  // Max 24 hours
+  _prefs.adc_multiplier = constrain(_prefs.adc_multiplier, 0.0f, 10.0f);
+  if (!board.setAdcMultiplier(_prefs.adc_multiplier)) _prefs.adc_multiplier = 0.0f;
 
   _active_ble_pin = _prefs.ble_pin;
 
@@ -2497,6 +2499,23 @@ struct MyMeshCli {
     }
     return true;
   }
+  static bool setAdcMultiplier(MyMesh& m, CliCall& k) {   // same as CommonCLI
+    float mult = atof(k.arg);
+    if (mult < 0.0f || mult > 10.0f) {
+      strcpy(k.reply, "Error, must be from 0 to 10");
+    } else if (board.setAdcMultiplier(mult)) {
+      m._prefs.adc_multiplier = mult;
+      m.savePrefs();
+      if (mult == 0.0f) {
+        strcpy(k.reply, "OK - using default board multiplier");
+      } else {
+        sprintf(k.reply, "OK - multiplier set to %.3f", mult);
+      }
+    } else {
+      strcpy(k.reply, "Error: unsupported");
+    }
+    return true;
+  }
   static bool setTzOffset(MyMesh& m, CliCall& k) {
     float tz = atof(k.arg);
     if (!(tz >= -12 && tz <= 14)) {   // written so that NaN is refused too
@@ -2601,6 +2620,14 @@ struct MyMeshCli {
     sprintf(k.reply, "> now %d (applied at next screen wakeup)", m._prefs.ui_max_partial);
     return true;
   }
+  static bool setUiGpsAction(MyMesh& m, CliCall& k) {
+    const char* v = k.arg;
+    while (*v == ' ') v++;
+    m._prefs.ui_gps_action = (memcmp(v, "once", 4) == 0 || memcmp(v, "trigger", 7) == 0 || *v == '1') ? 1 : 0;   // anything else: toggle
+    m.savePrefs();
+    sprintf(k.reply, "> now %s", m._prefs.ui_gps_action ? "once" : "toggle");
+    return true;
+  }
   static bool setUiNdName(MyMesh& m, CliCall& k) {
     m._prefs.ui_nd_name = atoi(k.arg);
     m.savePrefs();
@@ -2613,6 +2640,15 @@ struct MyMeshCli {
 
   static bool getName(MyMesh& m, CliCall& k) {
     sprintf(k.reply, "> %s", m._prefs.node_name);
+    return true;
+  }
+  static bool getAdcMultiplier(MyMesh& m, CliCall& k) {
+    float mult = board.getAdcMultiplier();
+    if (mult == 0.0f) {
+      strcpy(k.reply, "Error: unsupported");
+    } else {
+      sprintf(k.reply, "> %.3f", mult);
+    }
     return true;
   }
   static bool getTzOffset(MyMesh& m, CliCall& k) {
@@ -2690,6 +2726,10 @@ struct MyMeshCli {
     sprintf(k.reply, "> %d", m._prefs.ui_max_partial);
     return true;
   }
+  static bool getUiGpsAction(MyMesh& m, CliCall& k) {
+    sprintf(k.reply, "> %s", m._prefs.ui_gps_action ? "once" : "toggle");
+    return true;
+  }
   static bool getUiNdName(MyMesh& m, CliCall& k) {
     sprintf(k.reply, "> %d", m._prefs.ui_nd_name);
     return true;
@@ -2723,6 +2763,7 @@ const CliCmd kSetCmds[] = {
   CLI_CMD("wifi.clear",           CLI_EXACT,  MyMeshCli::setWifiClear),
   CLI_CMD("wifi.enabled ",        CLI_PREFIX, MyMeshCli::setWifiEnabled),
 #endif
+  CLI_CMD("adc.multiplier ",      CLI_PREFIX, MyMeshCli::setAdcMultiplier),
   CLI_CMD("tz.offset ",           CLI_PREFIX, MyMeshCli::setTzOffset),
 #ifdef DISPLAY_CLASS
   // by prefix with no space and no end of word check, as the old code did
@@ -2735,6 +2776,7 @@ const CliCmd kSetCmds[] = {
   CLI_CMD("ui.auto_off_keep_msgs", CLI_PREFIX, MyMeshCli::setUiAutoOffKeepMsgs),
   CLI_CMD("ui.max_partial",       CLI_PREFIX, MyMeshCli::setUiMaxPartial),
   CLI_CMD("ui.nd_name",           CLI_PREFIX, MyMeshCli::setUiNdName),
+  CLI_CMD("ui.gps_action",        CLI_PREFIX, MyMeshCli::setUiGpsAction),
 #endif
 };
 
@@ -2751,6 +2793,7 @@ const CliCmd kGetCmds[] = {
   CLI_CMD("wifi.status",          CLI_EXACT,  MyMeshCli::getWifiStatus),
   CLI_CMD("wifi.ip",              CLI_EXACT,  MyMeshCli::getWifiIp),
 #endif
+  CLI_CMD("adc.multiplier",       CLI_EXACT,  MyMeshCli::getAdcMultiplier),
   CLI_CMD("tz.offset",            CLI_EXACT,  MyMeshCli::getTzOffset),
 #ifdef DISPLAY_CLASS
   CLI_CMD("ui.show_clock",        CLI_PREFIX, MyMeshCli::getUiShowClock),
@@ -2762,6 +2805,7 @@ const CliCmd kGetCmds[] = {
   CLI_CMD("ui.auto_off_keep_msgs", CLI_PREFIX, MyMeshCli::getUiAutoOffKeepMsgs),
   CLI_CMD("ui.max_partial",       CLI_PREFIX, MyMeshCli::getUiMaxPartial),
   CLI_CMD("ui.nd_name",           CLI_PREFIX, MyMeshCli::getUiNdName),
+  CLI_CMD("ui.gps_action",        CLI_PREFIX, MyMeshCli::getUiGpsAction),
 #endif
 };
 
@@ -2783,6 +2827,11 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
 
   if (_prefs.getRadioPrefs()->handleCommand(command, sender_timestamp, reply)) {  // is radio CLI command?
     if (_prefs.getRadioPrefs()->isDirty()) { savePrefs(); }
+    return true;
+  }
+
+  if (_prefs.getGpsPrefs()->handleCommand(command, sensors, reply)) {
+    if (_prefs.getGpsPrefs()->isDirty()) { savePrefs(); }
     return true;
   }
 

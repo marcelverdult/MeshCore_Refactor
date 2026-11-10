@@ -156,7 +156,7 @@ public:
   void begin() override { }
   void stop() override { }
   void loop() override { }
-  bool isEnabled() override { return enabled; }
+  bool isActive() override { return enabled; }
   void formatDiagnostics(char* out, size_t out_size) override { snprintf(out, out_size, "%s", diag.c_str()); }
 };
 
