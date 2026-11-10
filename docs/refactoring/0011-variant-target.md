@@ -2266,6 +2266,72 @@ Alternatives:
 - **All 92 variants with one `SENSORS_TARGET_GLOBALS`.** Net 0 for the 40 without GPS;
   rejected.
 
+### E2a as built
+
+Built on 10.11.2026 as recommended: only the 36 variants of shapes A and A', opt-in through
+`SENSORS_TARGET_GLOBALS` in each `target.h`, the three definitions in
+`src/helpers/VariantTarget.cpp` (19 lines). `GPS_PERIPH_POWER` and the baud probe list were not
+built (shape B stays as it is). The 36 are the 31 variants whose block is the plain
+`NmeaGpsDriver gps_driver(Serial1)` form plus `heltec_rc32` (its pin arguments equal the
+defaults, checked in `NmeaGpsDriver.h`), `lilygo_techo`, `thinknode_m5`, `muziworks_r1_neo` and
+`sensecap_indicator-espnow`; `heltec_tower_v2` and `lilygo_tdeck` are the two without guard.
+`lilygo_techo_card` is one of the 36 in the inventory above and got the same change as the
+others; no environment of it could be built (see below).
+
+- **Diff.** 36 `target.cpp`: 308 lines out, 0 in. That is 249 lines of the GPS block (plus
+  `#ifdef` and `#endif`), 35 now unused `#include <helpers/sensors/MicroNMEALocationProvider.h>`
+  lines and 24 blank lines; the plan's "about 250" counted the block only. 36 `target.h`: 36
+  lines in. Per variant 7 to 12 lines out (7 `sensecap_indicator-espnow`, 3 `lilygo_tdeck`, 4
+  `heltec_tower_v2` without guard, 12 `heltec_t114`, which had the include twice).
+- **Builds.** 128 environments (36 variants, one repeater and one companion where they
+  exist), each in the base tree (3dd444a1) and the changed tree, `SOURCE_DATE_EPOCH=1760000000`:
+  92 build in both, 2 (`Station_G2_companion_radio_ble`, `Station_G3_ESP32_companion_radio_ble`)
+  link but are 1.9 % over the flash partition in both trees alike, 34 could not be built in
+  either tree because the PlatformIO registry refused library downloads ("Download limit
+  exceeded", after eight parallel builds). Those 34 are in the TSV as `FAIL:registry-limit`:
+  `heltec_v4_tft_*` (8), `ThinkNode_M5_*` (8), `LilyGo_T-Echo_Card_*` (4),
+  `T_Beam_S3_Supreme_SX1262_*` (5 of 6), `ThinkNode_M8`, `M4` and `M3` companions (2 each),
+  `WioTrackerL1-1W` companions (2), `Tbeam_SX1276_repeater`. Missing libraries: Adafruit ST7735
+  and ST7789, NonBlockingRTTTL, XPowersLib, U8g2, GxEPD2. The libraries of the other
+  environments came from local copies, identical for both trees, so absolute sizes can differ
+  from `sync-build-sizes-20261110.tsv`; only the delta counts. 35 of the 36 variants have at
+  least one built environment; `lilygo_techo_card` has none (NOT VERIFIED to build).
+  `decltype(sensors)` compiled in all 94 environments that reached the link, on ESP32 and
+  nRF52.
+- **Sizes** (`cut-e2a-sizes-20261110.tsv`, 94 pairs): RAM delta 0 in 56, +8 or -8 in 38;
+  flash delta from -944 to +28 bytes, 7 equal, 65 smaller, 22 larger. The delta has one cause,
+  measured on `Heltec_t114_repeater` (-800 bytes) with `nm -S` of both ELF files: no symbol
+  appears or disappears, seven change size. `LocationProvider::setGpsOn(bool)` goes from 734 to
+  30 bytes and `MicroNMEALocationProvider::loop()` from 1972 to 1944, and so on: these are
+  weak (inline) functions of which the linker keeps one copy, and it now keeps the copy of
+  another translation unit, compiled with different inlining. The static initializers move
+  with the objects (`_GLOBAL__sub_I_board` 356 to 56 bytes, `_GLOBAL__sub_I_display` 172 to
+  468). The sum over all symbols is 447487 before and 446675 after, equal to the section
+  difference of 800 bytes. The same mechanism is expected for the other deltas, not checked per
+  environment.
+- **Initialization order** (risk a), read in the disassembly of `Heltec_t114_repeater` (nRF52)
+  and `Heltec_v3_repeater` (ESP32-S3), before and after. Before, the initializer of
+  `target.cpp` runs the driver constructor (`pinMode`, `digitalWrite`, `pinMode`, ... then
+  `MicroNMEA`) and the initializer of `VariantTarget.cpp` the display and the button. After,
+  the first one is empty (nRF52) or gone (ESP32) and the initializer of `VariantTarget.cpp`
+  runs display, button, then the same pin calls in the same order and `MicroNMEA`. The pin
+  writes keep their order among themselves; what moves is the display and button constructors
+  in front of them, and neither writes a pin. The order of the two initializers in
+  `.init_array` is unchanged on the nRF52 build (positions 4 and 7 in both). Not examined for
+  the other 34 variants; the link order of the two objects decides there.
+- **Host tests.** The 28 environments of `run-unit-tests.yml`, one by one: 2446 test cases
+  succeeded, 1 skipped (`native_radio_chips`), 0 failed, the same totals as in the 10.11.
+  sync. Five (`native_companion_buzzer`, `_wifi`, `_display`, `_all`,
+  `native_rak3401_onboard_radio`) were first refused by the registry and were run again with
+  libraries copied from `native_companion`. No new host test was written: the mocks do not
+  define `SENSORS_TARGET_GLOBALS`, so the block is not exercised by any native environment
+  (the plan's `native_variant_target_sensors` was not built).
+- **Not verified.** Any behaviour on a board: pin state at start, a GPS fix, the baud probe.
+  The 34 environments above. The init order of the 34 variants not disassembled.
+  `lilygo_techo_card` as a build. Whether `#ifdef` and `#if` select the same branch in every
+  environment of the 36 (checked only that no variant sets `ENV_INCLUDE_GPS=0` together with an
+  `#ifdef` guard, by `grep` of the ini files).
+
 ## Upstream
 
 Searched meshcore-dev/MeshCore on 20.10.2026: text queries over all pull requests
