@@ -3,8 +3,8 @@
 //
 // 1. Commands that copy their argument into the 132 byte CommonCLI::tmp without a
 //    length check: "tempradio", "sensor set" and, on LR2021 builds, "set extra.sf".
-// 2. "gps" without a subcommand compared the result of getSettingByKey("gps") with
-//    strcmp() without a NULL check.
+// 2. (The "gps" status compared getSettingByKey("gps") without a NULL check. Upstream #3753
+//    replaced that code with CommonGpsPrefs::handleCommand, so the test is gone.)
 // 3. An unknown "get <key>" echoed the key into the 160 byte reply with sprintf().
 
 #include <gtest/gtest.h>
@@ -112,12 +112,3 @@ TEST_F(MemoryCliTest, GetOfAnUnknownKeyTruncatesALongKeyInsteadOfOverflowingTheR
   }
 }
 
-// ---- 2. gps without the gps setting -----------------------------------------------------
-
-#if ENV_INCLUDE_GPS == 1
-TEST_F(MemoryCliTest, GpsStatusWithoutAGpsSettingDoesNotCrashAndReportsDeactivated) {
-  sens.location = &loc;
-  sens.settings = {{"other", "1"}};   // getSettingByKey("gps") answers NULL
-  EXPECT_EQ(run("gps"), "on, deactivated, fix, 7 sats");
-}
-#endif

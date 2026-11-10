@@ -301,6 +301,7 @@ struct CommonCLIImpl {
     uint32_t curr = c.getRTCClock()->getCurrentTime();
     if (k.ts > curr) {
       c.getRTCClock()->setCurrentTime(k.ts + 1);
+      CommonGpsPrefs::onClockSetManually(*c._sensors);
       uint32_t now = c.getRTCClock()->getCurrentTime();
       DateTime dt = DateTime(now);
       sprintf(k.reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
@@ -323,6 +324,7 @@ struct CommonCLIImpl {
     uint32_t curr = c.getRTCClock()->getCurrentTime();
     if (secs > curr) {
       c.getRTCClock()->setCurrentTime(secs);
+      CommonGpsPrefs::onClockSetManually(*c._sensors);
       uint32_t now = c.getRTCClock()->getCurrentTime();
       DateTime dt = DateTime(now);
       sprintf(k.reply, "OK - clock set: %02d:%02d - %d/%d/%d UTC", dt.hour(), dt.minute(), dt.day(), dt.month(), dt.year());
@@ -474,55 +476,21 @@ struct CommonCLIImpl {
   static void region(CommonCLI& c, CliCall& k) {
     c.handleRegionCmd(k.command, k.reply);
   }
+  static void gps(CommonCLI& c, CliCall& k) {   // "gps ...": the GPS commands of CommonGpsPrefs
+    CommonGpsPrefs* g = c._prefs->getGpsPrefs();
+    if (g->handleCommand(k.command, *c._sensors, k.reply)) {
+      if (g->isDirty()) c.savePrefs();
+    } else {
+      strcpy(k.reply, "Unknown command");
+    }
+  }
 #if ENV_INCLUDE_GPS == 1
-  static void gpsOn(CommonCLI& c, CliCall& k) {
-    if (c._sensors->setSettingValue("gps", "1")) {
-      c._prefs->gps_enabled = 1;
-      c.savePrefs();
-      strcpy(k.reply, "ok");
-    } else {
-      strcpy(k.reply, "gps toggle not found");
-    }
-  }
-  static void gpsOff(CommonCLI& c, CliCall& k) {
-    if (c._sensors->setSettingValue("gps", "0")) {
-      c._prefs->gps_enabled = 0;
-      c.savePrefs();
-      strcpy(k.reply, "ok");
-    } else {
-      strcpy(k.reply, "gps toggle not found");
-    }
-  }
-  static void gpsSync(CommonCLI& c, CliCall& k) {
-    LocationProvider * l = c._sensors->getLocationProvider();
-    if (l != NULL) {
-      l->syncTime();
-      strcpy(k.reply, "ok");
-    } else {
-      strcpy(k.reply, "gps provider not found");
-    }
-  }
-  static void gpsDiag(CommonCLI& c, CliCall& k) {
-    char* reply = k.reply;
-    LocationProvider * l = c._sensors->getLocationProvider();
-    if (l != NULL) {
-      const char* setting = c._sensors->getSettingByKey("gps");
-      bool requested = setting != NULL && strcmp(setting, "1") == 0;
-      int prefix_len = snprintf(reply, 160, "req:%u ", requested ? 1U : 0U);
-      if (prefix_len < 0 || prefix_len >= 160) {
-        reply[159] = 0;
-      } else {
-        l->formatDiagnostics(reply + prefix_len, 160 - prefix_len);
-      }
-    } else {
-      strcpy(reply, "gps provider not found");
-    }
-  }
   static void gpsSetloc(CommonCLI& c, CliCall& k) {
     c._prefs->node_lat = c._sensors->node_lat;
     c._prefs->node_lon = c._sensors->node_lon;
+    c._prefs->getGpsPrefs()->applyGuardReference(*c._sensors);
     c.savePrefs();
-    strcpy(k.reply, "ok");
+    strcpy(k.reply, "OK");
   }
   static void gpsAdvert(CommonCLI& c, CliCall& k) {
     char* reply = k.reply;
@@ -539,42 +507,22 @@ struct CommonCLIImpl {
           strcpy(reply, "> share");
           break;
         default:
-          strcpy(reply, "error");
+          strcpy(reply, "Error, invalid policy");
       }
     } else if (memcmp(command+11, "none", 4) == 0) {
       c._prefs->advert_loc_policy = ADVERT_LOC_NONE;
       c.savePrefs();
-      strcpy(reply, "ok");
+      strcpy(reply, "OK");
     } else if (memcmp(command+11, "share", 5) == 0) {
       c._prefs->advert_loc_policy = ADVERT_LOC_SHARE;
       c.savePrefs();
-      strcpy(reply, "ok");
+      strcpy(reply, "OK");
     } else if (memcmp(command+11, "prefs", 5) == 0) {
       c._prefs->advert_loc_policy = ADVERT_LOC_PREFS;
       c.savePrefs();
-      strcpy(reply, "ok");
+      strcpy(reply, "OK");
     } else {
-      strcpy(reply, "error");
-    }
-  }
-  static void gps(CommonCLI& c, CliCall& k) {
-    LocationProvider * l = c._sensors->getLocationProvider();
-    if (l != NULL) {
-      bool enabled = l->isEnabled(); // is EN pin on ?
-      bool fix = l->isValid();       // has fix ?
-      int sats = l->satellitesCount();
-      const char* setting = c._sensors->getSettingByKey("gps");
-      bool active = setting != NULL && strcmp(setting, "1") == 0;
-      if (enabled) {
-        sprintf(k.reply, "on, %s, %s, %d sats",
-          active?"active":"deactivated",
-          fix?"fix":"no fix",
-          sats);
-      } else {
-        strcpy(k.reply, "off");
-      }
-    } else {
-      strcpy(k.reply, "Can't find GPS");
+      strcpy(reply, "Error, invalid policy");
     }
   }
 #endif
@@ -696,11 +644,13 @@ struct CommonCLIImpl {
   }
   static void setLat(CommonCLI& c, CliCall& k) {
     c._prefs->node_lat = atof(k.arg);
+    c._prefs->getGpsPrefs()->applyGuardReference(*c._sensors);
     c.savePrefs();
     strcpy(k.reply, "OK");
   }
   static void setLon(CommonCLI& c, CliCall& k) {
     c._prefs->node_lon = atof(k.arg);
+    c._prefs->getGpsPrefs()->applyGuardReference(*c._sensors);
     c.savePrefs();
     strcpy(k.reply, "OK");
   }
@@ -1212,14 +1162,10 @@ const CliCmd kTopCmds[] = {
   CLI_CMD("sensor list",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::sensorList),
   CLI_CMD("region",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::region),
 #if ENV_INCLUDE_GPS == 1
-  CLI_CMD("gps on",         CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsOn),
-  CLI_CMD("gps off",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsOff),
-  CLI_CMD("gps sync",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsSync),
-  CLI_CMD("gps diag",       CLI_EXACT,  CLI_ANY,    CommonCLIImpl::gpsDiag),
   CLI_CMD("gps setloc",     CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsSetloc),
   CLI_CMD("gps advert",     CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gpsAdvert),
-  CLI_CMD("gps",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gps),
 #endif
+  CLI_CMD("gps",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::gps),
   CLI_CMD("powersaving on", CLI_PREFIX, CLI_ANY,    CommonCLIImpl::powersavingOn),
   CLI_CMD("powersaving off", CLI_PREFIX, CLI_ANY,   CommonCLIImpl::powersavingOff),
   CLI_CMD("powersaving",    CLI_PREFIX, CLI_ANY,    CommonCLIImpl::powersaving),

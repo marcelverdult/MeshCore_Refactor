@@ -40,10 +40,10 @@ const char* kPrefsJson =
     "{name:\"Test Companion\",lat:53.551086,lon:9.993682,radio:{freq:869.6180,"
     "bw:62.5000,sf:8,cr:6,cad:1,int_thr:14,rxgain:1,fem_rxgain:1,fem_txgain:2,"
     "tx:21,af:1.5000,rxdelay:3.2500,f_txdelay:0.7500,d_txdelay:0.2500,"
-    "agc_int:5,hash_mode:2,multi_ack:1},gps:{en:1,int:900,adv_loc:1},"
+    "agc_int:5,hash_mode:2,multi_ack:1},gps:{en:1,int:900,period:600,adv_loc:1},"
     "repeat:{disable:0},comp:{auto_max:3,defs_nm:\"de-hh\",defs_key:\"A0A1A2A3A4A5A6A7A8A9AAABACADAEAF\","
     "pin:123456,buzz_q:1,vibe_q:1,auto_add:5,man_add:1,tel_base:2,"
-    "tel_loc:1,tel_env:2,tz_offset:1.5000},custom:{}}";
+    "tel_loc:1,tel_env:2,tz_offset:1.5000,adc_mult:0},custom:{}}";
 
 }  // namespace
 

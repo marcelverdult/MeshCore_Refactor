@@ -35,6 +35,7 @@ void fillRadioAndGps(P& p) {
 
   p.gps_enabled = 1;
   p.gps_interval = 900;
+  p.gps_period = 600;
   p.advert_loc_policy = 1;
 }
 
@@ -60,6 +61,7 @@ void expectRadioAndGpsEqual(const P& expected, const P& actual) {
 
   EXPECT_EQ(expected.gps_enabled, actual.gps_enabled);
   EXPECT_EQ(expected.gps_interval, actual.gps_interval);
+  EXPECT_EQ(expected.gps_period, actual.gps_period);
   EXPECT_EQ(expected.advert_loc_policy, actual.advert_loc_policy);
 }
 

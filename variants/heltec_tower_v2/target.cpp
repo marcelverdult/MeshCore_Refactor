@@ -6,7 +6,8 @@
 
 HeltecTowerV2Board board;
 
-MicroNMEALocationProvider nmea = MicroNMEALocationProvider(Serial1, &rtc_clock);
+NmeaGpsDriver gps_driver(Serial1);
+MicroNMEALocationProvider nmea(gps_driver, &rtc_clock);
 EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
 TowerV2ExternalWatchdog external_watchdog;
 

@@ -52,7 +52,7 @@ const char* kPrefsJson =
     "int_thr:14,rxgain:1,fem_rxgain:1,fem_txgain:2,tx:21,af:1.5000,"
     "rxdelay:3.2500,f_txdelay:0.7500,d_txdelay:0.2500,agc_int:5,hash_mode:2,"
     "multi_ack:1},bridge:{en:1,delay:500,src:1,baud:115200,ch:6,secret:\"bridge-secret\"},"
-    "gps:{en:1,int:900,adv_loc:1},repeat:{disable:1,f_max:32,f_max_uns:16,"
+    "gps:{en:1,int:900,period:600,adv_loc:1},repeat:{disable:1,f_max:32,f_max_uns:16,"
     "f_max_adv:8,loop:2},room:{rd_only:1},power:{adc_mult:1.2500,pwr_sav_en:1},"
     "custom:{}}";
 
