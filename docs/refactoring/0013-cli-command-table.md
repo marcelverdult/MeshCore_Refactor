@@ -125,6 +125,7 @@ falls through to the next branch and, in the end, to "Unknown command".
 | `allow.read.only` | `OK` | on if the value starts with `on`, save | |
 | `flood.advert.interval` | `OK` or `Error: interval range is 3-168 hours` | hours, `updateFloodAdvertTimer`, save | 0 allowed (off); 1 and 2 are errors |
 | `advert.interval` | `OK` or `Error: interval range is 60-240 minutes` | stored as minutes / 2, `updateAdvertTimer`, save | 0 allowed; see quirk on zeroing |
+| `advert.loc` | `OK` or `Error, invalid policy` | `none`, `share` or `prefs` (prefix match) to `advert_loc_policy`, save | upstream #3815; all builds, unlike `gps advert` |
 | `guest.password` | `OK` | 15 characters, save | no echo |
 | `prv.key` | `OK, reboot to apply! New pubkey: <hex>` or `Error, bad key` | `saveIdentity(new id)` | accepted over the air; valid keys only |
 | `name` | `OK` or `Error, bad chars` | 31 characters, save | longer names are cut without an error |
@@ -148,7 +149,8 @@ falls through to the next branch and, in the end, to "Unknown command".
 ### `get <key>`
 
 All replies start with `> `. Keys: `allow.read.only` (on or off),
-`flood.advert.interval`, `advert.interval` (minutes), `guest.password`, `prv.key`
+`flood.advert.interval`, `advert.interval` (minutes), `advert.loc` (`> none|prefs|share`
+or `Error, invalid policy`), `guest.password`, `prv.key`
 (ts 0, uppercase hex), `name`, `repeat`, `lat`, `lon`, `flood.max.type`
 (`> grpdata:4 trace:3`, `> none` when empty, unnamed types as numbers), `flood.max.advert`,
 `flood.max.unscoped`, `flood.max`, `owner.info` (newline shown as `|`, cut at 159
@@ -184,8 +186,8 @@ single precision noise (`869.6179809` for 869.618).
 | File | Tests | Covers |
 |---|---|---|
 | `test_cli_commands.cpp` | 47 | dispatch order, board hook, prefix quirks, power, clock, advert, neighbors, tempradio, password, erase, ver, board, powersaving, log, stats, routing |
-| `test_cli_set.cpp` | 49 | every `set` key, ranges, truncation, the zeroing in `savePrefs`, radio precedence, bridge and `extra.sf` variants |
-| `test_cli_get.cpp` | 24 | every `get` key, prefix order, hex output, variants, fallback |
+| `test_cli_set.cpp` | 52 | every `set` key, ranges, truncation, the zeroing in `savePrefs`, radio precedence, bridge and `extra.sf` variants |
+| `test_cli_get.cpp` | 25 | every `get` key, prefix order, hex output, variants, fallback |
 | `test_cli_region.cpp` | 34 | every `region` sub command, limits, errors, callbacks |
 | `test_cli_sensor.cpp` | 39 | `sensor get\|set\|list` with paging, `gps ...` (GPS build) or "Unknown command" (others) |
 | `test_cli_flood_type.cpp` | 19 | `set` and `get flood.max.type`: names and numbers, sorted list, `off`, range and type errors, damaged stored list, full list |
