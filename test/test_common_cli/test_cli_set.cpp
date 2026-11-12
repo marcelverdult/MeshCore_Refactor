@@ -521,3 +521,28 @@ TEST_F(CliTest, RadioSettingsKeepTheirOwnAnswersInTheSetChain) {
   EXPECT_EQ(run("set cad on"), "OK");
   EXPECT_EQ(takeCalls().size(), 4u);                       // each one saved
 }
+
+// ---- advert.loc (upstream #3815, replaces "gps advert", which stays in GPS builds) -------
+
+TEST_F(CliTest, SetAdvertLocTakesEachPolicyAndSaves) {
+  EXPECT_EQ(run("set advert.loc none"), "OK");
+  EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_NONE);
+  EXPECT_EQ(run("set advert.loc share"), "OK");
+  EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_SHARE);
+  EXPECT_EQ(run("set advert.loc prefs"), "OK");
+  EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_PREFS);
+  EXPECT_EQ(takeCalls().size(), 3u);                         // each one saved
+}
+
+TEST_F(CliTest, SetAdvertLocWithAnUnknownPolicyAnswersErrorAndChangesNothing) {
+  prefs.advert_loc_policy = ADVERT_LOC_SHARE;
+  EXPECT_EQ(run("set advert.loc bogus"), "Error, invalid policy");
+  EXPECT_EQ(run("set advert.loc "), "Error, invalid policy");
+  EXPECT_EQ(prefs.advert_loc_policy, ADVERT_LOC_SHARE);
+  EXPECT_TRUE(takeCalls().empty());
+}
+
+TEST_F(CliTest, SetAdvertLocNeedsItsTrailingSpaceAndKeepsAdvertIntervalApart) {
+  EXPECT_EQ(run("set advert.loc"), "unknown config: advert.loc");
+  EXPECT_EQ(run("set advert.interval 90"), "OK");            // still the interval row
+}

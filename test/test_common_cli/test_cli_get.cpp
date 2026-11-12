@@ -246,3 +246,11 @@ TEST_F(CliTest, RadioSettingsKeepTheirOwnAnswersInTheGetChain) {
   EXPECT_EQ(run("get freq"), "> 869.6179809");
   EXPECT_TRUE(takeCalls().empty());
 }
+
+TEST_F(CliTest, GetAdvertLocShowsThePolicy) {
+  prefs.advert_loc_policy = ADVERT_LOC_NONE;  EXPECT_EQ(run("get advert.loc"), "> none");
+  prefs.advert_loc_policy = ADVERT_LOC_PREFS; EXPECT_EQ(run("get advert.loc"), "> prefs");
+  prefs.advert_loc_policy = ADVERT_LOC_SHARE; EXPECT_EQ(run("get advert.loc"), "> share");
+  prefs.advert_loc_policy = 9;                EXPECT_EQ(run("get advert.loc"), "Error, invalid policy");
+  EXPECT_TRUE(takeCalls().empty());
+}
