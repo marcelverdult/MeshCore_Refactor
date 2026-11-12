@@ -609,6 +609,20 @@ struct CommonCLIImpl {
       strcpy(k.reply, "OK");
     }
   }
+  static void setAdvertLoc(CommonCLI& c, CliCall& k) {
+    if (memcmp(k.arg, "none", 4) == 0) {
+      c._prefs->advert_loc_policy = ADVERT_LOC_NONE;
+    } else if (memcmp(k.arg, "share", 5) == 0) {
+      c._prefs->advert_loc_policy = ADVERT_LOC_SHARE;
+    } else if (memcmp(k.arg, "prefs", 5) == 0) {
+      c._prefs->advert_loc_policy = ADVERT_LOC_PREFS;
+    } else {
+      strcpy(k.reply, "Error, invalid policy");
+      return;
+    }
+    c.savePrefs();
+    strcpy(k.reply, "OK");
+  }
   static void setGuestPassword(CommonCLI& c, CliCall& k) {
     StrHelper::strncpy(c._prefs->guest_password, k.arg, sizeof(c._prefs->guest_password));
     c.savePrefs();
@@ -844,6 +858,21 @@ struct CommonCLIImpl {
   }
   static void getAdvertInterval(CommonCLI& c, CliCall& k) {
     sprintf(k.reply, "> %d", ((uint32_t) c._prefs->advert_interval) * 2);
+  }
+  static void getAdvertLoc(CommonCLI& c, CliCall& k) {
+    switch (c._prefs->advert_loc_policy) {
+      case ADVERT_LOC_NONE:
+        strcpy(k.reply, "> none");
+        break;
+      case ADVERT_LOC_PREFS:
+        strcpy(k.reply, "> prefs");
+        break;
+      case ADVERT_LOC_SHARE:
+        strcpy(k.reply, "> share");
+        break;
+      default:
+        strcpy(k.reply, "Error, invalid policy");
+    }
   }
   static void getGuestPassword(CommonCLI& c, CliCall& k) {
     sprintf(k.reply, "> %s", c._prefs->guest_password);
@@ -1183,6 +1212,7 @@ const CliCmd kSetCmds[] = {
   CLI_CMD("allow.read.only ",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setAllowReadOnly),
   CLI_CMD("flood.advert.interval ", CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setFloodAdvertInterval),
   CLI_CMD("advert.interval ",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setAdvertInterval),
+  CLI_CMD("advert.loc ",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setAdvertLoc),
   CLI_CMD("guest.password ",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setGuestPassword),
   CLI_CMD("prv.key ",               CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setPrvKey),
   CLI_CMD("name ",                  CLI_PREFIX, CLI_ANY,    CommonCLIImpl::setName),
@@ -1219,6 +1249,7 @@ const CliCmd kGetCmds[] = {
   CLI_CMD("allow.read.only",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getAllowReadOnly),
   CLI_CMD("flood.advert.interval", CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getFloodAdvertInterval),
   CLI_CMD("advert.interval",       CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getAdvertInterval),
+  CLI_CMD("advert.loc",            CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getAdvertLoc),
   CLI_CMD("guest.password",        CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getGuestPassword),
   CLI_CMD("prv.key",               CLI_PREFIX, CLI_SERIAL, CommonCLIImpl::getPrvKey),
   CLI_CMD("name",                  CLI_PREFIX, CLI_ANY,    CommonCLIImpl::getName),

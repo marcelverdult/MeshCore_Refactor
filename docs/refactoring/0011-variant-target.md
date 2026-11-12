@@ -2146,6 +2146,9 @@ New macros in `target.h`, inside nothing (the GPS lines are not under `DISPLAY_C
   `&board.periph_power`.
 - `GPS_BAUD_PROBE_LIST` (promicro, B): already a macro in the ini; the shared file reads it as
   `target.cpp` does today.
+  Since upstream #3798 (sync of 12.11.) `NmeaGpsDriver` reads the macro itself as the default
+  of its constructor, so `promicro` no longer needs the special case and the shared file
+  needs none either.
 - The type of `sensors` is not a new field: `target.h` already says
   `extern EnvironmentSensorManager sensors;`, and `decltype(sensors) sensors(nmea);` defines
   exactly that type. Checked to compile with `g++ -std=gnu++11 -c` on a stand-in (a
