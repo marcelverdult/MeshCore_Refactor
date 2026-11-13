@@ -17,7 +17,9 @@ AutoDiscoverRTCClock rtc_clock(fallback_clock);
 
 #if ENV_INCLUDE_GPS
   #include <helpers/sensors/MicroNMEALocationProvider.h>
-  NmeaGpsDriver gps_driver(Serial1);
+  // board.begin() leaves periph_power (PIN_VEXT_EN) off. The driver claims it while the GPS
+  // runs, so a slot module such as the RAK12501 gets power (issue #3814).
+  NmeaGpsDriver gps_driver(Serial1, PIN_GPS_TX, PIN_GPS_RX, GPS_RESET, GPS_EN, &board.periph_power);
   MicroNMEALocationProvider nmea(gps_driver, &rtc_clock);
   EnvironmentSensorManager sensors = EnvironmentSensorManager(nmea);
 #else
