@@ -222,7 +222,7 @@ int MyMesh::handleRequest(ClientInfo *sender, uint32_t sender_timestamp, uint8_t
     stats.n_packets_recv = radio_driver.getPacketsRecv();
     stats.n_packets_sent = radio_driver.getPacketsSent();
     stats.total_air_time_secs = getTotalAirTime() / 1000;
-    stats.total_up_time_secs = uptime_millis / 1000;
+    stats.total_up_time_secs = uptime.getMillis() / 1000;
     stats.n_sent_flood = getNumSentFlood();
     stats.n_sent_direct = getNumSentDirect();
     stats.n_recv_flood = getNumRecvFlood();
@@ -801,8 +801,6 @@ MyMesh::MyMesh(mesh::MainBoard &board, mesh::Radio &radio, mesh::MillisecondCloc
 #endif
 {
   useRadioPrefs(&_prefs);   // the core reads its tuning (delays, duty cycle, CAD, AGC, extra ACKs) from these settings
-  last_millis = 0;
-  uptime_millis = 0;
   dirty_contacts_expiry = 0;
   _logging = false;
 
@@ -1066,9 +1064,7 @@ void MyMesh::loop() {
   }
 
   // update uptime
-  uint32_t now = millis();
-  uptime_millis += now - last_millis;
-  last_millis = now;
+  uptime.update();
 }
 
 // To check if there is pending work

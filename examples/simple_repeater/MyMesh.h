@@ -80,8 +80,7 @@ struct NeighbourInfo {
 #define PACKET_LOG_FILE  "/packet_log"
 
 class MyMesh : public ServerMesh {
-  uint32_t last_millis;
-  uint64_t uptime_millis;
+  MonotonicMillis uptime;
   bool _logging;
   CommonCLI _cli;
   uint8_t reply_data[MAX_PACKET_PAYLOAD];

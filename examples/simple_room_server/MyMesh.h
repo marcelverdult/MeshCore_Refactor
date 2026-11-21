@@ -91,8 +91,7 @@ struct PostInfo {
 };
 
 class MyMesh : public ServerMesh {
-  uint32_t last_millis;
-  uint64_t uptime_millis;
+  MonotonicMillis uptime;
   bool _logging;
   CommonCLI _cli;
   unsigned long dirty_contacts_expiry;
